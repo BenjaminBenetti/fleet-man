@@ -304,6 +304,37 @@
 }
 ---
 {
+  "apiVersion": "v1",
+  "data": {
+    "ca.pem": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCkNBCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K",
+    "cert.pem": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tClNFUlZFUgotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==",
+    "key.pem": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCktFWQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg=="
+  },
+  "kind": "Secret",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "buildkit"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-buildkit",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "type": "Opaque"
+}
+---
+{
   "apiVersion": "apps/v1",
   "kind": "Deployment",
   "metadata": {
@@ -346,6 +377,7 @@
       "metadata": {
         "annotations": {
           "consul.hashicorp.com/connect-inject": "false",
+          "fleet.dev/buildkit-tls": "4a1e1c14794adfff",
           "kuma.io/sidecar-injection": "disabled",
           "linkerd.io/inject": "disabled",
           "sidecar.istio.io/inject": "false"
@@ -367,6 +399,16 @@
           {
             "args": [
               "--oci-worker-no-process-sandbox",
+              "--addr",
+              "tcp://0.0.0.0:1234",
+              "--addr",
+              "unix:///run/user/1000/buildkit/buildkitd.sock",
+              "--tlscacert",
+              "/etc/fleet-buildkit-tls/ca.pem",
+              "--tlscert",
+              "/etc/fleet-buildkit-tls/cert.pem",
+              "--tlskey",
+              "/etc/fleet-buildkit-tls/key.pem",
               "--config",
               "/home/user/.config/buildkit/buildkitd.toml"
             ],
@@ -379,6 +421,13 @@
                 "protocol": "TCP"
               }
             ],
+            "readinessProbe": {
+              "failureThreshold": 3,
+              "periodSeconds": 5,
+              "tcpSocket": {
+                "port": 1234
+              }
+            },
             "resources": {
               "limits": {
                 "memory": "8Gi"
@@ -408,6 +457,11 @@
                 "mountPath": "/home/user/.config/buildkit",
                 "name": "config",
                 "readOnly": true
+              },
+              {
+                "mountPath": "/etc/fleet-buildkit-tls",
+                "name": "tls",
+                "readOnly": true
               }
             ]
           }
@@ -415,6 +469,7 @@
         "enableServiceLinks": false,
         "restartPolicy": "Always",
         "securityContext": {
+          "fsGroup": 1000,
           "fsGroupChangePolicy": "OnRootMismatch",
           "seccompProfile": {
             "type": "RuntimeDefault"
@@ -433,6 +488,13 @@
               "name": "fs-fleet-man-tv5vpl4q-buildkit"
             },
             "name": "config"
+          },
+          {
+            "name": "tls",
+            "secret": {
+              "defaultMode": 288,
+              "secretName": "fs-fleet-man-tv5vpl4q-buildkit"
+            }
           }
         ]
       }

@@ -231,17 +231,33 @@ func (c *conn) classExpands(ctx context.Context, pvc *corev1.PersistentVolumeCla
 }
 
 // servicePod is a running pod of svc's server.
-func (c *conn) servicePod(ctx context.Context, m fleetMeta, svc fleet.SharedService) (string, error) {
+func (c *conn) servicePod(ctx context.Context, m fleetMeta, svc fleet.SharedService) (*corev1.Pod, error) {
 	l, err := c.scope.Client.CoreV1().Pods(m.Namespace).List(ctx, metav1.ListOptions{LabelSelector: m.podSelector(svc)})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	for _, p := range l.Items {
+	for i, p := range l.Items {
 		if p.Status.Phase == corev1.PodRunning && p.DeletionTimestamp == nil {
-			return p.Name, nil
+			return &l.Items[i], nil
 		}
 	}
-	return "", fmt.Errorf("the %s server has no running pod", serviceText(svc))
+	return nil, fmt.Errorf("the %s server has no running pod", serviceText(svc))
+}
+
+// dataPath is where svc's server in pod has its volume (a rootless Buildkit
+// has it in its user's home), else where the service keeps it.
+func dataPath(pod *corev1.Pod, svc fleet.SharedService) string {
+	for _, ctr := range pod.Spec.Containers {
+		if ctr.Name != string(svc) {
+			continue
+		}
+		for _, vm := range ctr.VolumeMounts {
+			if vm.Name == volumeData {
+				return vm.MountPath
+			}
+		}
+	}
+	return cacheSpecs[svc].data
 }
 
 // measure is how many bytes svc's cache holds: du in its server's pod (the
@@ -253,7 +269,7 @@ func (c *conn) measure(ctx context.Context, m fleetMeta, svc fleet.SharedService
 		return 0, err
 	}
 	var stdout, stderr bytes.Buffer
-	code, err := pool().ExecService(ctx, c.cluster, pod, string(svc), []string{"du", "-sxk", cacheSpecs[svc].data}, &stdout, &stderr)
+	code, err := pool().ExecService(ctx, c.cluster, pod.Name, string(svc), []string{"du", "-sxk", dataPath(pod, svc)}, &stdout, &stderr)
 	if err != nil {
 		return 0, err
 	}
@@ -288,7 +304,9 @@ func (r *Runtime) Maintain(ctx context.Context, fleetName string, services []fle
 	m := c.meta(fleetName)
 	for _, svc := range services {
 		if svc == fleet.ServiceBuildkit {
-			continue // not served on a cluster yet
+			if err := r.refreshBuildkit(ctx, c, m); err != nil {
+				flog.Warn("kube buildkit: renewing the server's certificate", "cluster", c.cluster, "fleet", fleetName, "err", err)
+			}
 		}
 		u, ok, err := c.usage(ctx, m, svc)
 		if err != nil || !ok {
@@ -362,8 +380,8 @@ func (c *conn) aptMaint(ctx context.Context, m fleetMeta) {
 	if err != nil {
 		return
 	}
-	var out bytes.Buffer
-	code, err := pool().ExecService(ctx, c.cluster, pod, string(fleet.ServiceDebCache), aptMaintArgv, &out, &out)
+	var out lockedBuffer
+	code, err := pool().ExecService(ctx, c.cluster, pod.Name, string(fleet.ServiceDebCache), aptMaintArgv, &out, &out)
 	if err != nil || code != 0 {
 		flog.Warn("kube caches: the deb cache's expiry run failed", "cluster", c.cluster, "fleet", m.Fleet, "code", code, "err", err, "output", firstLine(out.String()))
 		return
@@ -374,3 +392,23 @@ func (c *conn) aptMaint(ctx context.Context, m fleetMeta) {
 // aptMaintArgv runs apt-cacher-ng's daily job, or its tool when the image
 // has no cron script.
 var aptMaintArgv = []string{"sh", "-c", "if [ -x /etc/cron.daily/apt-cacher-ng ]; then exec /etc/cron.daily/apt-cacher-ng; fi; exec /usr/lib/apt-cacher-ng/acngtool maint -c /etc/apt-cacher-ng"}
+
+// lockedBuffer is a buffer an exec's stdout and stderr may both write: the
+// exec copies the two streams at once, and a plain bytes.Buffer written from
+// both loses output.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}

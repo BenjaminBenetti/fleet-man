@@ -5,8 +5,9 @@ import "path/filepath"
 // The daemon's Kubernetes state on its host. Everything here is daemon-owned:
 // clients reach it only through the kube RPCs. The hourly backup captures
 // kube_clusters.json, daemon_id, the footprint, the job journal, each
-// connection's image index and its instance records
-// (internal/server/backup.go), under these same paths relative to ~/.fleet.
+// connection's image index, its instance records and its fleets' Buildkit
+// CAs (internal/server/backup.go), under these same paths relative to
+// ~/.fleet.
 
 // KubeClustersPath is the registry of Kubernetes connections
 // (~/.fleet/kube_clusters.json, see KubeClusters).
@@ -70,6 +71,14 @@ func KubeImagesPath(clusterID string) string {
 // cache made and since when none does.
 func KubeSeedCachesPath(clusterID string) string {
 	return filepath.Join(KubeClusterDir(clusterID), "seedcaches.json")
+}
+
+// KubeBuildkitCAPath is the CA of a fleet's shared Buildkit on a connection,
+// by the fleet's h8 there (~/.fleet/kube/<cluster id>/buildkit/<h8>.json):
+// it signs the server's certificate and each instance's client certificate,
+// and never leaves the daemon host.
+func KubeBuildkitCAPath(clusterID, fleetHash string) string {
+	return filepath.Join(KubeClusterDir(clusterID), "buildkit", safeLogSegment(fleetHash)+".json")
 }
 
 // KubeInstancesDir holds what the daemon recorded of each instance it made on

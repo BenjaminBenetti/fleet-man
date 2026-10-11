@@ -57,6 +57,14 @@ func opsFor(cs kclient.Interface, ns string, obj metav1.Object) (objectOps, erro
 				return c.Patch(ctx, n, types.ApplyPatchType, b, o)
 			},
 			del: c.Delete}, nil
+	case *corev1.Secret:
+		c := cs.CoreV1().Secrets(ns)
+		return objectOps{kind: kubernetes.KindSecret,
+			get: func(ctx context.Context, n string) (metav1.Object, error) { return c.Get(ctx, n, metav1.GetOptions{}) },
+			patch: func(ctx context.Context, n string, b []byte, o metav1.PatchOptions) (metav1.Object, error) {
+				return c.Patch(ctx, n, types.ApplyPatchType, b, o)
+			},
+			del: c.Delete}, nil
 	case *corev1.Service:
 		c := cs.CoreV1().Services(ns)
 		return objectOps{kind: kubernetes.KindService,

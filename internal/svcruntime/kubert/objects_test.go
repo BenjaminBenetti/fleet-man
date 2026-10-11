@@ -65,6 +65,15 @@ var testMeta = fleetMeta{Namespace: "fleet", Owner: "0123456789ab", Cluster: "mi
 
 var testAnchor = anchorRef(testMeta.name(names.SuffixAnchor), "11111111-2222-3333-4444-555555555555")
 
+// testCA is a fleet's Buildkit CA with stand-in PEMs, for the golden files.
+var testCA = &buildkitCA{
+	V: 1, Fleet: "fleet-man",
+	CACert:     "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n",
+	ServerName: testMeta.name(names.SuffixBuildkit),
+	ServerCert: "-----BEGIN CERTIFICATE-----\nSERVER\n-----END CERTIFICATE-----\n",
+	ServerKey:  "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n",
+}
+
 // fleetObjects renders every object of the fleet on rec, as a connection
 // that runs each service would have them.
 func fleetObjects(t *testing.T, rec *fleet.KubeCluster, rootful bool) []metav1.Object {
@@ -76,10 +85,12 @@ func fleetObjects(t *testing.T, rec *fleet.KubeCluster, rootful bool) []metav1.O
 			t.Fatal(err)
 		}
 		objs = append(objs, cacheVolume(testMeta, rec, svc, size))
+		in := deploymentInput{Rec: rec, Rootful: rootful}
 		if svc == fleet.ServiceBuildkit {
-			objs = append(objs, buildkitConfig(testMeta, testAnchor))
+			objs = append(objs, buildkitConfig(testMeta, testAnchor), buildkitSecret(testMeta, testAnchor, testCA))
+			in.TLSHash = testCA.tlsHash()
 		}
-		dep, err := cacheDeployment(testMeta, svc, testAnchor, deploymentInput{Rec: rec, Rootful: rootful})
+		dep, err := cacheDeployment(testMeta, svc, testAnchor, in)
 		if err != nil {
 			t.Fatalf("%s: %v", svc, err)
 		}
@@ -298,6 +309,68 @@ func TestCacheCleanup(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(aptMaintArgv, " "), "acngtool maint") {
 		t.Errorf("apt expiry argv %v", aptMaintArgv)
+	}
+}
+
+// TestBuildkitServesMutualTLS: the shared Buildkit server, rootless or
+// rootful, listens on its Service's port with mutual TLS on the certificate,
+// key and CA its pod mounts from its Secret (which only the server reads),
+// is ready once it listens there, and is replaced when they change; rootless,
+// its user owns its volume.
+func TestBuildkitServesMutualTLS(t *testing.T) {
+	for _, rootful := range []bool{false, true} {
+		dep, err := cacheDeployment(testMeta, fleet.ServiceBuildkit, testAnchor, deploymentInput{Rootful: rootful, TLSHash: "abcd"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tpl := dep.Spec.Template
+		c := tpl.Spec.Containers[0]
+		args := strings.Join(c.Args, " ")
+		for _, want := range []string{
+			"--addr tcp://0.0.0.0:1234",
+			"--tlscacert " + buildkitTLSDir + "/ca.pem", "--tlscert " + buildkitTLSDir + "/cert.pem", "--tlskey " + buildkitTLSDir + "/key.pem",
+		} {
+			if !strings.Contains(args, want) {
+				t.Errorf("rootful=%v: args %q lack %q", rootful, args, want)
+			}
+		}
+		if rootful != strings.Contains(args, buildkitRootfulSocket) || rootful == strings.Contains(args, buildkitRootlessSocket) {
+			t.Errorf("rootful=%v: in-pod socket in %q", rootful, args)
+		}
+		var secret *corev1.SecretVolumeSource
+		for _, v := range tpl.Spec.Volumes {
+			if v.Secret != nil {
+				secret = v.Secret
+			}
+		}
+		mounted := false
+		for _, m := range c.VolumeMounts {
+			mounted = mounted || (m.Name == volumeTLS && m.MountPath == buildkitTLSDir && m.ReadOnly)
+		}
+		if secret == nil || secret.SecretName != testMeta.name(names.SuffixBuildkit) || !mounted {
+			t.Fatalf("rootful=%v: TLS secret %+v mounted %v", rootful, secret, mounted)
+		}
+		wantMode, fsGroup := int32(0o440), ptr(rootlessBuildkitUID)
+		if rootful {
+			wantMode, fsGroup = 0o400, nil
+		}
+		if *secret.DefaultMode != wantMode {
+			t.Errorf("rootful=%v: secret mode %o", rootful, *secret.DefaultMode)
+		}
+		if got := tpl.Spec.SecurityContext.FSGroup; (got == nil) != (fsGroup == nil) || (got != nil && *got != *fsGroup) {
+			t.Errorf("rootful=%v: fsGroup %v", rootful, got)
+		}
+		if p := c.ReadinessProbe; p == nil || p.TCPSocket == nil || p.TCPSocket.Port.IntVal != 1234 {
+			t.Errorf("rootful=%v: readiness %+v", rootful, p)
+		}
+		if tpl.Annotations[annotationBuildkitTLS] != "abcd" {
+			t.Errorf("rootful=%v: annotations %v", rootful, tpl.Annotations)
+		}
+	}
+	sec := buildkitSecret(testMeta, testAnchor, testCA)
+	if string(sec.Data["cert.pem"]) != testCA.ServerCert || string(sec.Data["key.pem"]) != testCA.ServerKey || string(sec.Data["ca.pem"]) != testCA.CACert ||
+		sec.Labels[names.LabelService] != string(fleet.ServiceBuildkit) || sec.OwnerReferences[0].UID != testAnchor.UID {
+		t.Errorf("secret %+v", sec)
 	}
 }
 

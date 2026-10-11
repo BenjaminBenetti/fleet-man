@@ -74,6 +74,9 @@ func backupSources() []string {
 	// kube/<cluster>/instances/<key>.json: what a restored daemon verifies its
 	// instances' pods against.
 	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "instances", "*.json"))...)
+	// kube/<cluster>/buildkit/<fleet h8>.json: each fleet's shared Buildkit
+	// CA there, so a restored daemon's instances keep their certificates.
+	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "buildkit", "*.json"))...)
 	return sources
 }
 
@@ -494,6 +497,7 @@ func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ 
 			{Name: "kube/<cluster>/images.json", Description: "index of the images this daemon delivered to one Kubernetes connection."},
 			{Name: "kube/<cluster>/seedcaches.json", Description: "index of the seed caches (cached image roots automation disks are cloned from) on one Kubernetes connection, and which instances each made."},
 			{Name: "kube/<cluster>/instances/<key>.json", Description: "what this daemon rendered and delivered for each of its Kubernetes instances, which their pods are verified against."},
+			{Name: "kube/<cluster>/buildkit/<fleet>.json", Description: "the CA of one fleet's shared Buildkit on one Kubernetes connection, which signs its server's and its instances' certificates — holds the CA's private key, SECRET."},
 		},
 		Kubernetes: "Instance disks live in their clusters, not in the archive: a restore brings back the connections and fleetd's records, and every disk stays where it is. Instances created in a cluster after the snapshot are kept there, never deleted, and `fleet cluster gc` lists them; job records older than the live objects are discarded when fleetd starts. The restored daemon_id owns the same cluster objects as the original: while both daemons run, the clusters' owner Leases let only the first act as owner and show OWNER_CONFLICT on the other.",
 		Available:  archives,
@@ -505,7 +509,7 @@ func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ 
 			"4. Unpack the archive over the settings dir: `tar -xJf <archive> -C " + fleetDir + "`. Each file lands back at its original path under the settings dir (kube/ files included), overwriting the current copy; files the archive does not hold are left alone.",
 			"5. Restart the daemon — run any `fleet` command (it auto-spawns fleetd) or start `fleet server` directly — then verify with the `fleet_version` and `fleet_status` tools.",
 		},
-		Warning: "Stop fleetd BEFORE unpacking. It rewrites these files continuously and snapshots hourly, so restoring under a live daemon can corrupt state.json or have your restore immediately overwritten. The archives contain secrets (mcp.token, armada.json's tokens, kube_clusters.json's gateway pull credentials) — handle them accordingly.",
+		Warning: "Stop fleetd BEFORE unpacking. It rewrites these files continuously and snapshots hourly, so restoring under a live daemon can corrupt state.json or have your restore immediately overwritten. The archives contain secrets (mcp.token, armada.json's tokens, kube_clusters.json's gateway pull credentials, the fleets' Buildkit CA keys) — handle them accordingly.",
 	}
 	if len(archives) == 0 {
 		out.Summary = "No backups exist yet under " + out.BackupDir + " (the daemon writes the first within an hour of starting). " + out.Summary
