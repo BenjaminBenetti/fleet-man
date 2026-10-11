@@ -71,6 +71,10 @@ linters:
             # daemon either: fleetd hands it a logger).
             - "**/internal/podagent/**"
             - "**/internal/podwire/**"
+            # The shared-state sync engine is the daemon's hub and the pod's
+            # spoke alike, so it never reaches into the daemon either: the
+            # caller hands it its folders, state directory and logger.
+            - "**/internal/sharesync/**"
             # The SSH-agent provider runs where the human's ssh-agent is (TUI,
             # CLI), possibly far from the daemon: client code, like internal/mic.
             - "**/internal/agentfwd/**"

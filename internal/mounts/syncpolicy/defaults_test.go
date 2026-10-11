@@ -60,6 +60,42 @@ func TestDefaultsPolicies(t *testing.T) {
 	}
 }
 
+// TestDefaultsCaps pins the per-root size caps: every agent tool's folder and
+// the shared files folder have one, custom mounts and host binds have none
+// (only the host disk limits them on local Docker), and Claude's transcripts
+// carry a size warning.
+func TestDefaultsCaps(t *testing.T) {
+	const mib, gib = int64(1) << 20, int64(1) << 30
+	want := map[string]int64{
+		".claude": 8 * gib, ".codex": 4 * gib, ".config/gh": 64 * mib, ".augment": 2 * gib,
+		"files": 64 * mib, ".mnt": 0, ".hostbind": 0,
+	}
+	roots := Defaults().Roots()
+	if len(roots) != len(want) {
+		t.Fatalf("%d roots, want %d", len(roots), len(want))
+	}
+	for _, root := range roots {
+		if cap, ok := want[root.Path]; !ok || root.Cap != cap {
+			t.Errorf("root %s: Cap %d, want %d", root.Path, root.Cap, cap)
+		}
+		for _, w := range root.Warnings {
+			if w.Size <= 0 || root.Cap > 0 && w.Size >= root.Cap {
+				t.Errorf("root %s: warning %+v is not below the cap", root.Path, w)
+			}
+		}
+	}
+	claude, _, _ := Defaults().Root(".claude")
+	if len(claude.Warnings) != 1 || claude.Warnings[0] != (SizeWarning{Pattern: "projects/**", Size: 2 * gib}) {
+		t.Errorf(".claude warnings = %+v", claude.Warnings)
+	}
+	w := claude.Warnings[0]
+	for name, matches := range map[string]bool{"projects": true, "projects/-ws/a.jsonl": true, "todos/x": false, ".": false} {
+		if w.Matches(name) != matches {
+			t.Errorf("Matches(%s) = %v", name, !matches)
+		}
+	}
+}
+
 // TestDefaultsCredentials pins the login files the per-location store keeps.
 func TestDefaultsCredentials(t *testing.T) {
 	want := []string{".claude/.credentials.json", ".codex/auth.json", ".config/gh/hosts.yml", ".augment/session.json"}

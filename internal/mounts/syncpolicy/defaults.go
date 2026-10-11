@@ -11,6 +11,12 @@ func Defaults() Table {
 	return Table{roots: defaultRoots()}
 }
 
+// Size units for the caps below.
+const (
+	mib int64 = 1 << 20
+	gib int64 = 1 << 30
+)
+
 // agentLocal are the paths every agent tool's state folder keeps per
 // location: installer downloads (two locations installing at once is the
 // #149 race), live sessions and daemons, package caches and lock files.
@@ -34,6 +40,9 @@ func defaultRoots() []Root {
 				Rule{Pattern: "projects/**", Policy: Mirror},
 			),
 			Default: Mirror,
+			// Transcripts grow without bound; the share starts at 10Gi.
+			Cap:      8 * gib,
+			Warnings: []SizeWarning{{Pattern: "projects/**", Size: 2 * gib}},
 		},
 		{
 			Path: ".codex",
@@ -48,6 +57,7 @@ func defaultRoots() []Root {
 				Rule{Pattern: "**/app-server-*", Policy: LocationLocal},
 			),
 			Default: Mirror,
+			Cap:     4 * gib,
 		},
 		{
 			Path: ".config/gh",
@@ -56,12 +66,14 @@ func defaultRoots() []Root {
 			// stays per location with the agent logins.
 			Rules:   agentRules(Rule{Pattern: "hosts.yml", Policy: Credential}),
 			Default: Mirror,
+			Cap:     64 * mib,
 		},
 		{
 			Path:    ".augment",
 			Tool:    "Auggie",
 			Rules:   agentRules(Rule{Pattern: "session.json", Policy: Credential}),
 			Default: Mirror,
+			Cap:     2 * gib,
 		},
 		{
 			// The single-file mounts, seeded '{}' by every new instance.
@@ -71,15 +83,18 @@ func defaultRoots() []Root {
 				{Pattern: "claude-settings.local.json", Policy: JSON3},
 			},
 			Default: Mirror,
+			Cap:     64 * mib,
 		},
 		{
 			// Custom mounts hold user content: mirrored, lock files included
-			// (yarn.lock, Cargo.lock), with no size cap.
+			// (yarn.lock, Cargo.lock), with no size cap, as on local Docker,
+			// where only the host disk limits them.
 			Path:    ".mnt",
 			Default: Mirror,
 		},
 		{
-			// Live host binds (~/.aws, ~/.gitconfig), one folder per bind.
+			// Live host binds (~/.aws, ~/.gitconfig), one folder per bind:
+			// user content like .mnt, so no size cap either.
 			Path:    ".hostbind",
 			Default: Mirror,
 		},

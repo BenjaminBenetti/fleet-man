@@ -22,6 +22,31 @@ type Root struct {
 	// Default is the policy of the folder itself and of every path no rule
 	// matches.
 	Default Policy
+	// Cap is the most the root's synced files may hold in all, in bytes, or 0
+	// for no cap. A change that would take the root past it waits where it
+	// was made, and the root shows as paused, until the root shrinks: sync
+	// never drops it.
+	Cap int64
+	// Warnings flag parts of the root that have grown large, without pausing
+	// anything.
+	Warnings []SizeWarning
+}
+
+// SizeWarning flags the paths a pattern matches, relative to the Root's Path
+// and in Rule's pattern language, once their files hold more than Size bytes
+// in all.
+type SizeWarning struct {
+	Pattern string
+	Size    int64
+}
+
+// Matches reports whether the warning covers name, a slash-separated path
+// relative to the Root's Path.
+func (w SizeWarning) Matches(name string) bool {
+	if name == "." || name == "" {
+		return false
+	}
+	return match(strings.Split(w.Pattern, "/"), strings.Split(name, "/"))
 }
 
 // Rule gives the paths a pattern matches a policy.
@@ -61,6 +86,13 @@ func (r Root) PolicyFor(name string) Policy {
 // Table is a set of sync roots.
 type Table struct {
 	roots []Root
+}
+
+// NewTable returns a table of roots, for a caller (a test, a fleet with roots
+// of its own) that needs other roots than Defaults. Each root's Path must be
+// unique and in the io/fs form.
+func NewTable(roots ...Root) Table {
+	return Table{roots: append([]Root(nil), roots...)}
 }
 
 // Roots returns the table's roots in order.
