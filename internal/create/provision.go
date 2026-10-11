@@ -16,7 +16,8 @@ import (
 
 // provision.go holds the provisioning steps shared by Run (create), RunRebuild
 // and RunClone so those paths stay in lock-step: resolveProvisionMounts
-// assembles the mounts handed to the backend's Up/Rebuild/Clone, and
+// prepares the fleet's runtime and assembles the mounts handed to the
+// backend's Up/Rebuild/Clone, and
 // finishProvision runs everything that has to happen once the container exists.
 // RunClone does NOT use finishProvision — a clone inherits its source's
 // dotfiles/startup effects via the committed image and deliberately must not
@@ -31,7 +32,8 @@ import (
 // recorder.
 var sharedServicesFor = svcruntime.ForInstance
 
-// resolveProvisionMounts assembles the mounts for a provisioning run: the
+// resolveProvisionMounts prepares the fleet on the instance's shared-service
+// runtime and assembles the mounts for a provisioning run: the
 // fleet's shared and custom mounts, the per-instance control directory (so the
 // host TUI can drive the in-instance `fleet launch` over a unix socket), and
 // what the shared buildkit server needs (when the fleet enables it). The
@@ -45,6 +47,17 @@ func resolveProvisionMounts(ctx context.Context, instanceBackend backend.Backend
 	resolvedMounts, err := resolveCustomMounts(instanceBackend, fleetName)
 	if err != nil {
 		return resolvedMounts, err
+	}
+
+	// What the fleet's instances on this runtime need before the first of
+	// them is made there, whichever services are on (on a cluster: the
+	// fleet's sibling DNS and its NetworkPolicies, which block the cloud
+	// metadata range). Fatal: an instance that cannot get them would run
+	// without its fleet's isolation.
+	if services != nil {
+		if err := services.PrepareFleet(fleetName); err != nil {
+			return resolvedMounts, err
+		}
 	}
 
 	// Bind-mount the per-instance control directory so the host fleet TUI

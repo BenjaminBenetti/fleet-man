@@ -125,7 +125,7 @@ func (s *service) mcpClusterList(ctx context.Context, _ *mcp.CallToolRequest, in
 
 type FleetClusterTestInput struct {
 	Cluster string `json:"cluster" jsonschema:"the connection to test: its id, name or context"`
-	Deep    bool   `json:"deep,omitempty" jsonschema:"also run the throwaway-pod probes (a pod pulls through the gateway); takes minutes"`
+	Deep    bool   `json:"deep,omitempty" jsonschema:"also run the throwaway-pod probes (a pod pulls through the gateway; pods test NetworkPolicy enforcement and reach to 169.254.169.254); takes minutes"`
 }
 
 type FleetClusterTestOutput struct {

@@ -102,6 +102,52 @@ func (s Scope) DeleteByKey(ctx context.Context, key string) (Teardown, error) {
 	return s.deleteAll(ctx, objs)
 }
 
+// ListSelected lists the objects of kinds (teardownKinds' names) on the
+// connection that selector matches besides the connection's own labels, the
+// ones being deleted included, as "kind/name" in kinds' order.
+func (s Scope) ListSelected(ctx context.Context, selector string, kinds []string) ([]string, error) {
+	objs, err := s.listSelected(ctx, selector, kinds)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]string, 0, len(objs))
+	for _, o := range objs {
+		refs = append(refs, objectRef(o.Kind, o.Name))
+	}
+	return refs, nil
+}
+
+// DeleteSelected deletes the objects of kinds on the connection that
+// selector matches besides the connection's own labels (in kinds' order,
+// foreground, under the owner check, as DeleteByKey does an instance's).
+func (s Scope) DeleteSelected(ctx context.Context, selector string, kinds []string) (Teardown, error) {
+	objs, err := s.listSelected(ctx, selector, kinds)
+	if err != nil {
+		return Teardown{}, err
+	}
+	return s.deleteAll(ctx, objs)
+}
+
+func (s Scope) listSelected(ctx context.Context, selector string, kinds []string) ([]objectMeta, error) {
+	sel := names.Selector(s.Owner, s.Cluster)
+	if selector != "" {
+		sel += "," + selector
+	}
+	var out []objectMeta
+	for _, kind := range kinds {
+		k, ok := kindOf(kind)
+		if !ok {
+			return nil, fmt.Errorf("listing %q objects: fleet does not know the kind", kind)
+		}
+		objs, err := k.list(ctx, s.Client, s.Namespace, sel)
+		if err != nil {
+			return nil, fmt.Errorf("listing %s (%s): %w", kind, selector, err)
+		}
+		out = append(out, objs...)
+	}
+	return out, nil
+}
+
 func (s Scope) deleteAll(ctx context.Context, objs []objectMeta) (Teardown, error) {
 	var t Teardown
 	var errs []error

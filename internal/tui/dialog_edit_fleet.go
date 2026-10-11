@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/inspector"
 	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
@@ -321,6 +322,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.editFleet.detecting = false
 	fleetPage.dlg.fieldActive = false
 	fleetPage.editFleet.cachingExpanded = false
+	fleetPage.editFleet.cacheUsage = nil
 	fleetPage.editFleet.cacheButtonFocused = false
 	fleetPage.editFleet.deleteCacheConfirm = false
 	fleetPage.editFleet.deleting = false
@@ -518,6 +520,7 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case editFleetRowCaching:
+		was := fleetPage.editFleet.cachingExpanded
 		switch keyMsg.String() {
 		case " ", "enter":
 			fleetPage.editFleet.cachingExpanded = !fleetPage.editFleet.cachingExpanded
@@ -525,6 +528,11 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.editFleet.cachingExpanded = true
 		case "left", "h":
 			fleetPage.editFleet.cachingExpanded = false
+		}
+		if fleetPage.editFleet.cachingExpanded && !was {
+			// How full the caches are, where they run on volumes of a
+			// fixed size (the fleet's clusters).
+			return fetchCacheUsageCmd(fleetPage.dlg.fleet)
 		}
 		return nil
 	case editFleetRowCoder:
@@ -717,7 +725,8 @@ func deleteCacheCmd(k cacheKind, fleetName string) tea.Cmd {
 	}
 }
 
-// handleDeleteCacheDone clears the in-flight flag and surfaces the outcome.
+// handleDeleteCacheDone clears the in-flight flag and surfaces the outcome,
+// then refreshes the caches' usage of the dialog's fleet.
 func (fleetPage *fleetPage) handleDeleteCacheDone(m *model, msg deleteCacheDoneMsg) tea.Cmd {
 	if fleetPage.dlg.fleet == msg.fleet && fleetPage.editFleet.deletingKind == msg.kind {
 		fleetPage.editFleet.deleting = false
@@ -727,7 +736,88 @@ func (fleetPage *fleetPage) handleDeleteCacheDone(m *model, msg deleteCacheDoneM
 	} else {
 		m.message = cacheClearedMessage(msg.kind)
 	}
+	if fleetPage.mode == viewEditFleet && fleetPage.dlg.fleet == msg.fleet && fleetPage.editFleet.cachingExpanded {
+		return fetchCacheUsageCmd(msg.fleet)
+	}
 	return nil
+}
+
+// cacheUsageMsg is a cache usage report for a fleet.
+type cacheUsageMsg struct {
+	fleet string
+	reply *fleetgrpc.GetCacheUsageReply
+	err   error
+}
+
+// fetchCacheUsageCmd asks for the fleet's cache usage off the UI loop.
+func fetchCacheUsageCmd(fleetName string) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := getCacheUsageRemote(fleetName)
+		return cacheUsageMsg{fleet: fleetName, reply: reply, err: err}
+	}
+}
+
+// handleCacheUsage keeps the report of the dialog's fleet for its Caching
+// rows (a report of another fleet, or a failed one, is dropped: the rows then
+// show no usage).
+func (fleetPage *fleetPage) handleCacheUsage(msg cacheUsageMsg) tea.Cmd {
+	if fleetPage.dlg.fleet != msg.fleet {
+		return nil
+	}
+	fleetPage.editFleet.cacheUsage = nil
+	if msg.err == nil && msg.reply != nil {
+		fleetPage.editFleet.cacheUsage = msg.reply.GetCaches()
+	}
+	return nil
+}
+
+// cacheUsageLines are the lines under cache k's row: each volume of it on a
+// cluster, how full it is, its server's state when not ready, and its warning.
+func (fleetPage *fleetPage) cacheUsageLines(k cacheKind) []string {
+	var lines []string
+	for _, u := range fleetPage.editFleet.cacheUsage {
+		if u.GetService() != cacheServiceName(k) {
+			continue
+		}
+		line := "☸ " + u.GetLocation() + " " + formatCacheBytes(u.GetUsedBytes())
+		if c := u.GetCapacityBytes(); c > 0 {
+			line += " of " + formatCacheBytes(c) + fmt.Sprintf(" (%d%%)", u.GetUsedBytes()*100/c)
+		}
+		if st := u.GetState(); st != "" && st != "ready" {
+			line += " · " + st
+		}
+		lines = append(lines, "      "+dimStyle.Render(line))
+		if w := u.GetWarning(); w != "" {
+			lines = append(lines, "      "+warnTextStyle.Render("⚠ "+w))
+		}
+	}
+	return lines
+}
+
+// cacheServiceName is cache k's shared service, as usage reports name it.
+func cacheServiceName(k cacheKind) string {
+	switch k {
+	case cacheDeb:
+		return "debcache"
+	case cacheImage:
+		return "imagecache"
+	default:
+		return "buildkit"
+	}
+}
+
+// formatCacheBytes writes n bytes in binary units ("1.2 GiB").
+func formatCacheBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // cacheClearedMessage is the success banner for a cache wipe.
@@ -1506,11 +1596,12 @@ type editFleetState struct {
 	// interaction model (toggle + [Delete cache] button + inline confirm +
 	// in-flight spinner); the per-row sub-state below applies to whichever
 	// cache row currently has the dialog cursor.
-	cachingExpanded    bool      // ▼ Caching expanded, revealing the cache rows
-	cacheButtonFocused bool      // horizontal sub-cursor: on the [Delete cache] button vs the toggle
-	deleteCacheConfirm bool      // inline confirm armed (first Enter on the button)
-	deleting           bool      // a cache-wipe RPC is in flight
-	deletingKind       cacheKind // which cache the in-flight wipe targets (valid only while deleting)
+	cachingExpanded    bool                    // ▼ Caching expanded, revealing the cache rows
+	cacheUsage         []*fleetgrpc.CacheUsage // the fleet's cluster cache volumes, fetched when Caching expands
+	cacheButtonFocused bool                    // horizontal sub-cursor: on the [Delete cache] button vs the toggle
+	deleteCacheConfirm bool                    // inline confirm armed (first Enter on the button)
+	deleting           bool                    // a cache-wipe RPC is in flight
+	deletingKind       cacheKind               // which cache the in-flight wipe targets (valid only while deleting)
 
 	// Custom mounts section.
 	customMountsExpanded bool     // ▼ Custom mounts expanded, revealing per-mount rows + the add row
@@ -1850,6 +1941,9 @@ func (fleetPage *fleetPage) renderCacheRow(m *model, k cacheKind, label string) 
 	line := "  " + box + " " + dialogLabel.Render(label)
 	if fleetPage.cacheEnabled(k) {
 		line += "   " + fleetPage.renderDeleteCacheButton(m, k)
+		for _, l := range fleetPage.cacheUsageLines(k) {
+			line += "\n" + l
+		}
 	}
 	return line
 }

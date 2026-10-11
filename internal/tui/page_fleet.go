@@ -214,6 +214,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 
 	case deleteCacheDoneMsg:
 		return fleetPage.handleDeleteCacheDone(m, msg.(deleteCacheDoneMsg))
+	case cacheUsageMsg:
+		return fleetPage.handleCacheUsage(msg.(cacheUsageMsg))
 
 	case devcontainerInspectedMsg:
 		return fleetPage.handleDevcontainerInspected(m, msg.(devcontainerInspectedMsg))

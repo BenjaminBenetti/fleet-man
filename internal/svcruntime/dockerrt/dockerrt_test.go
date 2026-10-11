@@ -5,10 +5,13 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
+	"github.com/BenjaminBenetti/fleet-man/internal/debcache"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -39,10 +42,11 @@ func recording(t *testing.T, fail error) *[]string {
 	services = map[fleet.SharedService]service{}
 	for svc, s := range orig {
 		services[svc] = service{
-			ensure: func(f string) (string, error) { return "/dir", record("ensure " + f + " " + string(svc)) },
-			stop:   func(f string) error { return record("stop " + f + " " + string(svc)) },
-			wipe:   func(f string) error { return record("wipe " + f + " " + string(svc)) },
-			mounts: s.mounts,
+			ensure:   func(f string) (string, error) { return "/dir", record("ensure " + f + " " + string(svc)) },
+			stop:     func(f string) error { return record("stop " + f + " " + string(svc)) },
+			wipe:     func(f string) error { return record("wipe " + f + " " + string(svc)) },
+			mounts:   s.mounts,
+			endpoint: s.endpoint,
 		}
 	}
 	connectInstance = func(f, cid string) error { return record("connect " + f + " " + cid) }
@@ -62,6 +66,15 @@ func TestDockerRuntimeCallsTheServicePackages(t *testing.T) {
 			errs = append(errs, rt.EnsureService("alpha", svc), rt.StopService("alpha", svc), rt.WipeService("alpha", svc))
 		}
 		errs = append(errs, rt.ConnectInstance("alpha", "cid"), rt.TeardownFleet("alpha"))
+		// Preparing and releasing a fleet touch nothing on docker: its
+		// network comes with the first service, and its services stay until
+		// the fleet goes.
+		if err := rt.PrepareFleet("alpha"); err != nil {
+			t.Errorf("PrepareFleet: %v", err)
+		}
+		if err := rt.ReleaseFleet("alpha"); err != nil {
+			t.Errorf("ReleaseFleet: %v", err)
+		}
 
 		want := []string{
 			"ensure alpha buildkit", "stop alpha buildkit", "wipe alpha buildkit",
@@ -99,10 +112,32 @@ func TestInstanceMountsBindTheBuildkitSocketDir(t *testing.T) {
 	}
 }
 
+// TestDockerEndpointsAreTheContainerNames: instances reach the caches by
+// container name over the fleet network, and buildkit through its mount.
+func TestDockerEndpointsAreTheContainerNames(t *testing.T) {
+	var rt Runtime
+	for svc, want := range map[fleet.SharedService]fleet.ServiceEndpoint{
+		fleet.ServiceBuildkit:   {},
+		fleet.ServiceDebCache:   {URL: debcache.ProxyURL("alpha")},
+		fleet.ServiceImageCache: {URL: imagecache.MirrorURL("alpha"), HostPort: imagecache.MirrorHostPort("alpha")},
+	} {
+		got, err := rt.Endpoint("alpha", svc)
+		if err != nil || got != want {
+			t.Errorf("Endpoint(%q) = %+v, %v; want %+v", svc, got, err, want)
+		}
+	}
+	if _, err := rt.Endpoint("alpha", "unknown"); err == nil {
+		t.Error("an unknown service has an endpoint")
+	}
+}
+
 func TestDockerRuntimeAnswers(t *testing.T) {
 	var rt Runtime
 	if rt.Key() != Key || Key != "docker" {
 		t.Errorf("Key() = %q", rt.Key())
+	}
+	if rt.ReconcileBudget() != 3*time.Minute {
+		t.Errorf("ReconcileBudget() = %v, want the 3 minutes a sweep has always had", rt.ReconcileBudget())
 	}
 	if !rt.ReconfigureOnStart() {
 		t.Error("ReconfigureOnStart() = false: a started devcontainer would lose its caches after a host reboot")

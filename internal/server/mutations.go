@@ -111,7 +111,7 @@ func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetReq
 	// synchronous RPC, so surface failures to the event log). The network is
 	// removed last, after the cache containers, so docker doesn't refuse it for
 	// active endpoints.
-	teardownWarnings := teardownFleetSharedServices(req.GetName(), buildkitEnabled)
+	teardownWarnings := teardownFleetSharedServices(req.GetName(), buildkitEnabled, nil)
 	for _, w := range teardownWarnings {
 		flog.Warn("destroy fleet cache teardown", "fleet", req.GetName(), "warn", w)
 	}

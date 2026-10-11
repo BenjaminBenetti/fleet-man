@@ -31,6 +31,10 @@ func setupImageCache(services svcruntime.Runtime, instanceBackend backend.Backen
 	if err := services.ConnectInstance(fleetName, containerID); err != nil {
 		return err
 	}
+	endpoint, err := services.Endpoint(fleetName, fleet.ServiceImageCache)
+	if err != nil {
+		return err
+	}
 	// Point the instance's own dockerd at the mirror. A docker-in-docker daemon
 	// may not have finished starting yet, so poll rather than probe once: the
 	// first few probes run synchronously (so a fast dind is wired up before the
@@ -38,7 +42,7 @@ func setupImageCache(services svcruntime.Runtime, instanceBackend backend.Backen
 	// rest of the window. Best-effort — an instance with no dockerd never
 	// configures, which is fine.
 	imagecache.ConfigureInstanceDockerPolling(instanceBackend, workspaceDir,
-		imagecache.MirrorURL(fleetName), imagecache.MirrorHostPort(fleetName),
+		endpoint.URL, endpoint.HostPort,
 		imageCacheConfigureResult(fleetName, instanceName))
 	return nil
 }

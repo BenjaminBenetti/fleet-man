@@ -626,6 +626,33 @@ itest_control_mode() { _be_control_mode "$(_itest_ref "$1")" "$2"; }
 # share tree (itest_share_dir) agree. Instant on devcontainer, a bind mount.
 itest_share_sync() { _be_share_sync "$1"; }
 
+# --- a fleet's shared services: buildkit | debcache | imagecache ---
+#
+# On devcontainer each is a container on the host's docker
+# (fleet-<fleet>-buildkit, -aptcache, -imgcache); on a cluster a Deployment
+# (with its volume and Service) in the connection's namespace.
+
+# itest_service_status <fleet> <service> — the server of the fleet's
+# <service>: running, absent, or what else it is (stopped, starting).
+itest_service_status() { _be_service_status "$1" "$2"; }
+
+# itest_service_remove <fleet> <service> — remove the server behind fleet's
+# back, keeping its cache data.
+itest_service_remove() { _be_service_remove "$1" "$2"; }
+
+# itest_wait_service <fleet> <service> <running|absent> [timeout_s] — wait
+# until the server is so; fails the test naming what it is.
+itest_wait_service() {
+  local st=""
+  local deadline=$(( $(date +%s) + $(_scale_timeout "${4:-120}") ))
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    st=$(itest_service_status "$1" "$2")
+    [ "${st}" = "$3" ] && return 0
+    sleep 1
+  done
+  fail "the $2 server of fleet $1 is ${st}, not $3"
+}
+
 # --- instance root filesystem: reached through `fleet exec` on every backend ---
 
 # itest_install_local_deb <ref> <package> — build a one-file .deb named

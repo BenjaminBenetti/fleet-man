@@ -28,8 +28,9 @@ const (
 	// preflight gives up after 3 minutes).
 	kubeTestTimeout = 4 * time.Minute
 	// kubeDeepTestTimeout bounds a deep test: the full preflight, then the
-	// throwaway-pod probes (3 more minutes at most).
-	kubeDeepTestTimeout = kubeTestTimeout + 3*time.Minute
+	// throwaway-pod probes (the pull through the gateway and the network
+	// probe: 5 more minutes at most).
+	kubeDeepTestTimeout = kubeTestTimeout + 5*time.Minute
 	// kubeRemoveTimeout bounds RemoveKubeCluster, which with
 	// DESTROY_INSTANCES waits for every teardown.
 	kubeRemoveTimeout = 10 * time.Minute

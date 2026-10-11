@@ -108,6 +108,39 @@ message DeleteImageCacheRequest {
 // DeleteImageCacheReply is empty: success is signalled by a nil error.
 message DeleteImageCacheReply {}
 
+message GetCacheUsageRequest {
+  string fleet = 1;
+}
+
+// GetCacheUsageReply is each of the fleet's cache volumes on the runtimes
+// whose volumes have a fixed size (its clusters; the daemon host's docker
+// caches grow with its disk and are not listed).
+message GetCacheUsageReply {
+  repeated CacheUsage caches = 1;
+  // unavailable names each runtime that could not report, with why
+  // ("kubernetes:<id>: not reachable now").
+  repeated string unavailable = 2;
+}
+
+// CacheUsage is how full one cache volume is.
+message CacheUsage {
+  // service is the shared service: "buildkit", "debcache" or "imagecache".
+  string service = 1;
+  // cluster is the connection the volume is on, location its display name.
+  string cluster = 2;
+  string location = 3;
+  int64 used_bytes = 4;
+  int64 capacity_bytes = 5;
+  // expandable: the volume grows by half when it is nearly full.
+  bool expandable = 6;
+  // state is the service's server: "ready", "starting", or why it is
+  // neither.
+  string state = 7;
+  // warning is the line the Caching row shows ("93% full; its StorageClass
+  // cannot grow it"); empty when all is well.
+  string warning = 8;
+}
+
 message GetStateRequest {
   // fresh_branches asks the server to read every instance's checked-out branch
   // through its backend's workspace reader (bounded concurrency; reads made

@@ -850,6 +850,10 @@ func kubeGroupInfo(key string, st *fleetgrpc.KubeClusterStatus) []string {
 		checkLine("admission_unprivileged")
 		checkLine("admission_debug_caps")
 		checkLine("admission_privileged")
+		// The deep test's look at the pods' network: NetworkPolicy
+		// enforcement and the metadata block.
+		checkLine("network_policy")
+		checkLine("metadata")
 		if caps.GetPsaLevel() != "" {
 			out = append(out, dimStyle.Render("pod-security level: "+caps.GetPsaLevel()))
 		}

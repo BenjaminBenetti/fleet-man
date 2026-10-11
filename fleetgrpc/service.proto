@@ -63,10 +63,15 @@ service FleetService {
   // longer deadline and show progress.
   rpc DeleteBuildkitCache(DeleteBuildkitCacheRequest) returns (DeleteBuildkitCacheReply);
   // DeleteDebCache / DeleteImageCache wipe a fleet's shared deb / docker-image
-  // cache and restart the (empty) server. Synchronous host-docker actions —
-  // clients use the same longer deadline as DeleteBuildkitCache.
+  // cache and restart the (empty) server, wherever the fleet's instances reach
+  // one (the daemon host's docker, each cluster). Synchronous — clients use
+  // the same longer deadline as DeleteBuildkitCache.
   rpc DeleteDebCache(DeleteDebCacheRequest) returns (DeleteDebCacheReply);
   rpc DeleteImageCache(DeleteImageCacheRequest) returns (DeleteImageCacheReply);
+  // GetCacheUsage reports how full each of a fleet's cache volumes is where
+  // its caches run on volumes of a fixed size (its clusters), for the fleet
+  // options' Caching rows.
+  rpc GetCacheUsage(GetCacheUsageRequest) returns (GetCacheUsageReply);
   rpc SetInstanceMetadata(SetInstanceMetadataRequest) returns (MutationReply);
   rpc SetGroupLayout(SetGroupLayoutRequest) returns (MutationReply);
   rpc DeleteGroupLayout(DeleteGroupLayoutRequest) returns (MutationReply);

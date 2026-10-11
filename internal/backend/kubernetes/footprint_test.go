@@ -145,3 +145,98 @@ func TestFootprintCapsTombstones(t *testing.T) {
 		}
 	}
 }
+
+// A fleet's presence on a connection: recorded by a prepare (which voids a
+// teardown owed there), a pending teardown keeps the presence's fields and
+// only ever adds to what it owes, a settled teardown forgets a destroyed
+// fleet and keeps one whose cache volumes stay, and a removed connection
+// forgets its fleets. Tombstones are untouched throughout.
+func TestFleetPresence(t *testing.T) {
+	path := useFootprintAt(t)
+	at := time.Unix(1700000000, 0).UTC()
+	if err := AddTombstone(Tombstone{Cluster: "c1", Key: "aaaaaaaa"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []struct{ cluster, fleet string }{{"c1", "alpha"}, {"c2", "alpha"}, {"c1", "beta"}} {
+		if err := RecordFleetPrepared(p.cluster, p.fleet, "h-"+p.fleet, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, _ := LoadFootprint()
+	if got := f.ClustersOf("alpha"); len(got) != 2 || got[0] != "c1" || got[1] != "c2" {
+		t.Fatalf("alpha is on %v", got)
+	}
+	if got := f.PresencesOf("c1"); len(got) != 2 {
+		t.Fatalf("c1 has %+v", got)
+	}
+
+	if err := RecordPendingTeardown("c1", "alpha", "", PendingTeardown{DeleteCaches: true, Error: "unreachable"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPendingTeardown("c1", "alpha", "", PendingTeardown{FleetGone: true, Error: "again"}); err != nil {
+		t.Fatal(err)
+	}
+	f, _ = LoadFootprint()
+	p := f.Presence("c1", "alpha")
+	if p == nil || p.Hash != "h-alpha" || !p.PreparedAt.Equal(at) || p.PendingTeardown == nil ||
+		!p.PendingTeardown.DeleteCaches || !p.PendingTeardown.FleetGone || p.PendingTeardown.Error != "again" || p.PendingTeardown.Since.IsZero() {
+		t.Fatalf("pending presence %+v %+v", p, p.PendingTeardown)
+	}
+	since := p.PendingTeardown.Since
+	if err := RecordPendingTeardown("c1", "alpha", "", PendingTeardown{}); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ = LoadFootprint(); !f.Presence("c1", "alpha").PendingTeardown.Since.Equal(since) {
+		t.Fatal("a teardown owed again lost when it was first owed")
+	}
+	// A teardown owed on a connection the fleet was never prepared on.
+	if err := RecordPendingTeardown("c3", "gamma", "h-gamma", PendingTeardown{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RecordFleetPrepared("c1", "alpha", "h-alpha", at.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ = LoadFootprint(); f.Presence("c1", "alpha").PendingTeardown != nil {
+		t.Fatal("a prepare left the teardown owed")
+	}
+
+	if err := RecordPendingTeardown("c2", "alpha", "", PendingTeardown{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SettleFleetTeardown("c2", "alpha", false); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ = LoadFootprint(); f.Presence("c2", "alpha") == nil || f.Presence("c2", "alpha").PendingTeardown != nil {
+		t.Fatal("a released fleet's presence went, or its teardown is still owed")
+	}
+	if err := SettleFleetTeardown("c2", "alpha", true); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ = LoadFootprint(); f.Presence("c2", "alpha") != nil {
+		t.Fatal("a destroyed fleet's presence stayed")
+	}
+	before, _ := os.ReadFile(path)
+	if err := SettleFleetTeardown("c9", "nobody", true); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Fatal("settling nothing rewrote the footprint")
+	}
+
+	if err := ForgetClusterFleets("c1"); err != nil {
+		t.Fatal(err)
+	}
+	f, _ = LoadFootprint()
+	if len(f.PresencesOf("c1")) != 0 || len(f.PresencesOf("c3")) != 1 || len(f.TombstonesOf("c1")) != 1 {
+		t.Fatalf("after forgetting c1: %+v %+v", f.Fleets, f.Tombstones)
+	}
+
+	// An older fleet reading the file keeps the presences (a top-level field
+	// it does not know).
+	data, _ := os.ReadFile(path)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil || raw["fleets"] == nil {
+		t.Fatalf("footprint %s", data)
+	}
+}

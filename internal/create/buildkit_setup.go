@@ -1,6 +1,8 @@
 package create
 
 import (
+	"errors"
+
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -37,6 +39,14 @@ func prepareBuildkitMounts(services svcruntime.Runtime, fleetName string) ([]bac
 func configureBuildkit(services svcruntime.Runtime, instanceBackend backend.Backend, fleetName, workspaceDir string) error {
 	if services == nil || !fleetBuildkitEnabled(fleetName) {
 		return nil
+	}
+	// A runtime that points no instance at its buildkit server leaves buildx
+	// alone (prepareBuildkitMounts already warned why there is no server).
+	if _, err := services.Endpoint(fleetName, fleet.ServiceBuildkit); err != nil {
+		if errors.Is(err, svcruntime.ErrNoEndpoint) {
+			return nil
+		}
+		return err
 	}
 	configured, err := buildkit.ConfigureInstanceBuildx(instanceBackend, workspaceDir)
 	if err != nil {

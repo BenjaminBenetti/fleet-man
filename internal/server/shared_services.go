@@ -3,12 +3,16 @@ package server
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime"
 	"google.golang.org/grpc/codes"
@@ -17,16 +21,70 @@ import (
 
 // shared_services.go is the daemon's side of a fleet's shared services
 // (buildkit, deb cache, image cache; see internal/svcruntime): the TUI-connect
-// reconcile, the whole-fleet teardown, and the Delete cache RPCs.
+// reconcile, the release of a runtime a fleet's last instance there left, the
+// whole-fleet teardown, the Delete cache RPCs, the cache usage report, and the
+// upkeep of the runtimes that need it (a cluster's caches).
 
 // sharedServicesFor returns the runtime an instance's fleet's shared services
-// run on for it (nil when it gets none), and hostSharedServices the daemon
-// host's docker runtime, which a whole-fleet teardown and a cache wipe act on.
+// run on for it (nil when it gets none), hostSharedServices the daemon host's
+// docker runtime, which a whole-fleet teardown and a cache wipe always act on,
+// clusterSharedServices a Kubernetes connection's runtime, and
+// fleetPresentClusters the connections a fleet's objects were recorded on.
 // Package vars so tests can substitute recorders.
 var (
-	sharedServicesFor  = svcruntime.ForInstance
-	hostSharedServices = svcruntime.Docker
+	sharedServicesFor     = svcruntime.ForInstance
+	hostSharedServices    = svcruntime.Docker
+	clusterSharedServices = svcruntime.ForCluster
+	fleetPresentClusters  = svcruntime.PresentClusters
 )
+
+// fleetRuntimes are the runtimes a whole-fleet teardown acts on: the daemon
+// host's docker always (as it always has, whatever the fleet's instances ran
+// on), each runtime instances use, and each connection the fleet's objects
+// were recorded on (its cache volumes may be there after its instances left).
+func fleetRuntimes(fleetName string, instances []*fleet.Instance) []svcruntime.Runtime {
+	host := hostSharedServices()
+	out := []svcruntime.Runtime{host}
+	seen := map[string]bool{host.Key(): true}
+	add := func(rt svcruntime.Runtime) {
+		if rt != nil && !seen[rt.Key()] {
+			seen[rt.Key()] = true
+			out = append(out, rt)
+		}
+	}
+	for _, inst := range instances {
+		if inst != nil {
+			add(sharedServicesFor(inst))
+		}
+	}
+	for _, id := range fleetPresentClusters(fleetName) {
+		add(clusterSharedServices(id))
+	}
+	return out
+}
+
+// instanceRuntimes are the distinct runtimes instances use, or the daemon
+// host's docker when none uses one (what a cache wipe has always acted on for
+// a fleet without such instances).
+func instanceRuntimes(instances []*fleet.Instance) []svcruntime.Runtime {
+	var out []svcruntime.Runtime
+	seen := map[string]bool{}
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		rt := sharedServicesFor(inst)
+		if rt == nil || seen[rt.Key()] {
+			continue
+		}
+		seen[rt.Key()] = true
+		out = append(out, rt)
+	}
+	if len(out) == 0 {
+		out = []svcruntime.Runtime{hostSharedServices()}
+	}
+	return out
+}
 
 // sharedServiceText is how the daemon's messages name each shared service: its
 // fleet setting, its cache, and its server.
@@ -87,7 +145,8 @@ type fleetServices struct {
 }
 
 // sharedServiceSweeps plans a reconcile of st: one sweep per runtime that any
-// fleet with a service on has an instance using, in fleet-name order.
+// fleet has an instance using, in fleet-name order, each fleet with the
+// services it has on (none: the sweep only prepares the fleet there).
 func sharedServiceSweeps(st *state.State) []*sharedServiceSweep {
 	names := make([]string, 0, len(st.Fleets))
 	for name := range st.Fleets {
@@ -103,9 +162,6 @@ func sharedServiceSweeps(st *state.State) []*sharedServiceSweep {
 			continue
 		}
 		services := f.Settings.EnabledSharedServices()
-		if len(services) == 0 {
-			continue
-		}
 		planned := map[string]bool{}
 		for _, inst := range f.Instances {
 			if inst == nil {
@@ -128,15 +184,24 @@ func sharedServiceSweeps(st *state.State) []*sharedServiceSweep {
 	return sweeps
 }
 
-// run ensures each planned service on the sweep's runtime, stopping when ctx
-// ends.
+// run prepares each planned fleet on the sweep's runtime (which re-applies
+// what a cluster keeps for it: sibling DNS, its NetworkPolicies) and ensures
+// its services, within the runtime's ReconcileBudget, stopping when ctx ends.
 func (s *sharedServiceSweep) run(ctx context.Context) {
 	key := s.runtime.Key()
+	ctx, cancel := context.WithTimeout(ctx, s.runtime.ReconcileBudget())
+	defer cancel()
 	if !s.runtime.Reachable(ctx) {
 		flog.Warn("shared services reconcile: runtime unreachable, skipped", "runtime", key)
 		return
 	}
 	for _, f := range s.fleets {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := s.runtime.PrepareFleet(f.name); err != nil {
+			flog.Warn("shared services reconcile: prepare failed", "runtime", key, "fleet", f.name, "err", err)
+		}
 		for _, svc := range f.services {
 			if ctx.Err() != nil {
 				return
@@ -151,10 +216,12 @@ func (s *sharedServiceSweep) run(ctx context.Context) {
 // teardownFleetSharedServices removes a fleet's shared service servers and
 // then its network, on a whole-fleet destroy (the destroy job with
 // destroy_fleet, and the DestroyFleet RPC that removes an empty fleet), once its
-// instances are down. It acts on the daemon host's docker whatever the fleet's
-// instances ran on, and it LEAVES each cache's directory on disk: a cache
-// outlives the fleet and warms the next fleet of the same name, exactly like
-// the persisted .claude/.codex/.config/gh mount dirs do.
+// instances are down, on every runtime the fleet has (fleetRuntimes; instances
+// are the fleet's, read before its record went). On the daemon host's docker it
+// LEAVES each cache's directory on disk: a cache outlives the fleet and warms
+// the next fleet of the same name, exactly like the persisted
+// .claude/.codex/.config/gh mount dirs do. A cluster keeps its cache volumes
+// likewise, unless the connection deletes them with the fleet.
 //
 // The buildkit server is removed only when the fleet has it on
 // (buildkitEnabled, read before the record went away). The deb/image caches
@@ -163,21 +230,95 @@ func (s *sharedServiceSweep) run(ctx context.Context) {
 // container the user disabled before destroying. Each step is idempotent (a
 // missing container or network is not an error), so this is safe for fleets
 // that never used a cache. The network goes LAST, after the cache containers,
-// since docker refuses to remove a network with active endpoints. Best-effort:
-// failures come back as warnings, never as an abort.
-func teardownFleetSharedServices(fleetName string, buildkitEnabled bool) []string {
-	services := hostSharedServices()
+// since docker refuses to remove a network with active endpoints. A runtime
+// that is not reachable now goes straight to its TeardownFleet (a cluster's
+// records what it owes and deletes it once it can). Best-effort: failures come
+// back as warnings, never as an abort.
+func teardownFleetSharedServices(fleetName string, buildkitEnabled bool, instances []*fleet.Instance) []string {
 	var warnings []string
-	for _, svc := range fleet.SharedServices() {
-		if svc == fleet.ServiceBuildkit && !buildkitEnabled {
-			continue
+	for _, services := range fleetRuntimes(fleetName, instances) {
+		prefix := ""
+		if services.Key() != hostSharedServices().Key() {
+			prefix = services.Key() + ": "
 		}
-		if err := services.StopService(fleetName, svc); err != nil {
-			warnings = append(warnings, fmt.Sprintf("stop %s: %v", sharedServiceText[svc].server, err))
+		if services.Reachable(context.Background()) {
+			for _, svc := range fleet.SharedServices() {
+				if svc == fleet.ServiceBuildkit && !buildkitEnabled {
+					continue
+				}
+				if err := services.StopService(fleetName, svc); err != nil {
+					warnings = append(warnings, fmt.Sprintf("%sstop %s: %v", prefix, sharedServiceText[svc].server, err))
+				}
+			}
+		}
+		if err := services.TeardownFleet(fleetName); err != nil {
+			if prefix == "" {
+				warnings = append(warnings, fmt.Sprintf("remove fleet network: %v", err))
+			} else {
+				warnings = append(warnings, prefix+err.Error())
+			}
 		}
 	}
-	if err := services.TeardownFleet(fleetName); err != nil {
-		warnings = append(warnings, fmt.Sprintf("remove fleet network: %v", err))
+	return warnings
+}
+
+// prepareClusterFleets re-prepares every fleet with an instance on
+// Kubernetes connection clusterID (svcruntime.Runtime.PrepareFleet), so a
+// change of what the fleets' pods get there (its metadata block) reaches the
+// pods already running. Best-effort, logged.
+func prepareClusterFleets(clusterID string) {
+	rt := clusterSharedServices(clusterID)
+	if rt == nil {
+		return
+	}
+	st, err := state.Load()
+	if err != nil {
+		flog.Warn("shared services: load state failed", "err", err)
+		return
+	}
+	names := make([]string, 0, len(st.Fleets))
+	for name, f := range st.Fleets {
+		if f == nil {
+			continue
+		}
+		for _, inst := range f.Instances {
+			if inst != nil && inst.Backend == fleet.BackendKubernetes && inst.KubeCluster == clusterID {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := rt.PrepareFleet(name); err != nil {
+			flog.Warn("shared services: re-preparing a fleet on a connection failed", "runtime", rt.Key(), "fleet", name, "err", err)
+			continue
+		}
+		flog.Info("shared services: re-prepared a fleet on a connection", "runtime", rt.Key(), "fleet", name)
+	}
+}
+
+// releaseFleetRuntimes runs after a single-instance destroy removed the
+// records of destroyed: each runtime one of them used is released
+// (svcruntime.Runtime.ReleaseFleet), which a runtime that keeps something for
+// a fleet only while it has instances there acts on once the last one is gone
+// (a cluster: the fleet's objects but its cache volumes). Warnings say what
+// is put off.
+func releaseFleetRuntimes(fleetName string, destroyed []*fleet.Instance) []string {
+	var warnings []string
+	seen := map[string]bool{}
+	for _, inst := range destroyed {
+		if inst == nil {
+			continue
+		}
+		rt := sharedServicesFor(inst)
+		if rt == nil || seen[rt.Key()] {
+			continue
+		}
+		seen[rt.Key()] = true
+		if err := rt.ReleaseFleet(fleetName); err != nil {
+			warnings = append(warnings, rt.Key()+": "+err.Error())
+		}
 	}
 	return warnings
 }
@@ -211,10 +352,13 @@ func (s *service) DeleteImageCache(_ context.Context, req *fleetgrpc.DeleteImage
 }
 
 // wipeSharedService is the Delete cache RPCs' shared body: it wipes fleetName's
-// svc cache on the daemon host's docker and restarts the server empty. It only
-// wipes for a fleet that has svc on: otherwise the restart step would spin up a
-// server the fleet never asked for. (The TUI only shows the button when it is
-// on; this protects direct/stale callers.)
+// svc cache, and restarts the server empty, on every runtime the fleet's
+// instances reach a copy of it on (the daemon host's docker for a fleet
+// without such instances, as always). It only wipes for a fleet that has svc
+// on: otherwise the restart step would spin up a server the fleet never asked
+// for. (The TUI only shows the button when it is on; this protects
+// direct/stale callers.) The runtimes are wiped concurrently; a runtime that
+// cannot be reached now is reported, and the others are still wiped.
 func wipeSharedService(fleetName string, svc fleet.SharedService) error {
 	if fleetName == "" {
 		return status.Error(codes.InvalidArgument, "fleet is required")
@@ -230,8 +374,151 @@ func wipeSharedService(fleetName string, svc fleet.SharedService) error {
 	if !f.Settings.SharedServiceEnabled(svc) {
 		return status.Errorf(codes.FailedPrecondition, "fleet %q does not have the %s enabled", fleetName, sharedServiceText[svc].setting)
 	}
-	if err := hostSharedServices().WipeService(fleetName, svc); err != nil {
-		return status.Errorf(codes.Internal, "delete %s: %v", sharedServiceText[svc].cache, err)
+	runtimes := instanceRuntimes(f.Instances)
+	// The runtimes wipe at once: a cluster's waits for its new server (up
+	// to 270s), and the clients give the whole call 300s.
+	outcomes := make([]string, len(runtimes))
+	var wg sync.WaitGroup
+	for i, rt := range runtimes {
+		prefix := ""
+		if len(runtimes) > 1 || rt.Key() != hostSharedServices().Key() {
+			prefix = rt.Key() + ": "
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if !rt.Reachable(context.Background()) {
+				outcomes[i] = prefix + "not reachable now"
+				return
+			}
+			if err := rt.WipeService(fleetName, svc); err != nil {
+				outcomes[i] = prefix + err.Error()
+			}
+		}()
+	}
+	wg.Wait()
+	var failed []string
+	for _, o := range outcomes {
+		if o != "" {
+			failed = append(failed, o)
+		}
+	}
+	if len(failed) > 0 {
+		return status.Errorf(codes.Internal, "delete %s: %s", sharedServiceText[svc].cache, strings.Join(failed, "; "))
 	}
 	return nil
+}
+
+// GetCacheUsage reports how full each of a fleet's cache volumes is, on each
+// runtime of its instances whose services run on volumes of a fixed size (a
+// cluster's). A runtime that cannot say is left out, with its reason.
+func (s *service) GetCacheUsage(ctx context.Context, req *fleetgrpc.GetCacheUsageRequest) (*fleetgrpc.GetCacheUsageReply, error) {
+	fleetName := req.GetFleet()
+	if fleetName == "" {
+		return nil, status.Error(codes.InvalidArgument, "fleet is required")
+	}
+	st, err := state.Load()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load state: %v", err)
+	}
+	f, ok := st.Fleets[fleetName]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "fleet %q not found", fleetName)
+	}
+	ctx, cancel := context.WithTimeout(ctx, cacheUsageTimeout)
+	defer cancel()
+	reply := &fleetgrpc.GetCacheUsageReply{}
+	for _, rt := range instanceRuntimes(f.Instances) {
+		reporter, ok := rt.(svcruntime.UsageReporter)
+		if !ok {
+			continue
+		}
+		if !rt.Reachable(ctx) {
+			reply.Unavailable = append(reply.Unavailable, rt.Key()+": not reachable now")
+			continue
+		}
+		usage, err := reporter.CacheUsage(ctx, fleetName)
+		if err != nil {
+			reply.Unavailable = append(reply.Unavailable, rt.Key()+": "+err.Error())
+		}
+		for _, u := range usage {
+			reply.Caches = append(reply.Caches, protoconv.CacheUsageToProto(u))
+		}
+	}
+	return reply, nil
+}
+
+// cacheUsageTimeout bounds a cache usage report (a du in each server's pod).
+const cacheUsageTimeout = 30 * time.Second
+
+// sharedServiceUpkeepInterval paces the upkeep of the runtimes that need it
+// (FLEET_KUBE_CACHE_CHECK_INTERVAL overrides it).
+var sharedServiceUpkeepInterval = 30 * time.Minute
+
+// sharedServiceUpkeepEvery is the upkeep interval, the environment's when it
+// sets a valid one.
+func sharedServiceUpkeepEvery() time.Duration {
+	if v := os.Getenv("FLEET_KUBE_CACHE_CHECK_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		flog.Warn("shared services upkeep: ignoring FLEET_KUBE_CACHE_CHECK_INTERVAL", "value", v)
+	}
+	return sharedServiceUpkeepInterval
+}
+
+// runSharedServiceUpkeep runs maintainSharedServices every
+// sharedServiceUpkeepEvery until ctx ends.
+func runSharedServiceUpkeep(ctx context.Context) {
+	t := time.NewTicker(sharedServiceUpkeepEvery())
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		maintainSharedServices(ctx)
+	}
+}
+
+// maintainSharedServices runs the upkeep (svcruntime.Maintainer) of every
+// runtime that needs it, for each fleet with services on and an instance
+// there: a cluster's caches grow when nearly full, or warn, and its deb cache
+// runs its daily expiry. Runtimes run concurrently, each fleet in turn, each
+// within its ReconcileBudget; best-effort, logged.
+func maintainSharedServices(ctx context.Context) {
+	st, err := state.Load()
+	if err != nil {
+		flog.Warn("shared services upkeep: load state failed", "err", err)
+		return
+	}
+	var wg sync.WaitGroup
+	for _, sweep := range sharedServiceSweeps(st) {
+		m, ok := sweep.runtime.(svcruntime.Maintainer)
+		if !ok {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(ctx, sweep.runtime.ReconcileBudget())
+			defer cancel()
+			if !sweep.runtime.Reachable(ctx) {
+				return
+			}
+			for _, f := range sweep.fleets {
+				if ctx.Err() != nil {
+					return
+				}
+				if len(f.services) == 0 {
+					continue
+				}
+				if err := m.Maintain(ctx, f.name, f.services); err != nil {
+					flog.Warn("shared services upkeep failed", "runtime", sweep.runtime.Key(), "fleet", f.name, "err", err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

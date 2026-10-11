@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
@@ -30,6 +31,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/kubert"
 )
 
 // kube.go serves the Kubernetes connection RPCs. Every one is served to
@@ -263,6 +265,12 @@ func (s *service) UpdateKubeCluster(ctx context.Context, req *fleetgrpc.UpdateKu
 	}
 	flog.Info("kube: connection updated", "cluster", cur.ID, "fields", req.GetUpdateMask().GetPaths())
 	s.kube.sync()
+	if next.BlocksMetadata() != cur.BlocksMetadata() {
+		// A security setting of the fleets' pods there, not of new
+		// instances only: every fleet on the connection gets its egress
+		// policy (or loses it) now.
+		go prepareClusterFleets(cur.ID)
+	}
 	return &fleetgrpc.UpdateKubeClusterReply{Cluster: s.kube.status(cur.ID)}, nil
 }
 
@@ -423,6 +431,14 @@ func (s *service) RemoveKubeCluster(ctx context.Context, req *fleetgrpc.RemoveKu
 	}
 	// Asked before the removal stops the worker (and releases its Lease).
 	leaseHeld := s.kube.leaseHeld(rec.ID)
+	// The fleets' own objects there (their cache volumes included) go with
+	// a connection that is not forgotten: nothing reaches them afterwards. A
+	// forget leaves everything in the cluster.
+	if req.GetMode() != fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET && leaseHeld {
+		for _, line := range kubert.PurgeConnection(ctx, rec.ID) {
+			reply.Warnings = append(reply.Warnings, "left in namespace "+rec.Namespace+": "+line)
+		}
+	}
 	// The users are looked at again, and the record removed, under the state
 	// lock a create holds while it checks its connection and adds its
 	// record: a create cannot slip in between and leave an instance on a
@@ -457,6 +473,11 @@ func (s *service) RemoveKubeCluster(ctx context.Context, req *fleetgrpc.RemoveKu
 	flog.Info("kube: connection removed", "cluster", rec.ID, "mode", req.GetMode().String())
 	s.kube.sync()
 	s.kube.releaseImages(rec, leaseHeld)
+	// The fleets' objects there are out of reach now; a fleet teardown owed
+	// there with them.
+	if err := kubernetes.ForgetClusterFleets(rec.ID); err != nil {
+		flog.Warn("kube: forgetting a removed connection's fleets", "cluster", rec.ID, "err", err)
+	}
 	reply.Removed = true
 	return reply, nil
 }

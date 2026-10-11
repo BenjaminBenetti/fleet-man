@@ -64,17 +64,23 @@ func reviveSharedServices(fleetName, instanceName string, instance *fleet.Instan
 		}
 	}
 	if settings.ImageCacheServer {
-		configureImageMirror(fleetName, instanceName, instance)
+		configureImageMirror(services, fleetName, instanceName, instance)
 	}
 }
 
 // configureImageMirror points instance's own dockerd at its fleet's image
-// cache, with the same sync-then-background poll as create (an instance without
-// a dockerd never configures, which is fine). A package var so tests can see
-// the call without a container.
-var configureImageMirror = func(fleetName, instanceName string, instance *fleet.Instance) {
+// cache's endpoint on services, with the same sync-then-background poll as
+// create (an instance without a dockerd never configures, which is fine; nor
+// does one whose runtime points no instance at the mirror). A package var so
+// tests can see the call without a container.
+var configureImageMirror = func(services svcruntime.Runtime, fleetName, instanceName string, instance *fleet.Instance) {
+	endpoint, err := services.Endpoint(fleetName, fleet.ServiceImageCache)
+	if err != nil {
+		flog.Info("image cache: mirror not configured on start", "fleet", fleetName, "instance", instanceName, "reason", err)
+		return
+	}
 	imagecache.ConfigureInstanceDockerPolling(backendutil.NewForInstance(instance, false), instance.WorkspaceDir,
-		imagecache.MirrorURL(fleetName), imagecache.MirrorHostPort(fleetName),
+		endpoint.URL, endpoint.HostPort,
 		func(configured bool, err error) {
 			switch {
 			case err != nil:

@@ -19,7 +19,10 @@ func stubStartServices(t *testing.T, rt svcruntime.Runtime) *[]string {
 	origFor, origMirror := sharedServicesFor, configureImageMirror
 	sharedServicesFor = func(*fleet.Instance) svcruntime.Runtime { return rt }
 	var mirrored []string
-	configureImageMirror = func(fleetName, instanceName string, instance *fleet.Instance) {
+	configureImageMirror = func(services svcruntime.Runtime, fleetName, instanceName string, instance *fleet.Instance) {
+		if services != rt {
+			t.Errorf("the image mirror was configured through runtime %v, not the instance's", services)
+		}
 		mirrored = append(mirrored, fleetName+"/"+instanceName+"@"+instance.ContainerID)
 	}
 	t.Cleanup(func() { sharedServicesFor, configureImageMirror = origFor, origMirror })
@@ -132,5 +135,19 @@ func TestStartWarnsAndGoesOnWhenSharedServicesFail(t *testing.T) {
 	banner, err := os.ReadFile(state.WarnPath("alpha", "agent-1"))
 	if err != nil || string(banner) != "image cache network: no network" {
 		t.Fatalf("banner = %q (%v)", banner, err)
+	}
+}
+
+// TestImageMirrorNeedsTheRuntimesEndpoint: on a runtime that points no
+// instance at its image cache, a start leaves the instance's dockerd alone
+// (it never reaches the instance: no backend is even made).
+func TestImageMirrorNeedsTheRuntimesEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	rec := svcruntimetest.New("kubernetes:c1")
+	rec.Endpoints = nil
+	// A record no backend could be made for: reaching it would panic or fail.
+	configureImageMirror(rec, "alpha", "agent-1", &fleet.Instance{Name: "agent-1", Backend: "no-such-backend"})
+	if calls := rec.Calls(); len(calls) != 0 {
+		t.Fatalf("runtime calls %+v", calls)
 	}
 }

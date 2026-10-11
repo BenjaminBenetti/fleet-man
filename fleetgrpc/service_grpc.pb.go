@@ -36,6 +36,7 @@ const (
 	FleetService_DeleteBuildkitCache_FullMethodName     = "/fleetgrpc.FleetService/DeleteBuildkitCache"
 	FleetService_DeleteDebCache_FullMethodName          = "/fleetgrpc.FleetService/DeleteDebCache"
 	FleetService_DeleteImageCache_FullMethodName        = "/fleetgrpc.FleetService/DeleteImageCache"
+	FleetService_GetCacheUsage_FullMethodName           = "/fleetgrpc.FleetService/GetCacheUsage"
 	FleetService_SetInstanceMetadata_FullMethodName     = "/fleetgrpc.FleetService/SetInstanceMetadata"
 	FleetService_SetGroupLayout_FullMethodName          = "/fleetgrpc.FleetService/SetGroupLayout"
 	FleetService_DeleteGroupLayout_FullMethodName       = "/fleetgrpc.FleetService/DeleteGroupLayout"
@@ -119,10 +120,15 @@ type FleetServiceClient interface {
 	// longer deadline and show progress.
 	DeleteBuildkitCache(ctx context.Context, in *DeleteBuildkitCacheRequest, opts ...grpc.CallOption) (*DeleteBuildkitCacheReply, error)
 	// DeleteDebCache / DeleteImageCache wipe a fleet's shared deb / docker-image
-	// cache and restart the (empty) server. Synchronous host-docker actions —
-	// clients use the same longer deadline as DeleteBuildkitCache.
+	// cache and restart the (empty) server, wherever the fleet's instances reach
+	// one (the daemon host's docker, each cluster). Synchronous — clients use
+	// the same longer deadline as DeleteBuildkitCache.
 	DeleteDebCache(ctx context.Context, in *DeleteDebCacheRequest, opts ...grpc.CallOption) (*DeleteDebCacheReply, error)
 	DeleteImageCache(ctx context.Context, in *DeleteImageCacheRequest, opts ...grpc.CallOption) (*DeleteImageCacheReply, error)
+	// GetCacheUsage reports how full each of a fleet's cache volumes is where
+	// its caches run on volumes of a fixed size (its clusters), for the fleet
+	// options' Caching rows.
+	GetCacheUsage(ctx context.Context, in *GetCacheUsageRequest, opts ...grpc.CallOption) (*GetCacheUsageReply, error)
 	SetInstanceMetadata(ctx context.Context, in *SetInstanceMetadataRequest, opts ...grpc.CallOption) (*MutationReply, error)
 	SetGroupLayout(ctx context.Context, in *SetGroupLayoutRequest, opts ...grpc.CallOption) (*MutationReply, error)
 	DeleteGroupLayout(ctx context.Context, in *DeleteGroupLayoutRequest, opts ...grpc.CallOption) (*MutationReply, error)
@@ -469,6 +475,16 @@ func (c *fleetServiceClient) DeleteImageCache(ctx context.Context, in *DeleteIma
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteImageCacheReply)
 	err := c.cc.Invoke(ctx, FleetService_DeleteImageCache_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) GetCacheUsage(ctx context.Context, in *GetCacheUsageRequest, opts ...grpc.CallOption) (*GetCacheUsageReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCacheUsageReply)
+	err := c.cc.Invoke(ctx, FleetService_GetCacheUsage_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -976,10 +992,15 @@ type FleetServiceServer interface {
 	// longer deadline and show progress.
 	DeleteBuildkitCache(context.Context, *DeleteBuildkitCacheRequest) (*DeleteBuildkitCacheReply, error)
 	// DeleteDebCache / DeleteImageCache wipe a fleet's shared deb / docker-image
-	// cache and restart the (empty) server. Synchronous host-docker actions —
-	// clients use the same longer deadline as DeleteBuildkitCache.
+	// cache and restart the (empty) server, wherever the fleet's instances reach
+	// one (the daemon host's docker, each cluster). Synchronous — clients use
+	// the same longer deadline as DeleteBuildkitCache.
 	DeleteDebCache(context.Context, *DeleteDebCacheRequest) (*DeleteDebCacheReply, error)
 	DeleteImageCache(context.Context, *DeleteImageCacheRequest) (*DeleteImageCacheReply, error)
+	// GetCacheUsage reports how full each of a fleet's cache volumes is where
+	// its caches run on volumes of a fixed size (its clusters), for the fleet
+	// options' Caching rows.
+	GetCacheUsage(context.Context, *GetCacheUsageRequest) (*GetCacheUsageReply, error)
 	SetInstanceMetadata(context.Context, *SetInstanceMetadataRequest) (*MutationReply, error)
 	SetGroupLayout(context.Context, *SetGroupLayoutRequest) (*MutationReply, error)
 	DeleteGroupLayout(context.Context, *DeleteGroupLayoutRequest) (*MutationReply, error)
@@ -1149,6 +1170,9 @@ func (UnimplementedFleetServiceServer) DeleteDebCache(context.Context, *DeleteDe
 }
 func (UnimplementedFleetServiceServer) DeleteImageCache(context.Context, *DeleteImageCacheRequest) (*DeleteImageCacheReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteImageCache not implemented")
+}
+func (UnimplementedFleetServiceServer) GetCacheUsage(context.Context, *GetCacheUsageRequest) (*GetCacheUsageReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCacheUsage not implemented")
 }
 func (UnimplementedFleetServiceServer) SetInstanceMetadata(context.Context, *SetInstanceMetadataRequest) (*MutationReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetInstanceMetadata not implemented")
@@ -1544,6 +1568,24 @@ func _FleetService_DeleteImageCache_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FleetServiceServer).DeleteImageCache(ctx, req.(*DeleteImageCacheRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_GetCacheUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCacheUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).GetCacheUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_GetCacheUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).GetCacheUsage(ctx, req.(*GetCacheUsageRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2198,6 +2240,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteImageCache",
 			Handler:    _FleetService_DeleteImageCache_Handler,
+		},
+		{
+			MethodName: "GetCacheUsage",
+			Handler:    _FleetService_GetCacheUsage_Handler,
 		},
 		{
 			MethodName: "SetInstanceMetadata",
