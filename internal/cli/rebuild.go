@@ -17,7 +17,9 @@ func newRebuildCmd() *cobra.Command {
 		Short:   "Rebuild an instance's container in place (preserves the workspace)",
 		Long: "Tear down and reprovision an instance's container without recreating the instance — " +
 			"handy after editing devcontainer.json. The workspace (git checkout and uncommitted edits) " +
-			"is preserved. Only backends with a rebuild primitive are supported (devcontainer, codespaces).",
+			"is preserved. Supported on devcontainer, codespaces and kubernetes.\n\n" +
+			"On kubernetes it also retries a failed instance: an interrupted or failed create " +
+			"(what it left is deleted, then it is created again) or a rolled-back rebuild.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target, err := fleet.Resolve(args[0], "")
