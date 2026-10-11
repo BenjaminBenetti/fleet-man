@@ -22,6 +22,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/hostrelay"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
+	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
 )
 
 // cloneSourceObjects are a stopped source instance as fleet made it: its
@@ -89,9 +90,13 @@ func TestCloneRecordCarriesTheSources(t *testing.T) {
 	rec.Ports = []backend.PublishedPort{{HostIP: "127.0.0.1", HostPort: 3000, ContainerPort: 3000}}
 	rec.HostSockets = []hostrelay.Socket{{Target: "/run/gpg.sock", Source: "/home/u/.gnupg/S.gpg-agent.extra", Mode: 0o700}}
 	rec.HostGateway, rec.GatewaySkip = true, []uint16{3000}
+	rec.Share = &ShareRecord{Mode: "single-node", Claim: "fs-alpha-abcdefgh-share", Roots: []podshare.SpokeRoot{{Name: ".mnt", Reserved: []string{"data"}}}, UID: 1000, GID: 1000}
 	c := cloneRig(t, sts, rec)
 	c.srcRec, c.gen = rec, rec.Gen
 	got := c.cloneRecord(&podspec.Objects{StatefulSet: sts})
+	if got.Share == rec.Share || !reflect.DeepEqual(got.Share, rec.Share) || &got.Share.Roots[0].Reserved[0] == &rec.Share.Roots[0].Reserved[0] {
+		t.Errorf("the clone's share record is %+v, want a copy of the source's", got.Share)
+	}
 	v := reflect.ValueOf(got)
 	for i := 0; i < v.NumField(); i++ {
 		switch name := v.Type().Field(i).Name; name {

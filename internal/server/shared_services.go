@@ -508,9 +508,10 @@ func sharedServiceUpkeepEvery() time.Duration {
 // clusters are usable again.
 var credentialCheckInterval = 5 * time.Minute
 
-// runSharedServiceUpkeep runs maintainSharedServices every
-// sharedServiceUpkeepEvery, and renewSharedServiceCredentials at once and
-// then at least every credentialCheckInterval, until ctx ends.
+// runSharedServiceUpkeep runs maintainSharedServices (and the clusters'
+// fleet shares' upkeep, maintainShares) every sharedServiceUpkeepEvery, and
+// renewSharedServiceCredentials at once and then at least every
+// credentialCheckInterval, until ctx ends.
 func runSharedServiceUpkeep(ctx context.Context) {
 	every := sharedServiceUpkeepEvery()
 	t := time.NewTicker(every)
@@ -526,6 +527,7 @@ func runSharedServiceUpkeep(ctx context.Context) {
 			renewSharedServiceCredentials(ctx)
 		case <-t.C:
 			maintainSharedServices(ctx)
+			maintainShares(ctx)
 		}
 	}
 }

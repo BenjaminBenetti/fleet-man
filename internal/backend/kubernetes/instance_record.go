@@ -83,6 +83,10 @@ type InstanceRecord struct {
 	// ports it serves itself) while its connection allows it.
 	HostGateway bool     `json:"hostGateway,omitempty"`
 	GatewaySkip []uint16 `json:"gatewaySkip,omitempty"`
+	// Share is where the instance's fleet mounts live on the connection:
+	// the fleet's share, or the instance's own copy (share.go). nil without
+	// fleet mounts.
+	Share *ShareRecord `json:"share,omitempty"`
 }
 
 // ErrInstanceRecordNewer is a record a newer fleet wrote: read-only to this

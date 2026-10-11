@@ -113,11 +113,13 @@ func (r *run) imageDelivery(ctx context.Context) {
 	}
 }
 
-// deep runs the throwaway-pod probes: a pull through the gateway, and the
-// pods' network (network.go).
+// deep runs the throwaway-pod probes: a pull through the gateway, the pods'
+// network (network.go), and one RWO volume from two pods (share.go).
 func (r *run) deep(ctx context.Context) {
+	sharePods := r.startSharePods(ctx)
 	r.imagePull(ctx)
 	r.networkProbe(ctx)
+	sharePods()
 	r.res.DeepCheckedAt = r.t.now()
 }
 

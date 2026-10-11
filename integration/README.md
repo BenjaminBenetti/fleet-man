@@ -198,7 +198,11 @@ helpers of `backends/kubernetes.sh` (kubectl on the run's context and
 namespace, the objects of an instance key, its pod, a fleet's objects).
 `tests/811_k8s_metadata_block.sh` needs a network plugin that enforces
 NetworkPolicies (`FLEET_QA_MINIKUBE_FLAGS=--cni=calico`) and passes saying so
-on one that does not.
+on one that does not. `tests/818_k8s_share_single_node.sh` (a fleet's pods
+placed by its share) needs two schedulable nodes and a WaitForFirstConsumer
+default class, as a kind cluster with two workers has (`kind create cluster
+--config` in the QA container, then `FLEET_ITEST_CLUSTER=kind-<name>`); on one
+node it passes saying it did not run.
 
 ## Prerequisites
 

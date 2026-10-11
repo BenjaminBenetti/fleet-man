@@ -120,7 +120,7 @@ func Resolve(fleetName string, fleetSettings fleet.FleetSettings) (Resolved, err
 				return Resolved{}, logRefusal(fleetName, fmt.Errorf("preparing %s file: %w%s",
 					spec.name, err, symlinkFix(err, "replace it with a regular file")))
 			}
-			resolved.Layout = append(resolved.Layout, LayoutEntry{Path: sharedFilesSubdir + "/" + spec.filename, Mode: layoutFileMode})
+			resolved.Layout = append(resolved.Layout, LayoutEntry{Path: sharedFilesSubdir + "/" + spec.filename, Mode: layoutFileMode, Seed: spec.seedContent})
 			resolved.Symlinks = append(resolved.Symlinks, Symlink{
 				Source:      sharedFilesContainerPath + "/" + spec.filename,
 				Target:      spec.symlinkTarget,

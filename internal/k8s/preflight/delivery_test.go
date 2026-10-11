@@ -190,6 +190,9 @@ func TestDeepImagePull(t *testing.T) {
 	// once (network_test.go covers it).
 	defer func(d time.Duration) { networkProbeTimeout = d }(networkProbeTimeout)
 	networkProbeTimeout = 20 * time.Millisecond
+	// Nor the share probe's (share_test.go covers it).
+	defer func(d time.Duration) { sharePodsTimeout = d }(sharePodsTimeout)
+	sharePodsTimeout = 20 * time.Millisecond
 	setup := func(status func(int) corev1.PodStatus) (*cluster, *probePods, *fakeDelivery, Target) {
 		c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath", isDefault))
 		p := &probePods{status: status}

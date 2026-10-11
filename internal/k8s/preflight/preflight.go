@@ -38,13 +38,15 @@ const (
 	CheckAdmissionPrivileged   = "admission_privileged"
 	CheckBuildkit              = "buildkit"
 	CheckRootStorage           = "root_storage"
-	CheckSnapshots             = "snapshots"
-	CheckLimits                = "limits"
-	CheckQuota                 = "quota"
-	CheckMetrics               = "metrics"
-	CheckRuntimeClasses        = "runtime_classes"
-	CheckExposure              = "exposure"
-	CheckImageDelivery         = "image_delivery"
+	// CheckSharedStorage (share.go) is how fleets' shares are held; the
+	// deep test's CheckSharePods probes one RWO volume from two pods.
+	CheckSnapshots      = "snapshots"
+	CheckLimits         = "limits"
+	CheckQuota          = "quota"
+	CheckMetrics        = "metrics"
+	CheckRuntimeClasses = "runtime_classes"
+	CheckExposure       = "exposure"
+	CheckImageDelivery  = "image_delivery"
 	// CheckImagePull is the deep test's pull through the gateway.
 	CheckImagePull = "image_pull"
 	// CheckNetworkPolicy and CheckMetadata (network.go) are the deep test's
@@ -93,6 +95,10 @@ type Target struct {
 	// Deep also runs the deep test's throwaway-pod probes after the full
 	// run's checks.
 	Deep bool
+	// MultiPodRWO is what the last deep test found of two pods on one node
+	// mounting one RWO volume (share_pods), which a full run without one
+	// keeps: nil when none has told.
+	MultiPodRWO *bool
 	// Now replaces time.Now (tests).
 	Now func() time.Time
 }
@@ -129,6 +135,10 @@ type Result struct {
 	// did (zero without one).
 	CheckedAt     time.Time
 	DeepCheckedAt time.Time
+	// MultiPodRWO is what this run's deep test found of two pods on one
+	// node mounting one RWO volume (nil when it did not tell), for the next
+	// run's Target.
+	MultiPodRWO *bool
 }
 
 // Failed reports a failure state: anything but READY, LIMITED and
@@ -193,6 +203,9 @@ type run struct {
 	multiNode bool
 	csiLimits map[string]map[string]int32 // node -> CSI driver -> attach limit
 	rootClass *fleetgrpc.KubeStorageClass
+	// multiPodRWO is the two-pod probe's word: the last deep test's, then
+	// this one's.
+	multiPodRWO *bool
 }
 
 // Full runs every check, passing each to report as it starts (RUNNING) and
@@ -205,7 +218,7 @@ func Full(ctx context.Context, t Target, report func(*fleetgrpc.KubeCheck)) Resu
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	r := &run{t: &t, report: report, caps: &fleetgrpc.KubeCapabilities{}}
+	r := &run{t: &t, report: report, caps: &fleetgrpc.KubeCapabilities{}, multiPodRWO: t.MultiPodRWO}
 	r.full(ctx)
 	return r.finish(true)
 }
@@ -236,6 +249,7 @@ func (r *run) full(ctx context.Context) {
 	r.nodes(ctx)
 	r.admission(ctx)
 	r.rootStorage(ctx) // reports the snapshots check too
+	r.sharedStorage(ctx)
 	r.limits(ctx)
 	r.quota(ctx)
 	r.metrics(ctx)

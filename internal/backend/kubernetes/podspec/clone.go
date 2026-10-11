@@ -318,7 +318,16 @@ func fromPlacement(spec *corev1.PodSpec, from *corev1.PodSpec) {
 		}
 	}
 	spec.Tolerations = append([]corev1.Toleration(nil), from.Tolerations...)
+	// Not the pod affinity to the share's running holders: a Job does not
+	// hold the share, and with every instance stopped it would match no
+	// pod, itself included, and never schedule.
 	spec.Affinity = from.Affinity.DeepCopy()
+	if a := spec.Affinity; a != nil {
+		a.PodAffinity = nil
+		if a.NodeAffinity == nil && a.PodAntiAffinity == nil {
+			spec.Affinity = nil
+		}
+	}
 	spec.RuntimeClassName = from.RuntimeClassName
 	spec.ImagePullSecrets = append([]corev1.LocalObjectReference(nil), from.ImagePullSecrets...)
 	spec.DNSConfig = from.DNSConfig.DeepCopy()

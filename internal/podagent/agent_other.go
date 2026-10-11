@@ -20,5 +20,8 @@ func ExecStdio(context.Context, io.Reader, io.Writer, Options, string) error { r
 // RunShepherd fails off linux.
 func RunShepherd() error { return errNotLinux }
 
+// RunSpoke fails off linux.
+func RunSpoke() error { return errNotLinux }
+
 // TakeStdio fails off linux.
 func TakeStdio() (io.ReadWriteCloser, error) { return nil, errNotLinux }

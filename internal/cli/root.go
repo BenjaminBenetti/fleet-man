@@ -72,6 +72,7 @@ func NewRootCmd() *cobra.Command {
 		newExecAsCmd(),
 		newPodInitCmd(),
 		newPodJobCmd(),
+		newPodLayoutCmd(),
 		newPodAgentCmd(),
 		newKubeExecCmd(),
 		newSSHProxyCmd(),

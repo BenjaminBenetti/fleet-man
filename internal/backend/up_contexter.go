@@ -9,6 +9,11 @@ type UpRequest struct {
 	WorkspaceDir string
 	// Mounts are the caller-supplied bind mounts, exactly as Up takes them.
 	Mounts []Mount
+	// Layout is the fleet-shared mounts' tree as the resolver made it on the
+	// daemon host (resolver.Resolved.Layout). A backend that binds the host
+	// paths ignores it; one that keeps the fleet's shared state elsewhere (a
+	// cluster's share volume) makes the same tree there.
+	Layout []LayoutEntry
 }
 
 // UpContexter is an optional capability for backends whose provisioning is a

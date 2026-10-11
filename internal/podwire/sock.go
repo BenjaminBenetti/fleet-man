@@ -55,11 +55,13 @@ const RefusedGate = "gate"
 // daemon host (the recorded socket, the port); its log says why.
 const RefusedUnreachable = "unreachable"
 
-// SockRefusedError is a relay stream fleetd refused.
+// SockRefusedError is a relay stream fleetd refused (or, Agent set, one of
+// fleetd's the agent refused: OpenRelay).
 type SockRefusedError struct {
 	Tag    Tag
 	Reason string
 	Msg    string
+	Agent  bool
 }
 
 func (e *SockRefusedError) Error() string {
@@ -67,7 +69,11 @@ func (e *SockRefusedError) Error() string {
 	if msg == "" {
 		msg = e.Reason
 	}
-	return fmt.Sprintf("fleetd refused the %s stream: %s", e.Tag, msg)
+	who := "fleetd"
+	if e.Agent {
+		who = "the pod agent"
+	}
+	return fmt.Sprintf("%s refused the %s stream: %s", who, e.Tag, msg)
 }
 
 // AcceptSock accepts a relay stream and returns the in-pod connection:

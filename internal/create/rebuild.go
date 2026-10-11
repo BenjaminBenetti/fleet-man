@@ -99,7 +99,7 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 	// RebuildContext hands the job's ctx (cancellation, JobLog) to a backend
 	// that takes one, and falls back to the plain Rebuild for the rest.
 	backend.ReportStep(ctx, fleet.StepBackendUp, "rebuild "+string(inst.Backend))
-	result, err := backend.RebuildContext(ctx, instanceBackend, inst.ContainerID, backend.UpRequest{WorkspaceDir: inst.WorkspaceDir, Mounts: resolvedMounts.Mounts})
+	result, err := backend.RebuildContext(ctx, instanceBackend, inst.ContainerID, backend.UpRequest{WorkspaceDir: inst.WorkspaceDir, Mounts: resolvedMounts.Mounts, Layout: resolvedMounts.Layout})
 	if err != nil {
 		if errors.Is(err, backend.ErrCheckpointed) {
 			// The daemon is shutting down, and the backend left the rebuild

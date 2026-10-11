@@ -145,7 +145,7 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 	// CloneContext hands the job's ctx (cancellation, JobLog, Hooks) to a
 	// backend whose clone is a cancellable multi-step sequence, and falls back
 	// to the plain Clone for the rest.
-	result, err := backend.CloneContext(ctx, instanceBackend, src.ContainerID, backend.UpRequest{WorkspaceDir: destWorkspaceDir, Mounts: resolvedMounts.Mounts})
+	result, err := backend.CloneContext(ctx, instanceBackend, src.ContainerID, backend.UpRequest{WorkspaceDir: destWorkspaceDir, Mounts: resolvedMounts.Mounts, Layout: resolvedMounts.Layout})
 	if err != nil {
 		if errors.Is(err, backend.ErrCheckpointed) {
 			// The daemon is shutting down, and the backend left the clone at

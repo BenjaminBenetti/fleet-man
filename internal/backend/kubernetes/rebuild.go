@@ -201,6 +201,10 @@ func (rb *rebuilding) run(ctx context.Context) (*backend.UpResult, error) {
 	if err := rb.connect(ctx); err != nil {
 		return nil, rb.unchanged(err)
 	}
+	if err := rb.prepareShare(ctx); err != nil {
+		return nil, rb.unchanged(err)
+	}
+	defer rb.share.done()
 	if err := rb.load(ctx); err != nil {
 		return nil, rb.unchanged(err)
 	}

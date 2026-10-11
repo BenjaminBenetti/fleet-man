@@ -167,6 +167,9 @@ func (r *renderer) job(in JobInput, role names.Role) (*JobObjects, error) {
 		resources = *in.Resources.DeepCopy()
 	}
 	spec := r.podSpec(identity)
+	// A Job never waits for the share's holders: it does not hold the
+	// share (the first seed, which binds it, runs before any).
+	spec.Affinity = r.affinity(false)
 	if in.From != nil {
 		fromPlacement(&spec, in.From)
 	}
