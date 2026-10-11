@@ -3,6 +3,7 @@
 package sharesync
 
 import (
+	"context"
 	"os"
 	"testing"
 )
@@ -116,4 +117,39 @@ func TestOneWayRootTakesOnlyItsWritersChanges(t *testing.T) {
 		}
 	}
 	r.assertConverged()
+}
+
+// TestReadOnlyRootIsNeverWritten: a read-only root (a read-only bind's host
+// folder) opens without the self-test's writes, reports its changes, and
+// refuses every op.
+func TestReadOnlyRootIsNeverWritten(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/config", []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	if os.Geteuid() != 0 {
+		if _, err := OpenTree([]TreeRoot{{Name: "user", Dir: dir}}, TreeOptions{StateDir: t.TempDir(), Table: testTable()}); err == nil {
+			t.Fatal("a writable root opened on a folder the self-test cannot write")
+		}
+	}
+	tree, err := OpenTree([]TreeRoot{{Name: "user", Dir: dir, ReadOnly: true}}, TreeOptions{StateDir: t.TempDir(), Table: testTable(), Settle: -1})
+	if err != nil {
+		t.Fatalf("OpenTree(read-only): %v", err)
+	}
+	defer tree.Close()
+	rep, _, err := tree.Scan(context.Background(), "user", nil)
+	if err != nil || len(rep.Changes) != 1 || rep.Changes[0].Path != "config" {
+		t.Fatalf("Scan = %+v, %v", rep, err)
+	}
+	res, err := tree.Apply(context.Background(), Batch{Root: "user", Ops: []Op{{Path: "planted", Rev: 1, Entry: Entry{Kind: Dir, Mode: 0o755}}}})
+	if err != nil || len(res) != 1 || res[0].Status != Refused {
+		t.Fatalf("Apply = %+v, %v; want it refused", res, err)
+	}
+	if _, err := os.Lstat(dir + "/planted"); !os.IsNotExist(err) {
+		t.Error("a read-only root was written")
+	}
 }

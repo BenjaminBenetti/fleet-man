@@ -38,6 +38,10 @@ type TreeRoot struct {
 	// leaves everything else there alone, as if not there. A bound file's
 	// root is the folder it is in, holding only it (internal/mounts/hostbind).
 	Only []string
+	// ReadOnly: the side never writes Dir (a read-only host bind's folder on
+	// the daemon host, which the hub takes changes from alone): every op is
+	// refused, and the folder need not take the self-test's writes.
+	ReadOnly bool
 }
 
 // TreeOptions configure a Tree.
@@ -195,8 +199,10 @@ func (t *Tree) openRoot(spec TreeRoot) (*treeRoot, error) {
 	if _, _, ok := t.table.Root(spec.Name); !ok {
 		return nil, fmt.Errorf("sharesync: no policy root covers %s", spec.Name)
 	}
-	if err := safefs.SelfTest(spec.Dir); err != nil {
-		return nil, fmt.Errorf("sharesync: root %s (%s): %w", spec.Name, spec.Dir, err)
+	if !spec.ReadOnly {
+		if err := safefs.SelfTest(spec.Dir); err != nil {
+			return nil, fmt.Errorf("sharesync: root %s (%s): %w", spec.Name, spec.Dir, err)
+		}
 	}
 	sroot, err := safefs.Open(spec.Dir, safefs.Options{Reserved: spec.Reserved})
 	if err != nil {

@@ -71,6 +71,9 @@ func (tr *treeRoot) apply(ctx context.Context, op Op, content ContentFunc) (Resu
 	if !tr.synced(op.Path) {
 		return Refused, "not synced on this side"
 	}
+	if tr.ReadOnly {
+		return Refused, "read-only on this side"
+	}
 	if err := op.Entry.check(); err != nil {
 		return Refused, err.Error()
 	}
