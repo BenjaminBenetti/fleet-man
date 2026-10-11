@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Description: a devcontainer.json that bind-mounts the host's SSH agent (${localEnv:SSH_AUTH_SOCK}) and gpg-agent sockets gets working agents at those paths (ssh and gpg signatures made in the instance verify on the host), and its remoteEnv SSH_AUTH_SOCK wins over fleet's relay.
+# itest: k8s
+# Description: a devcontainer.json that bind-mounts the host's SSH agent (${localEnv:SSH_AUTH_SOCK}) and gpg-agent sockets gets working agents at those paths (ssh and gpg signatures made in the instance verify on the host), and its remoteEnv SSH_AUTH_SOCK wins over fleet's relay. On a cluster the agent bind is a link to the pod's agent relay, and the gpg socket one the pod agent binds, owned by the remote user and relayed to the host socket recorded at create; one fleetd cannot reach reaches fleet.log at error with its fleet and instance.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -84,6 +85,14 @@ verified=$(printf '%s\n' "${signed}" | gpg --batch --decrypt 2>&1) \
 assert_contains "${verified}" "fleet-itest-gpg-payload" "the signed payload"
 assert_contains "${verified}" 'Good signature from "Fleet Itest <itest@fleet.local>"' "gpg --verify on the host"
 
+if itest_backend_is kubernetes; then
+  info "the pod's agent bind is a link to its agent relay; its gpg socket is the remote user's"
+  assert_equals "/fleet-mounts/control/ssh-agent.sock" "$("${FLEET_BIN}" exec "${inst}" -- readlink /run/itest-host-ssh-agent.sock)" \
+    "the ssh-agent bind's link"
+  assert_equals "$("${FLEET_BIN}" exec "${inst}" -- id -un)" "$("${FLEET_BIN}" exec "${inst}" -- stat -c %U /run/itest-host-gpg-agent.sock)" \
+    "the gpg socket's owner"
+fi
+
 info "the config's remoteEnv SSH_AUTH_SOCK is what instance processes get"
 # fleet passes its own relay socket on every exec, but a devcontainer.json
 # remoteEnv entry takes precedence over it (devcontainer CLI semantics), so a
@@ -92,5 +101,24 @@ assert_equals "/run/itest-host-ssh-agent.sock" "$("${FLEET_BIN}" exec "${inst}" 
   "SSH_AUTH_SOCK inside the instance"
 out=$("${FLEET_BIN}" exec "${inst}" -- ssh-add -l)
 assert_contains "${out}" "${fingerprint}" "the host key through the instance's own SSH_AUTH_SOCK"
+
+if itest_backend_is kubernetes; then
+  info "a host socket fleetd cannot reach fails the pod's connection and reaches fleet.log at error, tagged with the instance"
+  GNUPGHOME="${gnupg_home}" gpgconf --kill gpg-agent >/dev/null 2>&1 || true
+  if "${FLEET_BIN}" exec "${inst}" -- curl -sS --max-time 10 --unix-socket /run/itest-host-gpg-agent.sock http://gpg-agent/ >/dev/null 2>&1; then
+    fail "a connection to the bound gpg socket was served with the host's gpg-agent gone"
+  fi
+  log="${HOME}/.fleet/fleet.log"
+  line=""
+  deadline=$(( $(date +%s) + $(_scale_timeout 15) ))
+  until [ -n "${line}" ]; do
+    [ "$(date +%s)" -lt "${deadline}" ] || fail "no host-socket relay error for alpha in fleet.log"
+    line=$(grep ' level=ERROR' "${log}" 2>/dev/null | grep 'could not reach a host socket' | grep 'instance=alpha' | tail -n 1 || true)
+    [ -n "${line}" ] || sleep 0.5
+  done
+  printf 'fleet.log: %s\n' "${line}"
+  assert_contains "${line}" "fleet=${FIXTURE_REPO_NAME}" "the error is not tagged with its fleet"
+  assert_contains "${line}" "target=/run/itest-host-gpg-agent.sock" "the error does not name the bind"
+fi
 
 pass "host agent socket binds"
