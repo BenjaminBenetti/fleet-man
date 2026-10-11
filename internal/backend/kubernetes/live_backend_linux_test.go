@@ -328,8 +328,9 @@ func newLiveBackend(t *testing.T, kctx string) *liveBackend {
 		Logger:  slog.New(slog.NewTextHandler(testLog{t}, nil)),
 	})
 	t.Cleanup(lb.pool.Close)
+	images := &kubeimage.Manager{IndexPath: state.KubeImagesPath}
 	SetEnvironment(Environment{
-		Images: &kubeimage.Manager{IndexPath: state.KubeImagesPath},
+		Images: images,
 		Facts: func(_ context.Context, id string) (Facts, error) {
 			lb.mu.Lock()
 			defer lb.mu.Unlock()
@@ -342,7 +343,50 @@ func newLiveBackend(t *testing.T, kctx string) *liveBackend {
 		Tools: devcli.Tools{Exe: exe},
 	})
 	t.Cleanup(func() { SetEnvironment(Environment{}) })
+	// The run's daemon id is its own, so no later GC would ever find the
+	// images it delivered: they go when it ends.
+	t.Cleanup(func() { lb.collectImages(t, images) })
 	return lb
+}
+
+// collectImages collects every image the run delivered to its connections,
+// from the nodes and the daemon host's docker, with the pass fleetd makes
+// over a connection it removes (no holder left, no retention), then checks
+// that no node load tag of the run's daemon is left on the host.
+func (lb *liveBackend) collectImages(t *testing.T, images *kubeimage.Manager) {
+	lb.mu.Lock()
+	recs := append([]fleet.KubeCluster(nil), lb.recs...)
+	lb.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	for i := range recs {
+		rec := recs[i]
+		if _, err := os.Stat(state.KubeImagesPath(rec.ID)); err != nil {
+			continue // nothing was delivered there
+		}
+		res, err := images.GC(ctx, kubeimage.Target{Cluster: &rec, DaemonID: lb.daemonID}, kubeimage.GCOptions{All: true, Live: func(string) bool { return false }})
+		if err != nil {
+			t.Errorf("collect the images delivered to %s: %v", rec.ID, err)
+			continue
+		}
+		for _, e := range res.Kept {
+			t.Errorf("image %s on %s was not collected: %s", e.Ref, rec.ID, e.GCError)
+		}
+	}
+	if left := hostImageTags(t, kubeimage.NodeLoadRepository(lb.daemonID)); len(left) > 0 {
+		t.Errorf("the run left images on the host's docker: %v", left)
+	}
+}
+
+// hostImageTags lists the host docker's tags in repository repo.
+func hostImageTags(t *testing.T, repo string) []string {
+	t.Helper()
+	out, err := exec.Command("docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}", "--filter", "reference="+repo).Output()
+	if err != nil {
+		t.Errorf("list the host's %s images: %v", repo, err)
+		return nil
+	}
+	return strings.Fields(string(out))
 }
 
 // connect adds a connection to a fresh namespace with labels, whose facts
