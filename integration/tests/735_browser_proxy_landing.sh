@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Description: TUI 'b' starts the in-instance browser proxy and opens the browser on the Fleet Launch landing page; through that proxy curl gets plain HTTP, three Set-Cookie headers intact, a CONNECT tunnel and a WebSocket echo, and the landing page's health checks and app tab work.
+# itest: k8s
+# Description: TUI 'b' starts fleet's own in-instance browser proxy (no package install) and opens the browser on the Fleet Launch landing page; through that proxy curl gets plain HTTP, three Set-Cookie headers intact, a CONNECT tunnel and a WebSocket echo, and the landing page's health checks and app tab work. On a cluster the proxy and the landing page listen on the pod's loopback only.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -40,8 +41,9 @@ info "select alpha and press 'b'"
 tui_send j
 sleep 0.3
 tui_send b
-# The first open installs the proxy inside the instance (a package install).
-# The stand-in's record is the evidence; the TUI's status line is transient.
+# The first open starts fleet's own proxy in the instance (the staged fleet
+# binary; nothing is installed). The stand-in's record is the evidence; the
+# TUI's status line is transient.
 deadline=$(( $(date +%s) + $(_scale_timeout 300) ))
 until [ -s "${launches}" ]; do
   if tui_capture | grep -q "Browser proxy error"; then fail "'b' failed: $(tui_capture)"; fi
@@ -62,6 +64,26 @@ assert_equals "http://localhost:16767" "${launch##* }" "the browser should open 
 # curl_proxy <args...> — curl through the browser proxy, as the browser would.
 curl_proxy() { curl -sS --max-time 30 -x "${proxy}" "$@"; }
 
+info "the proxy is fleet's own, and nothing was installed for it"
+proxy_cmd=$("${FLEET_BIN}" exec "${inst}" -- sh -c 'tr "\0" " " < "/proc/$(cat /tmp/fleet-browser-proxy.pid)/cmdline"' 2>&1) || fail "no browser proxy pid: ${proxy_cmd}"
+assert_contains "${proxy_cmd}" "browser-proxy --port 58888" "the proxy should be the staged fleet binary"
+privoxy=$("${FLEET_BIN}" exec "${inst}" -- sh -c 'command -v privoxy || true')
+assert_equals "" "${privoxy}" "no privoxy should be installed"
+
+# listeners <hex-port> — the local addresses (hex, as /proc/net/tcp{,6} show
+# them) the instance listens on at a port.
+listeners() {
+  "${FLEET_BIN}" exec "${inst}" -- sh -c "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '\$4 == \"0A\" { split(\$2, a, \":\"); if (a[2] == \"$1\") print a[1] }' | sort -u | tr '\n' ' '"
+}
+if itest_backend_is kubernetes; then
+  # fleetd reaches the pod's own loopback: nothing listens on the pod's
+  # network for the proxy or the landing page.
+  assert_equals "0100007F " "$(listeners E608)" "the proxy should listen on the pod's loopback only"
+else
+  # The daemon dials the container's address: every interface.
+  assert_contains "$(listeners E608)" "00000000" "the proxy should listen on every interface"
+fi
+
 info "plain HTTP to the instance's localhost"
 assert_equals "fleet-itest-web 17380" "$(curl_proxy -f http://localhost:17380/)" "GET through the proxy"
 
@@ -81,6 +103,9 @@ info "${out}"
 
 info "the landing page lists the fixture's sites and app"
 page=$(curl_proxy -f http://localhost:16767/)
+if itest_backend_is kubernetes; then
+  assert_equals "0100007F " "$(listeners 417F)" "the landing page should listen on the pod's loopback only"
+fi
 assert_contains "${page}" "Itest Web" "landing page site"
 assert_contains "${page}" "Itest Down" "landing page site"
 assert_contains "${page}" "Itest App" "landing page app"
