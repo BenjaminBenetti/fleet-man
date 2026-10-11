@@ -101,7 +101,9 @@ state so the next test starts clean.
 naming the kubeconfig context (default: the current one; run.sh checks it
 answers before the first test). On kubernetes each test's `setup_test`
 connects that context to the fresh `~/.fleet` as the connection `itest`, in
-`FLEET_ITEST_NAMESPACE` (default `fleet-itest`, created when missing), makes
+`FLEET_ITEST_NAMESPACE` (default `fleet-itest`, created when missing; with
+the settings `FLEET_ITEST_CLUSTER_FIELDS` gives, as `fleet cluster add` takes
+them, e.g. `storage_class=csi-hostpath-sc`), makes
 it the remembered deploy target (so `fleet up`, MCP fleet_up and the TUI's
 New instance dialog create on it), and waits until fleetd judges it usable.
 fleetd serves its pods the pod build of the fleet under test, which

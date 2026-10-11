@@ -93,8 +93,12 @@ _be_setup() {
       || _be_kubectl get namespace "${FLEET_ITEST_NAMESPACE}" >/dev/null \
       || fail "could not create namespace ${FLEET_ITEST_NAMESPACE} on ${FLEET_ITEST_CLUSTER}"
   fi
-  local out
-  out=$("${FLEET_BIN}" cluster add "${FLEET_ITEST_CLUSTER}" --name itest -n "${FLEET_ITEST_NAMESPACE}" 2>&1) \
+  local out fields=()
+  # FLEET_ITEST_CLUSTER_FIELDS: connection settings for the run, as `fleet
+  # cluster add` takes them (storage_class=csi-hostpath-sc clones by
+  # snapshot).
+  read -r -a fields <<<"${FLEET_ITEST_CLUSTER_FIELDS:-}"
+  out=$("${FLEET_BIN}" cluster add "${FLEET_ITEST_CLUSTER}" --name itest -n "${FLEET_ITEST_NAMESPACE}" ${fields[@]+"${fields[@]}"} 2>&1) \
     || fail "fleet cluster add ${FLEET_ITEST_CLUSTER}: ${out}"
   local id
   id=$(_be_cluster_id)
@@ -438,6 +442,9 @@ itest_k8s_key_objects() {
   id=$(_be_cluster_id)
   [ -n "${id}" ] && [ -n "$1" ] || return 0
   itest_k8s_kubectl get statefulsets,jobs,pods,persistentvolumeclaims,secrets,configmaps,services,poddisruptionbudgets,networkpolicies \
+    -l "app.kubernetes.io/managed-by=fleet,fleet.dev/cluster=${id},fleet.dev/key=$1" -o name 2>/dev/null || true
+  # A clone's snapshots, on a cluster with the API (a CRD).
+  itest_k8s_kubectl get volumesnapshots.snapshot.storage.k8s.io \
     -l "app.kubernetes.io/managed-by=fleet,fleet.dev/cluster=${id},fleet.dev/key=$1" -o name 2>/dev/null || true
 }
 
