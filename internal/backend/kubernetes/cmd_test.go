@@ -199,3 +199,63 @@ func indexOf(argv []string, want string) int {
 }
 
 func filepathBase(p string) string { return filepath.Base(p) }
+
+// A create applies the connection's settings as they are now: the pool keeps
+// a connection's client (and its copy of the record) across a change of the
+// settings the client does not read, so the registry's record is the one
+// read.
+func TestCurrentRecordFollowsTheRegistry(t *testing.T) {
+	newHandleRig(t)
+	kubeconfig := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(kubeconfig, []byte(`apiVersion: v1
+kind: Config
+clusters:
+- name: c
+  cluster: {server: "https://127.0.0.1:1"}
+contexts:
+- name: ctx
+  context: {cluster: c, user: u}
+users:
+- name: u
+  user: {token: tok}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := fleet.KubeCluster{ID: handleCluster, Context: "ctx", KubeconfigPaths: []string{kubeconfig}, Namespace: handleNS}
+	set := func(mode fleet.KubeImageMode) {
+		t.Helper()
+		r := rec
+		r.Image.Mode = mode
+		if err := state.UpdateKubeClusters(func(k *state.KubeClusters) error {
+			k.Clusters = []fleet.KubeCluster{r}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set("")
+	p := NewPool(PoolOptions{Owner: func() (string, error) { return handleOwner, nil }})
+	t.Cleanup(p.Close)
+	p.Configure([]fleet.KubeCluster{rec})
+	cl, err := p.Cluster(handleCluster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set(fleet.KubeImageGateway)
+	gw := rec
+	gw.Image.Mode = fleet.KubeImageGateway
+	p.Configure([]fleet.KubeCluster{gw}) // the same connection: the client is kept
+	if again, _ := p.Cluster(handleCluster); again != cl || again.Record.Image.Mode != "" {
+		t.Fatalf("the pool reloaded the connection for a settings change (mode %q)", again.Record.Image.Mode)
+	}
+	if got := currentRecord(cl); got.Image.Mode != fleet.KubeImageGateway {
+		t.Fatalf("currentRecord image mode %q, want the registry's %q", got.Image.Mode, fleet.KubeImageGateway)
+	}
+	// Without a readable registry, the pool's copy.
+	if err := os.Remove(state.KubeClustersPath()); err != nil {
+		t.Fatal(err)
+	}
+	if got := currentRecord(cl); got.ID != handleCluster {
+		t.Fatalf("currentRecord without the registry = %+v", got)
+	}
+}
