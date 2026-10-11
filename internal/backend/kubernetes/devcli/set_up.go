@@ -39,6 +39,10 @@ type SetUpRequest struct {
 	DataFolder string
 	// SkipPostCreate runs no hooks (--skip-post-create).
 	SkipPostCreate bool
+	// RemoteEnv is fleet's own remote environment for the hooks, NAME=value
+	// (--remote-env, as `devcontainer up` gets it on docker: SSH_AUTH_SOCK).
+	// The configuration's remoteEnv wins over it.
+	RemoteEnv []string
 }
 
 // SetUpResult is a set-up's outcome.
@@ -115,6 +119,9 @@ func SetUp(ctx context.Context, req SetUpRequest) (*SetUpResult, error) {
 		"--container-data-folder", folder, "--include-merged-configuration"}
 	if req.SkipPostCreate {
 		args = append(args, "--skip-post-create")
+	}
+	for _, kv := range req.RemoteEnv {
+		args = append(args, "--remote-env", kv)
 	}
 	r := req.run(ctx, args, nil, backend.JobLogFrom(ctx))
 	res := &SetUpResult{CLIVersion: cliVersion(r.log)}

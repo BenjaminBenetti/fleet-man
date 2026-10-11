@@ -59,6 +59,15 @@ type AgentSession struct {
 	bulkFlight *bulkFlight
 	bulkUsed   time.Time
 	tmux       string
+
+	// target is the pod as the bootstrap that made the session named it
+	// (desired.go): whose control directory the session keeps, and whose
+	// in-pod connections it relays.
+	target      PodTarget
+	desiredKick chan struct{}
+	desiredMu   sync.Mutex
+	sentMark    desiredMark
+	sentSockets podwire.Sockets
 }
 
 type bulkFlight struct {
@@ -161,7 +170,7 @@ func (s *AgentSession) openBulk(f *bulkFlight) {
 	if err != nil {
 		c = s.cluster
 	}
-	client, stream, err := s.pool.dialAgent(ctx, c, s.slot, s.pod, podwire.RoleBulk, s.pacer)
+	client, stream, err := s.pool.dialAgent(ctx, c, s.slot, s.pod, podwire.RoleBulk, s.pacer, nil)
 	s.mu.Lock()
 	s.bulkFlight = nil
 	if err == nil && s.closed {
@@ -305,8 +314,9 @@ func (s *AgentSession) Shutdown(ctx context.Context) error {
 
 // dialAgent starts `pod-agent serve` with role in the verified pod and runs
 // the handshake (bounded by ctx), refusing an agent that reports another pod
-// than pod. pacer, when set, paces the session's transport (bulk).
-func (p *Pool) dialAgent(ctx context.Context, c *Cluster, slot *podSlot, pod PodRef, role podwire.Role, pacer *podwire.Pacer) (*podwire.Client, *kubeexec.Stream, error) {
+// than pod. pacer, when set, paces the session's transport (bulk); handlers
+// serve the streams the agent opens (the main session's relays).
+func (p *Pool) dialAgent(ctx context.Context, c *Cluster, slot *podSlot, pod PodRef, role podwire.Role, pacer *podwire.Pacer, handlers map[podwire.Tag]podwire.Handler) (*podwire.Client, *kubeexec.Stream, error) {
 	argv := []string{p.opts.Layout.Binary(), "pod-agent", "serve", "--proto", strconv.Itoa(podwire.ProtoMax)}
 	if role == podwire.RoleBulk {
 		argv = append(argv, "--role", string(podwire.RoleBulk))
@@ -323,6 +333,7 @@ func (p *Pool) dialAgent(ctx context.Context, c *Cluster, slot *podSlot, pod Pod
 		Role:       role,
 		Version:    p.opts.Version,
 		LogLimiter: slot.logs,
+		Handlers:   handlers,
 		Check: func(h podwire.Hello) error {
 			if types.UID(h.PodUID) != pod.UID {
 				return fmt.Errorf("the agent reports pod %q, not the verified pod %s", h.PodUID, pod.UID)

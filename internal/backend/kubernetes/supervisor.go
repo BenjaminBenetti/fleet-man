@@ -25,7 +25,7 @@ import (
 //   - a session that ends reconnects at once (the bootstrap's own backoff
 //     paces a pod that keeps failing, or whose sessions keep dropping as
 //     soon as they connect), at interactive priority when audio was flowing
-//     on the pod when it dropped;
+//     on the pod, or an in-pod MCP stream was live, when it dropped;
 //   - every resumable command started on a session (AgentSession.Exec) is
 //     re-attached to the pod's next session, or failed with
 //     podwire.ErrHeldStreamGone once the pod is replaced or after the hold
@@ -170,7 +170,7 @@ func (p *Pool) kick(k trackKey) {
 
 // supervise is one supervisor bootstrap.
 func (p *Pool) supervise(k trackKey, t PodTarget) {
-	if p.droppedFlowing(t) {
+	if p.droppedInteractive(t) {
 		t.Priority = max(t.Priority, PriorityInteractive)
 	}
 	_, err := p.EnsureAgent(p.ctx, t)
@@ -307,12 +307,13 @@ func (p *Pool) noteTampered(k trackKey, err *TamperedError) {
 	p.instMu.Unlock()
 }
 
-// droppedFlowing reports whether audio was flowing on the pod when its last
-// session dropped: its reconnect is interactive.
-func (p *Pool) droppedFlowing(t PodTarget) bool {
+// droppedInteractive reports whether audio was flowing on the pod, or an
+// in-pod MCP stream was live, when its last session dropped: its reconnect
+// is interactive.
+func (p *Pool) droppedInteractive(t PodTarget) bool {
 	for _, s := range p.slotsOf(trackKey{t.Cluster, t.StatefulSet}) {
 		s.mu.Lock()
-		f := s.flowingAtDrop
+		f := s.interactiveAtDrop
 		s.mu.Unlock()
 		if f {
 			return true

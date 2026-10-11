@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/devcli"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/execas"
@@ -135,8 +136,20 @@ func (u setUp) run(ctx context.Context) error {
 		Container:       c,
 		WorkspaceFolder: u.workspaceFolder,
 		Execer:          sessionExecer{u.session},
+		RemoteEnv:       hookRemoteEnv(u.session.Sockets()),
 	})
 	return err
+}
+
+// hookRemoteEnv is fleet's remote environment for the lifecycle hooks: the
+// in-pod ssh-agent socket while the agent has it bound (EnsureAgent applied
+// that before set-up), as docker's `devcontainer up --remote-env` gets the
+// relay's.
+func hookRemoteEnv(s podwire.Sockets) []string {
+	if !s.SSHAgent {
+		return nil
+	}
+	return []string{agentsock.EnvAuthSock + "=" + agentsock.ContainerSocketPath}
 }
 
 // inspectedContainer reads the captured container (inspect.json) from

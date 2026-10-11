@@ -434,7 +434,8 @@ func writeIndex(t *testing.T, path string, idx kubeimage.Index) {
 }
 
 // Without an agent session the polls report nothing (they never start one)
-// and control files wait; a control file is named by its base name only.
+// and control files wait for the next session; a control file is named by a
+// plain base name only.
 func TestPollsWithoutASession(t *testing.T) {
 	r := newHandleRig(t)
 	inst := r.inst()
@@ -449,16 +450,28 @@ func TestPollsWithoutASession(t *testing.T) {
 	if _, ok := b.AgentToolProbe(inst.ContainerID); ok {
 		t.Error("a tool probe without a session")
 	}
-	if err := b.WriteControlFile("status.json", []byte("{}"), 0o644); !errors.Is(err, errNoSession) {
+	if err := b.WriteControlFile("status.json", []byte("{}"), 0o644); err != nil {
 		t.Errorf("a control file without a session: %v", err)
 	}
-	for _, name := range []string{"", ".", "..", "a/b", "../x", "nul\x00"} {
-		if err := b.WriteControlFile(name, nil, 0o644); err == nil || errors.Is(err, errNoSession) {
-			t.Errorf("control file %q: %v", name, err)
+	if got := r.pool.ControlFiles(handleCluster, handleSTS()); string(got["status.json"]) != "{}" {
+		t.Errorf("the control file waits for the next session: %q", got)
+	}
+	for _, name := range []string{"", ".", "..", "a/b", "../x", "nul\x00", ".pod-agent.pid", "mcp.sock", "fleet.sock"} {
+		if err := b.WriteControlFile(name, nil, 0o644); err == nil {
+			t.Errorf("control file %q taken", name)
 		}
-		if err := b.RemoveControlFile(name); err == nil || errors.Is(err, errNoSession) {
-			t.Errorf("removing control file %q: %v", name, err)
+		if err := b.RemoveControlFile(name); err == nil {
+			t.Errorf("removing control file %q taken", name)
 		}
+	}
+	if err := b.WriteControlFile("big.json", make([]byte, 300<<10), 0o644); err == nil {
+		t.Error("a control file over the limit was taken")
+	}
+	if err := b.RemoveControlFile("status.json"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.pool.ControlFiles(handleCluster, handleSTS()); len(got) != 0 {
+		t.Errorf("removed control file kept: %q", got)
 	}
 	if len(r.cs.Actions()) != 0 {
 		t.Errorf("the polls called the API server: %v", r.cs.Actions())

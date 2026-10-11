@@ -417,7 +417,8 @@ func TestSetUp(t *testing.T) {
 	jobLog := &syncBuffer{}
 	ctx := backend.WithJobLog(context.Background(), jobLog)
 	c := setUpContainer()
-	res, err := SetUp(ctx, SetUpRequest{Tools: f.Tools, Container: c, WorkspaceFolder: "/workspaces/app", Execer: ex})
+	res, err := SetUp(ctx, SetUpRequest{Tools: f.Tools, Container: c, WorkspaceFolder: "/workspaces/app", Execer: ex,
+		RemoteEnv: []string{"SSH_AUTH_SOCK=/fleet-mounts/control/ssh-agent.sock"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,6 +454,7 @@ func TestSetUp(t *testing.T) {
 		{"set-up", "--container-id", c.ContainerID},
 		{"--container-data-folder", DefaultDataFolder},
 		{"--include-merged-configuration"},
+		{"--remote-env", "SSH_AUTH_SOCK=/fleet-mounts/control/ssh-agent.sock"},
 	} {
 		if !containsRun(args, want) {
 			t.Errorf("CLI args %q lack %q", args, want)
