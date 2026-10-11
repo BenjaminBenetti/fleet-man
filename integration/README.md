@@ -176,7 +176,8 @@ kubernetes selection.
 The `8xx_k8s_*` tests check what only a cluster has (a fleetd stopped
 mid-seed, a substituted pod, a crash loop parked, a cut to the API server, a
 restricted namespace, a compose refusal, exec upgrades, a fleet's own
-objects, the cloud metadata block). They are marked `k8s` and pass at once on
+objects, the cloud metadata block, the image mirror in a pod's own docker
+engine). They are marked `k8s` and pass at once on
 devcontainer, saying so. They reach the cluster through the `itest_k8s_*`
 helpers of `backends/kubernetes.sh` (kubectl on the run's context and
 namespace, the objects of an instance key, its pod, a fleet's objects).
