@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: with the microphone enabled, provisioning installs the audio stack and a recorder inside the instance hears what `fleet mic attach` captures — only while it records, and again after an instance restart.
 set -euo pipefail
 
@@ -22,6 +23,7 @@ selected_device="pulse:itest_desk_mic"
 cat > "${HOME}/.fleet/config.json" <<JSON
 { "mic_settings": { "enabled": true, "device": "${selected_device}" } }
 JSON
+itest_config_written
 
 fleet_up alpha
 target="${FIXTURE_REPO_NAME}/alpha"

@@ -60,6 +60,14 @@ type ExecRequest struct {
 	// backend with a separate lane for bulk transfers runs it there, so it
 	// does not hold up the latency-sensitive traffic of its other commands.
 	Bulk bool
+	// Audio says the command is one of an instance's audio streams (the
+	// virtual microphone's sink, the audio output's source). It must fail
+	// closed: a backend that holds commands across a lost transport for a
+	// resume aborts this one instead, so its stream ends and the daemon
+	// notices (a microphone must not stay open on a dead path). A backend
+	// that brings its in-instance fleet binary to the daemon's build lazily
+	// does so at its open, as at a start.
+	Audio bool
 }
 
 // ExecStream is a command a StreamExecer started. Its methods may be called

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # itest: no-docker
+# itest: k8s
 # Description: a microphone source selected in one TUI shows up in another TUI that was already open, and that TUI saving an unrelated setting does not revert it.
 set -euo pipefail
 

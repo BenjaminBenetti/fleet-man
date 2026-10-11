@@ -2521,8 +2521,13 @@ type KubeInstanceRuntime struct {
 	// devcontainer's appPort), served by listeners on the daemon host while it
 	// runs.
 	PublishedPorts []*KubePublishedPort `protobuf:"bytes,9,rep,name=published_ports,json=publishedPorts,proto3" json:"published_ports,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// audio_unavailable says why the instance can have no virtual microphone
+	// or audio output ("no root": a cluster that runs containers without root,
+	// on an image without PulseAudio and ALSA); "" when it can. (9 is
+	// published_ports.)
+	AudioUnavailable string `protobuf:"bytes,10,opt,name=audio_unavailable,json=audioUnavailable,proto3" json:"audio_unavailable,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *KubeInstanceRuntime) Reset() {
@@ -2616,6 +2621,13 @@ func (x *KubeInstanceRuntime) GetPublishedPorts() []*KubePublishedPort {
 		return x.PublishedPorts
 	}
 	return nil
+}
+
+func (x *KubeInstanceRuntime) GetAudioUnavailable() string {
+	if x != nil {
+		return x.AudioUnavailable
+	}
+	return ""
 }
 
 // KubePublishedPort is one published port of a Kubernetes instance: a listener
@@ -4446,7 +4458,7 @@ const file_kube_proto_rawDesc = "" +
 	"\tinstances\x18\x01 \x01(\x05R\tinstances\x12\x16\n" +
 	"\x06shares\x18\x02 \x01(\x05R\x06shares\x12#\n" +
 	"\rcache_volumes\x18\x03 \x01(\x05R\fcacheVolumes\x12+\n" +
-	"\x11snapshot_contents\x18\x04 \x01(\x05R\x10snapshotContents\"\xa0\x03\n" +
+	"\x11snapshot_contents\x18\x04 \x01(\x05R\x10snapshotContents\"\xcd\x03\n" +
 	"\x13KubeInstanceRuntime\x12\x1d\n" +
 	"\n" +
 	"pod_reason\x18\x01 \x01(\tR\tpodReason\x12\x12\n" +
@@ -4457,7 +4469,9 @@ const file_kube_proto_rawDesc = "" +
 	"\x0esessions_ended\x18\x06 \x01(\bR\rsessionsEnded\x120\n" +
 	"\x14node_cordoned_moving\x18\a \x01(\bR\x12nodeCordonedMoving\x12!\n" +
 	"\frestart_hint\x18\b \x01(\tR\vrestartHint\x12E\n" +
-	"\x0fpublished_ports\x18\t \x03(\v2\x1c.fleetgrpc.KubePublishedPortR\x0epublishedPorts\"\x87\x01\n" +
+	"\x0fpublished_ports\x18\t \x03(\v2\x1c.fleetgrpc.KubePublishedPortR\x0epublishedPorts\x12+\n" +
+	"\x11audio_unavailable\x18\n" +
+	" \x01(\tR\x10audioUnavailable\"\x87\x01\n" +
 	"\x11KubePublishedPort\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x1b\n" +
 	"\thost_port\x18\x02 \x01(\x05R\bhostPort\x12%\n" +

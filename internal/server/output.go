@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -16,7 +18,9 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
+	"github.com/BenjaminBenetti/fleet-man/internal/micsink"
 	"github.com/BenjaminBenetti/fleet-man/internal/output"
+	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 	"github.com/BenjaminBenetti/fleet-man/internal/startup"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
@@ -33,6 +37,35 @@ var outputSetting = func() (state.OutputSettings, error) {
 
 // outputSourceOpenTimeout bounds starting an instance's audio source.
 const outputSourceOpenTimeout = 30 * time.Second
+
+// outputQuietFrames is how many silent frames in a row are still routed (the
+// end of a burst, so the client's player ends on silence); after that silence
+// is dropped. A source starts quiet, so its leading silence is dropped too.
+const outputQuietFrames = 5
+
+// outputAliveDeadline is how long a source may send nothing before its path
+// is taken for dead and it is closed (a quiet source sends a silent frame
+// every micsink.AliveInterval); a var for tests.
+var outputAliveDeadline = micsink.AliveDeadline
+
+// outputFrameInterval is how often an audible source's frames are due.
+const outputFrameInterval = time.Second * output.ChunkBytes / (output.SampleRate * output.Channels * 2)
+
+// EnvAudioLateThreshold overrides how late (a Go duration) a PCM frame must
+// reach the daemon to count as late (podwire.LateThreshold): a late frame
+// paces a cluster pod's bulk transfers while audio flows on it. For tests
+// that need pacing on a fast local link.
+const EnvAudioLateThreshold = "FLEET_AUDIO_LATE_THRESHOLD"
+
+// audioLateThreshold is EnvAudioLateThreshold's value, 0 when unset or not
+// a positive duration.
+func audioLateThreshold() time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(os.Getenv(EnvAudioLateThreshold)))
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
+}
 
 var openOutputSource = func(inst *fleet.Instance) (io.ReadWriteCloser, bool, error) {
 	return startOutputSource(backendutil.NewForInstance(inst, false), inst)
@@ -57,6 +90,7 @@ func startOutputSource(b backend.Backend, inst *fleet.Instance) (io.ReadWriteClo
 			WorkspaceDir: inst.WorkspaceDir,
 			ContainerID:  inst.ContainerID,
 			Argv:         fleetlaunch.OutputSourceArgv(),
+			Audio:        true,
 		}, outputSourceOpenTimeout)
 		return c, true, err
 	}
@@ -79,7 +113,12 @@ var stopOutputServer = func(inst *fleet.Instance) {
 	if _, ok := b.(backend.OutputBackend); !ok {
 		return
 	}
-	out, err := b.RunScript(inst.ContainerID, fleetlaunch.RemotePath+" output stop")
+	var out string
+	err := bounded(micStopTimeout, "stop audio output", func() error {
+		var err error
+		out, err = b.RunScript(inst.ContainerID, fleetlaunch.RemotePath+" output stop")
+		return err
+	})
 	if err != nil {
 		flog.Warn("audio output cleanup failed", "instance", inst.Name, "err", err, "output", strings.TrimSpace(out))
 	}
@@ -509,25 +548,52 @@ func (h *outputHub) serveSource(ctx context.Context, key string, s *outputSource
 		return false, true, fmt.Errorf("audio source did not become ready: %q (%v)", header, err)
 	}
 	timer.Stop()
-	quiet := 0
+	flog.Info("audio output source attached", "instance", key)
+	// From here on any frame counts as a sign of life (a quiet source sends
+	// a silent one every micsink.AliveInterval; one staged by an older fleet
+	// streams without a pause): nothing for outputAliveDeadline closes it.
+	var missed atomic.Bool
+	alive := time.AfterFunc(outputAliveDeadline, func() {
+		missed.Store(true)
+		r.c.Close()
+	})
+	defer alive.Stop()
+	// The instance's audio flow: audible frames, and frames arriving late.
+	flow := audioFlowFor(s.inst)
+	var clock *podwire.FrameClock
+	if flow != nil {
+		clock = podwire.NewFrameClock(outputFrameInterval, flow.Late)
+		clock.SetThreshold(audioLateThreshold())
+	}
+	quiet := outputQuietFrames + 1
 	for {
 		pcm := make([]byte, output.ChunkBytes)
 		if _, err := io.ReadFull(r.c, pcm); err != nil {
+			if missed.Load() {
+				err = fmt.Errorf("audio source sent nothing for %s: %w", outputAliveDeadline, err)
+			}
 			return true, true, err
 		}
-		silent := true
-		for _, b := range pcm {
-			if b != 0 {
-				silent = false
-				break
+		alive.Reset(outputAliveDeadline)
+		if clock != nil {
+			// Every frame of a burst is due on the burst's schedule, its
+			// silent tail's too. Past the tail a source sends nothing until
+			// it is audible again (or its heartbeat): a frame after that
+			// pause starts a new schedule, not a late one.
+			if quiet >= outputQuietFrames {
+				clock.Reset()
 			}
+			clock.Arrived(time.Now())
 		}
-		if silent {
+		if output.Silent(pcm) {
 			quiet++
 		} else {
 			quiet = 0
+			if flow != nil {
+				flow.OutputAudible()
+			}
 		}
-		if quiet <= 5 {
+		if quiet <= outputQuietFrames {
 			h.route(key, s, pcm, false)
 		}
 	}

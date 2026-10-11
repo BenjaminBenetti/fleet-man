@@ -81,3 +81,27 @@ func TestScriptsForInstanceGatesTheMicScript(t *testing.T) {
 		t.Errorf("mic only: %v", got)
 	}
 }
+
+// gatedAudio is an output-capable backend whose instance can have no audio
+// (backend.AudioGate).
+type gatedAudio struct {
+	outputCapability
+	reason string
+}
+
+func (g gatedAudio) AudioUnavailable() string { return g.reason }
+
+// An instance its backend says can have no audio gets no audio script, with
+// either direction on; one it says can, the usual one.
+func TestScriptsForInstanceSkipsAudioTheBackendCannotHave(t *testing.T) {
+	config := &state.Config{MicSettings: state.MicSettings{Enabled: true}, OutputSettings: state.OutputSettings{Enabled: true}}
+	settings := fleet.FleetSettings{ClaudeCodeMount: true}
+	gated := gatedAudio{outputCapability{micCapability{supports: true}}, "audio unavailable on cluster c: containers can't run as root"}
+	if got := scriptNames(scriptsForInstance(gated, settings, config)); !slices.Equal(got, []string{"claude-code"}) {
+		t.Fatalf("an audio-less instance got %v", got)
+	}
+	gated.reason = ""
+	if got := scriptNames(scriptsForInstance(gated, settings, config)); !slices.Equal(got, []string{"claude-code", "mic"}) {
+		t.Fatalf("an audio-capable gated backend got %v", got)
+	}
+}

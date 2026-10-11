@@ -1933,8 +1933,12 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				// the box, and an UNWRAPPED long line is drawn as two while being
 				// counted as one — which shifts the scrollbar and the mouse hit
 				// rows of everything below it.
+				status := micStatusValue(m)
+				if note := audioUnavailableNote(m); note != "" {
+					status += "\n" + strings.Repeat(" ", 21) + dimStyle.Render(note)
+				}
 				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(
-					settingsPage.renderSettingsRow(m, false, "Status", micStatusValue(m))))
+					settingsPage.renderSettingsRow(m, false, "Status", status)))
 			}
 
 		case "Claude Code":
@@ -1962,7 +1966,11 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				if status == "" {
 					status = "connecting"
 				}
-				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(settingsPage.renderSettingsRow(m, false, "This client", dimStyle.Render(status))))
+				value := dimStyle.Render(status)
+				if note := audioUnavailableNote(m); note != "" {
+					value += "\n" + strings.Repeat(" ", 21) + dimStyle.Render(note)
+				}
+				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(settingsPage.renderSettingsRow(m, false, "This client", value)))
 			}
 
 		case "Fleet MCP":

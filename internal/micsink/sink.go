@@ -12,6 +12,9 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/mic"
+	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 )
 
 const (
@@ -24,6 +27,14 @@ const (
 	// gate, and it must fail CLOSED: a server that keeps the subscription alive
 	// while never answering must not hold the human's microphone open.
 	maxBlindRecounts = 3
+)
+
+// aliveInterval is how often the sink says "alive" (AliveInterval; a var so
+// tests can shorten it), and lateEvery the least time between two "late"
+// reports: the daemon's pacer halves its rate at most every 250ms anyway.
+var (
+	aliveInterval = AliveInterval
+	lateEvery     = 250 * time.Millisecond
 )
 
 // pactlTimeout bounds every pactl / pulseaudio invocation in this package. A
@@ -101,6 +112,17 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 		})
 	}()
 
+	// Frames are due every 40 ms while the microphone is fed: one that
+	// arrives more than podwire.LateThreshold behind is reported (at most every
+	// lateEvery), so a daemon whose bulk transfers crowd the path paces them.
+	var lastLate time.Time
+	clock := podwire.NewFrameClock(time.Second*mic.ChunkBytes/mic.BytesPerSecond, func() {
+		if now := time.Now(); now.Sub(lastLate) >= lateEvery {
+			lastLate = now
+			emit(EventLate)
+		}
+	})
+	frames := 0
 	pumpDone := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 32*1024)
@@ -108,6 +130,10 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 			n, err := stdin.Read(buf)
 			if n > 0 {
 				pipe.write(buf[:n]) // a no-op while nobody is recording
+				now := time.Now()
+				for frames += n; frames >= mic.ChunkBytes; frames -= mic.ChunkBytes {
+					clock.Arrived(now)
+				}
 			}
 			if err != nil {
 				if err == io.EOF {
@@ -120,17 +146,24 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	}()
 
 	emit(EventReady)
-	select {
-	case err := <-pumpDone:
-		return err
-	case err := <-watchErr:
-		if ctx.Err() != nil {
+	emit(EventAlive)
+	alive := time.NewTicker(aliveInterval)
+	defer alive.Stop()
+	for {
+		select {
+		case <-alive.C:
+			emit(EventAlive)
+		case err := <-pumpDone:
+			return err
+		case err := <-watchErr:
+			if ctx.Err() != nil {
+				return nil
+			}
+			emit(EventError+" %s", oneLine(err.Error()))
+			return err
+		case <-ctx.Done():
 			return nil
 		}
-		emit(EventError+" %s", oneLine(err.Error()))
-		return err
-	case <-ctx.Done():
-		return nil
 	}
 }
 

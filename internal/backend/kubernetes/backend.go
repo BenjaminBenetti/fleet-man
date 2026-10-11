@@ -186,10 +186,9 @@ func ContainerID(clusterID, ns, sts string, gen int) string {
 func (b *Backend) SupportsSharedMounts() bool { return true }
 
 // SupportsClone is true (clone.go), SupportsRebuild too (rebuild.go);
-// SupportsMicSink is false until audio lands.
+// SupportsMicSink is audio.go's.
 func (b *Backend) SupportsClone() bool   { return true }
 func (b *Backend) SupportsRebuild() bool { return true }
-func (b *Backend) SupportsMicSink() bool { return false }
 
 // Up is UpContext without a job's context.
 func (b *Backend) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: instance audio output end to end, headless: what plays into an instance's default sink reaches the selected device of an attached `fleet output attach` client, its player stops when the audio goes silent, and turning output off removes the instance's virtual sink.
 set -euo pipefail
 
@@ -23,6 +24,7 @@ write_output_settings() {
 
 info "audio output on (the default), this client's speaker selected"
 write_output_settings '{ "enabled": true, "client": "itest-desk", "device": "pulse:itest_speaker" }'
+itest_config_written
 
 fleet_up alpha
 inst="${FIXTURE_REPO_NAME}/alpha"

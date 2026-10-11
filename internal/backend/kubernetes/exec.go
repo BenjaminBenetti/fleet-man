@@ -40,6 +40,10 @@ type PodCommand struct {
 	Rows, Cols uint16
 	// Bulk runs it on the bulk session, not resumable: a folder's tar.
 	Bulk bool
+	// Audio runs it on the agent session, not resumable (an audio stream
+	// fails closed: a lost transport ends it), after a lazy restage of the
+	// pod's fleet binary (an audio open is one of its moments).
+	Audio bool
 }
 
 // execClass is the execas class of a backend exec class.
@@ -53,7 +57,7 @@ func execClass(c backend.ExecClass) execas.Class {
 // OpenExec starts req's command in the instance's pod (backend.StreamExecer).
 // ctx bounds the start: a wait for the pod's agent when none is connected.
 func (b *Backend) OpenExec(ctx context.Context, req backend.ExecRequest) (backend.ExecStream, error) {
-	return b.OpenPodExec(ctx, PodCommand{Class: execClass(req.Class), Argv: req.Argv, Env: req.Env, TTY: req.TTY, Rows: req.Rows, Cols: req.Cols, Bulk: req.Bulk})
+	return b.OpenPodExec(ctx, PodCommand{Class: execClass(req.Class), Argv: req.Argv, Env: req.Env, TTY: req.TTY, Rows: req.Rows, Cols: req.Cols, Bulk: req.Bulk, Audio: req.Audio})
 }
 
 // OpenPodExec starts cmd in the instance's pod. ctx bounds the start.
@@ -71,7 +75,7 @@ func (b *Backend) OpenPodExec(ctx context.Context, cmd PodCommand) (backend.Exec
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	s, err := b.agent(ctx, false)
+	s, err := b.agent(ctx, cmd.Audio)
 	if err != nil {
 		if !fallbackable(err) || cmd.TTY {
 			return nil, err
@@ -90,7 +94,7 @@ func (b *Backend) OpenPodExec(ctx context.Context, cmd PodCommand) (backend.Exec
 		}
 		return podStream{e}, nil
 	}
-	header.Resumable = true
+	header.Resumable = !cmd.Audio
 	e, err := s.Exec(ctx, header)
 	if err != nil {
 		return nil, startError(err)

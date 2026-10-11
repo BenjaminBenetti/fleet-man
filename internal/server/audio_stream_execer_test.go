@@ -69,8 +69,9 @@ func requireAudioConn(t *testing.T, conn io.ReadWriteCloser, proc *fakeExecStrea
 }
 
 // TestStartMicSinkPrefersStreamExecer: the sink runs in the backend's own
-// stream, as the session user (ExecClassScript), by the staged binary's path.
-// A backend that can't host a sink gets none.
+// stream, as the session user (ExecClassScript), by the staged binary's path,
+// marked as an audio stream (it must fail closed). A backend that can't host a
+// sink gets none.
 func TestStartMicSinkPrefersStreamExecer(t *testing.T) {
 	inst := &fleet.Instance{Name: "i1", WorkspaceDir: "/ws/f/i1", ContainerID: "c1"}
 	b := &streamExecer{micSink: true}
@@ -84,6 +85,7 @@ func TestStartMicSinkPrefersStreamExecer(t *testing.T) {
 		WorkspaceDir: "/ws/f/i1",
 		ContainerID:  "c1",
 		Argv:         fleetlaunch.MicSinkArgv(),
+		Audio:        true,
 	}
 	if len(reqs) != 1 || !reflect.DeepEqual(reqs[0], want) {
 		t.Fatalf("OpenExec requests = %+v, want [%+v]", reqs, want)
@@ -118,6 +120,7 @@ func TestStartOutputSourcePrefersStreamExecer(t *testing.T) {
 		WorkspaceDir: "/ws/f/i1",
 		ContainerID:  "c1",
 		Argv:         fleetlaunch.OutputSourceArgv(),
+		Audio:        true,
 	}
 	if len(reqs) != 1 || !reflect.DeepEqual(reqs[0], want) {
 		t.Fatalf("OpenExec requests = %+v, want [%+v]", reqs, want)

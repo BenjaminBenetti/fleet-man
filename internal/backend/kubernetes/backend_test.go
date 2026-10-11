@@ -181,7 +181,8 @@ func TestWhere(t *testing.T) {
 // rebuild.go); what it never does without I/O it answers at once.
 func TestHandleCapabilities(t *testing.T) {
 	b := newHandle((&handleRig{}).inst(), nil)
-	if !b.SupportsSharedMounts() || !b.SupportsClone() || !b.SupportsRebuild() || b.SupportsMicSink() || !backend.OwnsWorkspace(b) {
+	// Audio: an instance whose record does not say it has none (audio.go).
+	if !b.SupportsSharedMounts() || !b.SupportsClone() || !b.SupportsRebuild() || !b.SupportsMicSink() || !backend.OwnsWorkspace(b) {
 		t.Fatal("capabilities")
 	}
 	if _, ok := any(b).(backend.RebuildContexter); !ok {
@@ -195,13 +196,13 @@ func TestHandleCapabilities(t *testing.T) {
 	}
 	// The exec surface (Exec, ExecCommand, CopyFile, Logs) reaches the pod
 	// now; its shape is checked in cmd_test.go, not run here against a
-	// cluster. Mic and forwarding are still later units'; the editor URI
+	// cluster. Forwarding is the PortDialer's (forward.go); the editor URI
 	// needs fleetd's record of the pod (editor_test.go).
 	if uri, ok := b.EditorURI("/ws", "p"); ok || uri != "" {
 		t.Error("an editor URI without a record of the pod")
 	}
-	if cmd, ok := b.MicSinkCommand("cid"); ok || cmd != nil {
-		t.Error("a mic sink")
+	if cmd, ok := b.MicSinkCommand("cid"); !ok || cmd == nil {
+		t.Error("no mic sink command")
 	}
 	if host, ok := b.ResolveHostname("cid"); ok || host != "" {
 		t.Error("a reachable hostname")

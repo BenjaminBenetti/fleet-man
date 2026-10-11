@@ -637,3 +637,27 @@ func TestKubePodsServeThePublishedPorts(t *testing.T) {
 		t.Fatal("the shutdown should close the published ports")
 	}
 }
+
+// Why an instance can have no audio rides InstanceRuntime.kube, for the
+// Settings page's Microphone and Audio Output status lines, on a remote
+// client as on a local one.
+func TestKubePodsPushesWhyAnInstanceHasNoAudio(t *testing.T) {
+	r := newKubePodsRigWith(t, func(k *kubePods) {
+		k.audioFor = func(inst *fleet.Instance) string {
+			if inst.Name == "quiet" {
+				return kubernetes.AudioNoRoot
+			}
+			return ""
+		}
+	}, kubeInstance("quiet", fleet.StatusRunning), kubeInstance("loud", fleet.StatusRunning))
+	r.waitTracked()
+	r.pool.observe(kubeSTS("quiet"), kubernetes.Observation{Live: backend.LiveStatusRunning})
+	r.pool.observe(kubeSTS("loud"), kubernetes.Observation{Live: backend.LiveStatusRunning})
+	r.eventually("both runtimes", func() bool { return r.runtime("quiet").GetKube() != nil && r.runtime("loud").GetKube() != nil })
+	if got := r.runtime("quiet").GetKube().GetAudioUnavailable(); got != kubernetes.AudioNoRoot {
+		t.Fatalf("quiet: audio_unavailable %q, want %q", got, kubernetes.AudioNoRoot)
+	}
+	if got := r.runtime("loud").GetKube().GetAudioUnavailable(); got != "" {
+		t.Fatalf("loud: audio_unavailable %q, want none", got)
+	}
+}

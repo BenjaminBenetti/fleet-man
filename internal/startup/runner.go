@@ -66,8 +66,37 @@ func RunWithTimeout(instanceBackend backend.Backend, wsDir string, scripts []Scr
 // backend's ExecCommand. The script body is wrapped with output
 // redirection so the host-side combined output is essentially empty;
 // the meaningful logs live inside the container at logDir/<name>.log.
+//
+// A split script (Script.Privileged) on a backend with a root class of its
+// own (backend.RootExecer) runs its Privileged half there first, logged as
+// <name>-root, then its Unprivileged half as the workspace user; on such a
+// backend whose instance has no root, only the Unprivileged half.
 func runOne(instanceBackend backend.Backend, wsDir string, script Script, timeout time.Duration) error {
-	cmd := instanceBackend.ExecCommand(wsDir, boundedShell(wrap(script), timeout))
+	rooted, ok := instanceBackend.(backend.RootExecer)
+	if !ok || script.Privileged == "" {
+		return runBody(instanceBackend.ExecCommand(wsDir, boundedShell(wrap(script), timeout)), timeout)
+	}
+	if rooted.RootCapable() {
+		root := Script{Name: script.Name + "-root", Body: script.Privileged}
+		if err := runBody(rooted.RootExecCommand(wsDir, boundedShell(rootHome+wrap(root), timeout)), timeout); err != nil {
+			return fmt.Errorf("as root: %w", err)
+		}
+	}
+	user := Script{Name: script.Name, Body: script.Unprivileged}
+	return runBody(instanceBackend.ExecCommand(wsDir, boundedShell(wrap(user), timeout)), timeout)
+}
+
+// rootHome points HOME at root's own home for a script run as root, before
+// wrap makes its log directory under it: a root exec keeps a HOME the image's
+// environment sets (as `docker exec -u root` does), and the session user's
+// ~/.fleet must not be created there as root's.
+const rootHome = `HOME=$(awk -F: '$3 == 0 { print $6; exit }' /etc/passwd 2>/dev/null)
+export HOME="${HOME:-/root}"
+`
+
+// runBody runs one wrapped script's command and makes its failure an error
+// that carries the script's own diagnosis (the log tail wrap echoes).
+func runBody(cmd *backend.Cmd, timeout time.Duration) error {
 	out, err := cmd.CombinedOutputWithTimeout(hostDeadline(timeout))
 	if err != nil {
 		detail := strings.TrimSpace(string(out))

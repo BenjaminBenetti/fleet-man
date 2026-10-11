@@ -6,10 +6,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -290,5 +292,42 @@ users:
 	}
 	if got := currentRecord(cl); got.ID != handleCluster {
 		t.Fatalf("currentRecord without the registry = %+v", got)
+	}
+}
+
+// The audio commands (for a consumer that runs them itself; fleetd opens
+// them on the agent session) are the shim running fleet's own in the script
+// class, quietly; the root class runs a privileged step as root.
+func TestAudioAndRootCommandsBuildTheKubeExecArgv(t *testing.T) {
+	r := newHandleRig(t)
+	writeHandleCluster(t)
+	inst := r.inst()
+	inst.ContainerID = ContainerID(handleCluster, handleNS, handleSTS(), 1)
+	b := newHandle(inst, r.pool)
+	sink, ok := b.MicSinkCommand(inst.ContainerID)
+	if !ok {
+		t.Fatal("no mic sink command")
+	}
+	source, ok := b.OutputSourceCommand(inst.ContainerID)
+	if !ok {
+		t.Fatal("no output source command")
+	}
+	for name, tc := range map[string]struct {
+		argv []string
+		want []string
+	}{
+		"mic sink":      {sink.Args, fleetlaunch.MicSinkArgv()},
+		"output source": {source.Args, fleetlaunch.OutputSourceArgv()},
+	} {
+		if flagValue(tc.argv, "--class") != "script" || indexOf(tc.argv, "--quiet") < 0 {
+			t.Errorf("%s: not a quiet script-class shim: %v", name, tc.argv)
+		}
+		if dash := indexOf(tc.argv, "--"); dash < 0 || !slices.Equal(tc.argv[dash+1:], tc.want) {
+			t.Errorf("%s: runs %v, want %v", name, tc.argv, tc.want)
+		}
+	}
+	root := b.RootExecCommand("/ws", []string{"apt-get", "install"}).Args
+	if flagValue(root, "--class") != "root" {
+		t.Errorf("RootExecCommand: %v", root)
 	}
 }

@@ -298,6 +298,9 @@ func (c *creation) build(ctx context.Context, cfg *devcli.Config) (*built, error
 	if err != nil {
 		return nil, kubeerr.Wrap(kubeerr.ImageBuild, err)
 	}
+	if c.identity.NonRoot && kubeimage.BuiltBy(capture.Calls) {
+		c.addAudioLayer(ctx, capture)
+	}
 
 	if err := c.step(ctx, stepDeliver, fleet.StepImageDeliver, capture.Run.Image); err != nil {
 		return nil, err
@@ -438,6 +441,9 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 	// After the hooks, which may install the image's own tmux.
 	if err := ensureTmuxOn(ctx, sess); err != nil {
 		c.warn(ctx, fmt.Sprintf("tmux for the instance's sessions: %v", err))
+	}
+	if c.identity.NonRoot {
+		c.checkAudio(ctx, sess, &rec)
 	}
 	return &backend.UpResult{Outcome: "success", ContainerID: containerID, RemoteUser: capture.RemoteUser, RemoteWorkspaceFolder: cfg.WorkspaceFolder}, nil
 }

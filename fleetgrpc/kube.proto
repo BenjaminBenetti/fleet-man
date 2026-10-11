@@ -583,6 +583,11 @@ message KubeInstanceRuntime {
   // devcontainer's appPort), served by listeners on the daemon host while it
   // runs.
   repeated KubePublishedPort published_ports = 9;
+  // audio_unavailable says why the instance can have no virtual microphone
+  // or audio output ("no root": a cluster that runs containers without root,
+  // on an image without PulseAudio and ALSA); "" when it can. (9 is
+  // published_ports.)
+  string audio_unavailable = 10;
 }
 
 // KubePublishedPort is one published port of a Kubernetes instance: a listener
