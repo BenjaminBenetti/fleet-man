@@ -110,12 +110,24 @@ work, and a private cluster in a QA container for integration tests:
    marked `# itest: k8s`, against the current context (`minikube`) unless
    `FLEET_ITEST_CLUSTER` names another (see `integration/README.md`):
 
+   fleetd serves its pods the pod build of the same source, so build that
+   beside the binary (in the same tree state) and name it with
+   `FLEET_POD_BINARY_<ARCH>`; `FLEET_POD_TMUX_<ARCH>` names the tmux bundle
+   (`make pod-tmux`) for images without tmux:
+
    ```bash
+   CGO_ENABLED=0 go build -o /tmp/fleet-itest/fleet ./cmd/fleet
+   make fleet-pod POD_ARCHES=amd64 POD_BIN_DIR=/tmp/fleet-itest
    docker run --rm --privileged --name "fleet-itest-$RANDOM" \
-     -e FLEET_QA_START_MINIKUBE=1 -e FLEET_QA_MINIKUBE_FLAGS="--memory=4g --cpus=2" \
+     -e FLEET_QA_START_MINIKUBE=1 -e FLEET_QA_MINIKUBE_FLAGS="--memory=6g --cpus=4" \
      -e FLEET_ITEST_BACKEND=kubernetes \
+     -e FLEET_POD_BINARY_AMD64=/tmp/fleet-bin/fleet-pod-linux-amd64 \
      -v fleet-qa-minikube:/home/qa/.minikube/cache \
-     ...                                # mounts, image and command as above
+     -v "$PWD":/src:ro -v /tmp/fleet-itest:/usr/local/fleet-bin:ro \
+     ghcr.io/benjaminbenetti/fleet-man/qa:feat-kubernetes \
+     bash -lc 'cp -a /src /tmp/repo && mkdir -p /tmp/fleet-bin &&
+       cp /usr/local/fleet-bin/* /tmp/fleet-bin/ && cd /tmp/repo &&
+       FLEET_BIN=/tmp/fleet-bin/fleet ./integration/run.sh'
    ```
 
    The cluster adds about a minute to startup. The `fleet-qa-minikube` volume

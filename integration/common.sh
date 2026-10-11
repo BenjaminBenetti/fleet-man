@@ -384,21 +384,10 @@ teardown_test() {
   fi
 
   # Fallback: the backend removes whatever a crashed test left behind
-  # (devcontainer: labelled containers and shared buildkit servers).
+  # (devcontainer: labelled containers and shared buildkit servers, and the
+  # ownership of a root-written buildkit cache; kubernetes: the connection's
+  # labelled objects and the test's daemons).
   _be_teardown || true
-
-  # A privileged buildkit server writes a ROOT-owned cache into the
-  # bind-mounted .buildkit/cache dir. Fleet deliberately keeps that cache
-  # across `destroy` (it's the point of a shared cache), but the test harness
-  # wants a pristine ~/.fleet between tests and runs as a non-root user — so
-  # reclaim ownership via a throwaway root container before the wipe. The
-  # buildkit image is guaranteed present whenever such root-owned files exist
-  # (they were written by a buildkit server that already pulled it).
-  if command -v docker >/dev/null 2>&1 && [ -d "${HOME}/.fleet" ] \
-    && find "${HOME}/.fleet" ! -user "$(id -un)" -print -quit 2>/dev/null | grep -q .; then
-    docker run --rm --entrypoint chown -v "${HOME}/.fleet:/reclaim" \
-      moby/buildkit:latest -R "$(id -u):$(id -g)" /reclaim >/dev/null 2>&1 || true
-  fi
 
   rm -rf "${HOME}/.fleet"
   rm -rf "${TEST_SCRATCH_DIR}"
@@ -429,6 +418,25 @@ fleet_up() {
 # a step that has no counterpart on other backends (a host bind mount, say);
 # anything that does goes through a helper.
 itest_backend_is() { [ "${FLEET_ITEST_BACKEND}" = "$1" ]; }
+
+# itest_config_written — a test that writes ~/.fleet/config.json itself
+# (after setup_test) calls this next, so the config takes effect as it would
+# on a fresh ~/.fleet: creates still land on the backend under test, and the
+# daemon the next command talks to starts with the config as written
+# (kubernetes: the run's connection stays the remembered target, and the
+# daemon setup started is stopped; devcontainer: nothing to do, setup starts
+# no daemon).
+itest_config_written() { _be_config_written; }
+
+# itest_backend_rebuilds — true when the backend under test can rebuild an
+# instance in place (devcontainer; kubernetes from P6.1, which turns its
+# _be_rebuilds on). A test's rebuild steps go inside it.
+itest_backend_rebuilds() { _be_rebuilds; }
+
+# itest_row_target — what a TUI instance row shows beside its branch for an
+# instance on the backend under test (devcontainer: ⬡; kubernetes: ☸ and the
+# run's connection's name).
+itest_row_target() { _be_row_target; }
 
 # _itest_ref <ref> — <ref> as <fleet>/<instance>.
 _itest_ref() {

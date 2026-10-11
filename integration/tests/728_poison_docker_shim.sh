@@ -48,7 +48,8 @@ itest_poison_docker poison
 for args in "exec c1 true" "run --rm img" "start c1" "stop c1" "rm -f c1" "logs c1" "stats --no-stream" \
   "ps -a" "commit c1 img" "cp c1:/x /y" "inspect c1" "inspect --type container c1" "container ls" \
   "--context ctx exec c1 true" "-c ctx exec c1 true" "--context=ctx exec c1 true" "-H unix:///sock ps" \
-  "--log-level debug start c1" "-D --tlsverify --tlscert c.pem ps"; do
+  "--log-level debug start c1" "-D --tlsverify --tlscert c.pem ps" "network connect n c1" "network disconnect n c1" \
+  "compose up -d" "compose -f x.yml up"; do
   got=$(run ${args})
   case "${got}" in
     "125|poison docker: refused 'docker ${args}'"*) ;;
@@ -56,7 +57,8 @@ for args in "exec c1 true" "run --rm img" "start c1" "stop c1" "rm -f c1" "logs 
   esac
 done
 for args in "version" "info" "build -t img ." "buildx build ." "image ls" "image inspect img" \
-  "inspect --type image img" "inspect --type=image img" "network create n" "volume ls" "pull img" "tag a b"; do
+  "inspect --type image img" "inspect --type=image img" "network create n" "network ls" "volume ls" "pull img" "tag a b" \
+  "compose version"; do
   assert_equals "0|real docker: ${args}" "$(run ${args})" "poison should pass 'docker ${args}' through"
 done
 assert_equals "0|real docker:" "$(run)" "poison should pass a bare docker through"
