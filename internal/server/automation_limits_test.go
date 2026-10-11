@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -372,5 +373,52 @@ func TestLimiterRestoresQueuedRuns(t *testing.T) {
 	p := planOne(l, c, limitState([]fleet.Agent{clusterAgent("k", "c1")}), fleet.Trigger{Name: "t", AgentNames: []string{"k"}}, time.Now())
 	if p.firing <= 9 || len(p.queued) != 1 {
 		t.Fatalf("new firing %d after the restored ones = %+v", p.firing, p)
+	}
+}
+
+// The webhook receiver and the scheduler use the limiter at once: plans,
+// discards, drains and settles from many goroutines leave its books
+// consistent (every slot and create given back), and -race finds nothing.
+func TestLimiterIsSafeForConcurrentUse(t *testing.T) {
+	l := newAutomationLimiter()
+	c := (&fakeChecks{limits: map[string]clusterLimits{"c1": {name: "prod", maxPerAgent: 3}}}).checks()
+	st := limitState([]fleet.Agent{clusterAgent("k", "c1")})
+	load := func() *state.State { return st }
+	trig := fleet.Trigger{Name: "t", AgentNames: []string{"k"}}
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range 50 {
+				p := l.plan(c, load, []firingItem{{fleet: "alpha", trigger: trig}}, time.Now())[0]
+				if (g+i)%3 == 0 {
+					l.discard([]*firingPlan{p})
+					continue
+				}
+				l.commit(p, &triggerEvent{}, "")
+				for _, r := range p.start {
+					l.started(r, "")
+				}
+				for _, r := range l.due(c, load, time.Now()).start {
+					l.started(r, "")
+				}
+				l.counts()
+				l.queuedRuns()
+			}
+		}()
+	}
+	wg.Wait()
+	for {
+		d := l.due(c, load, time.Now())
+		if len(d.start) == 0 {
+			break
+		}
+		for _, r := range d.start {
+			l.started(r, "")
+		}
+	}
+	if q, r := l.counts(); len(q) != 0 || len(r) != 0 || len(l.creating) != 0 || len(l.holder) != 0 {
+		t.Fatalf("books after the storm: queued %v running %v creating %v holders %v", q, r, l.creating, l.holder)
 	}
 }
