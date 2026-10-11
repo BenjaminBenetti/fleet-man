@@ -4,13 +4,16 @@ package podagent
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,7 +27,10 @@ import (
 // directory (Options.ControlDir, the pod's own emptyDir at
 // /fleet-mounts/control): the in-pod sockets the main agent binds there, each
 // connection to which it relays to fleetd on a stream of the socket's kind,
-// and the files fleetd keeps there (the status mod's).
+// and the files fleetd keeps there (the status mod's). Their names are kept in
+// a manifest there too (filesManifestName), so the next agent (a reconnect, a
+// takeover) removes the ones a later state leaves out, though it never wrote
+// them itself.
 //
 // The main agent makes the directory root's and 0755 when it starts, so
 // nothing in the pod but root can plant a file or a link in it. A socket is
@@ -47,6 +53,10 @@ type controlDir struct {
 	want   podwire.Sockets
 	socks  map[podwire.Tag]*inPodSocket
 	files  map[string]writtenFile
+	// loaded: the manifest of the files earlier agents wrote was read into
+	// files (on the first state); manifest is what the manifest holds.
+	loaded   bool
+	manifest string
 	// failed is what each socket or file last failed with: a failure is
 	// logged once, until it changes or clears.
 	failed map[string]string
@@ -131,6 +141,10 @@ func (c *controlDir) apply(ds podwire.DesiredState) string {
 		return "the session ended"
 	}
 	c.want = ds.Sockets
+	if !c.loaded {
+		c.loaded = true
+		c.loadManifestLocked()
+	}
 	var problems []string
 	for _, tag := range podwire.SockTags {
 		if ds.Sockets.Wants(tag) {
@@ -163,7 +177,63 @@ func (c *controlDir) apply(ds podwire.DesiredState) string {
 		c.reportLocked("file "+name, nil)
 		delete(c.files, name)
 	}
+	c.reportLocked("file "+filesManifestName, c.saveManifestLocked())
 	return strings.Join(problems, "; ")
+}
+
+// maxFilesManifest bounds the manifest read back: it names at most
+// podwire.MaxControlFiles plain base names.
+const maxFilesManifest = 16 << 10
+
+// loadManifestLocked takes the files the manifest says earlier agents wrote
+// as this agent's: a state that leaves one out removes it, one that keeps it
+// writes it anew.
+func (c *controlDir) loadManifestLocked() {
+	f, err := os.OpenFile(filepath.Join(c.dir, filesManifestName), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxFilesManifest))
+	if err != nil {
+		return
+	}
+	var names []string
+	if json.Unmarshal(data, &names) != nil {
+		return
+	}
+	c.manifest = string(data)
+	for _, name := range names {
+		if _, ok := c.files[name]; !ok && podwire.ValidControlFileName(name) {
+			c.files[name] = writtenFile{}
+		}
+	}
+}
+
+// saveManifestLocked records the names of the files written for fleetd, when
+// they changed.
+func (c *controlDir) saveManifestLocked() error {
+	names := slices.Sorted(maps.Keys(c.files))
+	data, err := json.Marshal(names)
+	if err != nil {
+		return err
+	}
+	if string(data) == c.manifest {
+		return nil
+	}
+	if len(names) == 0 {
+		err = os.Remove(filepath.Join(c.dir, filesManifestName))
+		if errors.Is(err, fs.ErrNotExist) {
+			err = nil
+		}
+	} else {
+		err = replaceFile(c.dir, filesManifestName, data, 0o600)
+	}
+	if err != nil {
+		return fmt.Errorf("record the control files: %w", err)
+	}
+	c.manifest = string(data)
+	return nil
 }
 
 // check binds again every wanted socket whose file is no longer its own.
@@ -396,27 +466,7 @@ func (c *controlDir) writeLocked(f podwire.ControlFile) error {
 	if w, ok := c.files[f.Name]; ok && w.mode == f.Mode && bytes.Equal(w.data, f.Data) && w.still(path) {
 		return nil
 	}
-	tmp, err := os.CreateTemp(c.dir, "."+f.Name+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("write control file %s: %w", f.Name, err)
-	}
-	cleanup := func() { _ = os.Remove(tmp.Name()) }
-	if _, err := tmp.Write(f.Data); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return fmt.Errorf("write control file %s: %w", f.Name, err)
-	}
-	if err := tmp.Chmod(f.Mode.Perm()); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return fmt.Errorf("write control file %s: %w", f.Name, err)
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return fmt.Errorf("write control file %s: %w", f.Name, err)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		cleanup()
+	if err := replaceFile(c.dir, f.Name, f.Data, f.Mode.Perm()); err != nil {
 		return fmt.Errorf("write control file %s: %w", f.Name, err)
 	}
 	w := writtenFile{data: bytes.Clone(f.Data), mode: f.Mode}
@@ -425,6 +475,29 @@ func (c *controlDir) writeLocked(f podwire.ControlFile) error {
 	}
 	c.files[f.Name] = w
 	return nil
+}
+
+// replaceFile makes dir/name hold data with perm, atomically: a temp file
+// renamed over the name, which replaces whatever is there (a link itself,
+// never what it points at).
+func replaceFile(dir, name string, data []byte, perm fs.FileMode) error {
+	tmp, err := os.CreateTemp(dir, "."+name+".tmp-*")
+	if err != nil {
+		return err
+	}
+	if _, err = tmp.Write(data); err == nil {
+		err = tmp.Chmod(perm)
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), filepath.Join(dir, name))
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
+	}
+	return err
 }
 
 // still reports whether the file at path is the one written.

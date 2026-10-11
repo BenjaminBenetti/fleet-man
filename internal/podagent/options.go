@@ -22,7 +22,10 @@ const (
 	DefaultRunDir = "/opt/fleet/run"
 
 	pidFileName = ".pod-agent.pid"
-	heldDirName = "held"
+	// filesManifestName lists, in the control directory, the files the
+	// pod's agents wrote there for fleetd (controldir_linux.go).
+	filesManifestName = ".pod-agent.files"
+	heldDirName       = "held"
 
 	// DefaultTmuxDir is where fleet stages its static tmux in a pod whose
 	// image has none (fleetd's install dir and bundle name): bin/ holds

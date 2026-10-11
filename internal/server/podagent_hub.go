@@ -126,8 +126,11 @@ func (h *podAgentHub) run(ctx context.Context) {
 	pool := h.pool()
 	pool.SetInbound(h.inbound)
 	pool.SetDesiredSource(h.sockets)
+	// Never asked with h.mu held: the answers may write the override's
+	// warning, which takes it.
+	sent := h.globals()
 	h.mu.Lock()
-	h.sent = h.globals()
+	h.sent = sent
 	h.mu.Unlock()
 	t := time.NewTicker(h.interval)
 	defer t.Stop()
@@ -154,23 +157,20 @@ func (h *podAgentHub) run(ctx context.Context) {
 
 // globals is the answers for every pod now.
 func (h *podAgentHub) globals() podGlobals {
-	return podGlobals{control: h.svc.hub.hasSubscribers(), agent: h.agentServes()}
+	src, _ := agentsock.CurrentPodSource()
+	return podGlobals{control: h.svc.hub.hasSubscribers(), agent: agentsock.PodAgentUsable(src)}
 }
 
 // sockets is the pool's DesiredSource: which in-pod sockets t's pod binds.
+// The pool asks only for a pod it has a session to, so the override's
+// fallback warning is written here, once, and never by a daemon that serves
+// no pods (whose override may well be a Docker VM's path).
 func (h *podAgentHub) sockets(t kubernetes.PodTarget) podwire.Sockets {
-	g := h.globals()
-	return podwire.Sockets{Control: g.control, SSHAgent: g.agent, MCP: h.fleetMCPOf(t.Fleet)}
-}
-
-// agentServes reports whether the daemon can serve a pod an agent now, and
-// writes the override's fallback warning, once.
-func (h *podAgentHub) agentServes() bool {
-	src, fellBack := agentsock.CurrentPodSource()
-	if fellBack {
+	if _, fellBack := agentsock.CurrentPodSource(); fellBack {
 		h.warnFallback()
 	}
-	return agentsock.PodAgentUsable(src)
+	g := h.globals()
+	return podwire.Sockets{Control: g.control, SSHAgent: g.agent, MCP: h.fleetMCPOf(t.Fleet)}
 }
 
 // warnFallback says, once, that FLEET_SSH_AGENT_SOCK names no socket on the

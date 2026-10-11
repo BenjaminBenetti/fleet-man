@@ -171,6 +171,63 @@ func TestPodAgentHubTellsThePodsOfChanges(t *testing.T) {
 	waitFor(t, "a refresh for the TUI gone", func() bool { return fp.count() == 4 })
 }
 
+// TestPodAgentFallbackWarnsOnlyForPods: a daemon whose FLEET_SSH_AGENT_SOCK
+// is a path only a Docker VM has, and which serves no pods, writes no
+// warning about pods; the first pod asked about gets the one warning. The
+// hub keeps answering throughout: its state listener runs on the hub loop,
+// so a hub stuck on its own lock would stall the whole daemon.
+func TestPodAgentFallbackWarnsOnlyForPods(t *testing.T) {
+	isolateFleetDir(t)
+	t.Setenv(agentsock.EnvOverride, filepath.Join(shortTempDir(t), "vm-only.sock"))
+	svc := newService()
+	h := svc.podAgents
+	var mu sync.Mutex
+	var warns []string
+	h.warn = func(msg string, _ ...any) {
+		mu.Lock()
+		warns = append(warns, msg)
+		mu.Unlock()
+	}
+	warned := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(warns)
+	}
+	fp := &fakePodPool{}
+	h.pool = func() podAgentPool { return fp }
+	h.interval = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); h.run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("the hub did not stop")
+		}
+	})
+	time.Sleep(100 * time.Millisecond)
+	answered := make(chan struct{})
+	go func() {
+		defer close(answered)
+		h.onState(fleetState(false))
+		if n := warned(); n != 0 {
+			t.Errorf("a daemon with no pods warned %d times", n)
+		}
+		h.sockets(podTarget)
+		h.sockets(podTarget)
+	}()
+	select {
+	case <-answered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hub is stuck")
+	}
+	if n := warned(); n != 1 {
+		t.Fatalf("pods asked about: %d warnings, want 1", n)
+	}
+}
+
 // relayPair is a pod agent's session stood in: streams opened on the
 // returned session reach serve as the agent's do.
 func relayPair(t *testing.T, serve func(*podwire.Stream)) *yamux.Session {

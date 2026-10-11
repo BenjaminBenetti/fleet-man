@@ -220,6 +220,53 @@ func TestDesiredStateKeepsTheControlFiles(t *testing.T) {
 	}
 }
 
+// TestALaterAgentRemovesTheFilesAnEarlierOneWrote: the next agent of the pod
+// (a reconnect, a takeover) removes the files an earlier one wrote for
+// fleetd that its first state leaves out (the status mod turned off while
+// the pod had no session), and keeps writing the ones it keeps; files no
+// agent wrote stay.
+func TestALaterAgentRemovesTheFilesAnEarlierOneWrote(t *testing.T) {
+	d := newTestDirs(t)
+	first := startRelayAgent(t, d, nil)
+	status := podwire.ControlFile{Name: "claude-status.json", Mode: 0o644, Data: []byte(`{"live":false}`)}
+	other := podwire.ControlFile{Name: "other.json", Mode: 0o600, Data: []byte(`{}`)}
+	apply(t, first, podwire.DesiredState{Gen: 1, Files: []podwire.ControlFile{status, other}})
+	_ = first.c.Close()
+	select {
+	case <-first.ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first agent did not end")
+	}
+	notFleetds := filepath.Join(d.control, "not-fleetds.txt")
+	if err := os.WriteFile(notFleetds, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	next := startRelayAgent(t, d, nil)
+	other.Data = []byte(`{"n":2}`)
+	if ack := apply(t, next, podwire.DesiredState{Gen: 1, Files: []podwire.ControlFile{other}}); ack.Error != "" {
+		t.Fatalf("ack %+v", ack)
+	}
+	if _, err := os.Lstat(filepath.Join(d.control, status.Name)); !os.IsNotExist(err) {
+		t.Fatalf("a file an earlier agent wrote, which the state leaves out, is still there: %v", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(d.control, other.Name)); string(data) != `{"n":2}` {
+		t.Fatalf("a kept file %q", data)
+	}
+	if _, err := os.Lstat(notFleetds); err != nil {
+		t.Fatalf("a file no agent wrote was removed: %v", err)
+	}
+	if m := mode(t, filepath.Join(d.control, filesManifestName)); !m.IsRegular() || m.Perm() != 0o600 {
+		t.Fatalf("manifest %v", m)
+	}
+	apply(t, next, podwire.DesiredState{Gen: 2})
+	for _, name := range []string{other.Name, filesManifestName} {
+		if _, err := os.Lstat(filepath.Join(d.control, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s is still there with no files wanted: %v", name, err)
+		}
+	}
+}
+
 // TestDesiredStateBindsAReplacedSocketAgain: a socket whose file was removed
 // is bound again; one whose name something else holds fails, once, as an
 // error fleetd writes to fleet.log; ending the session removes the sockets.

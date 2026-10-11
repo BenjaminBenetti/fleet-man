@@ -17,8 +17,8 @@ type DesiredState struct {
 	Gen     uint64  `json:"gen"`
 	Sockets Sockets `json:"sockets"`
 	// Files are the control directory's files fleetd keeps (the status
-	// mod's). A file the agent wrote for an earlier state that this one
-	// leaves out is removed.
+	// mod's). A file the pod's agents wrote for an earlier state that this
+	// one leaves out is removed, by whichever agent gets this one.
 	Files []ControlFile `json:"files,omitempty"`
 }
 
