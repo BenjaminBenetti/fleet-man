@@ -5,6 +5,8 @@ package kubernetes
 import (
 	"context"
 	"errors"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kruntime "k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
@@ -70,6 +73,37 @@ func TestCloneLoadsAVerifiedSource(t *testing.T) {
 	}
 	if c.running || c.srcRec.Gen != 2 || c.srcDisk.Name != handleSTS() || c.srcSpec.Name != names.SpecSecret(handleSTS(), 2) {
 		t.Fatalf("source %+v running %v", c.srcRec, c.running)
+	}
+}
+
+// The clone's record is the source's under the clone's name: every field
+// is filled (a field the record gains must be carried or set here, or a
+// clone loses it, as it once lost the published ports), the lists are the
+// clone's own.
+func TestCloneRecordCarriesTheSources(t *testing.T) {
+	sts, rec := cloneSourceObjects(t, nil)
+	rec.Strategy, rec.RemoteUser, rec.WorkspaceFolder, rec.NonRoot = "push", "vscode", "/workspaces/web", true
+	rec.Created = time.Unix(1700000000, 0)
+	rec.Ports = []backend.PublishedPort{{HostIP: "127.0.0.1", HostPort: 3000, ContainerPort: 3000}}
+	c := cloneRig(t, sts, rec)
+	c.srcRec, c.gen = rec, rec.Gen
+	got := c.cloneRecord(&podspec.Objects{StatefulSet: sts})
+	v := reflect.ValueOf(got)
+	for i := 0; i < v.NumField(); i++ {
+		switch name := v.Type().Field(i).Name; name {
+		case "V", "StatefulSetUID": // SaveInstanceRecord's, and the applied StatefulSet's
+		default:
+			if v.Field(i).IsZero() {
+				t.Errorf("the clone's record has no %s", name)
+			}
+		}
+	}
+	if got.Key != "dest2345" || got.StatefulSet != c.id.sts || got.Instance != "copy" || !slices.Equal(got.Ports, rec.Ports) {
+		t.Fatalf("clone record %+v", got)
+	}
+	got.Ports[0].HostPort, got.ImageDigests[0] = 1, "x"
+	if rec.Ports[0].HostPort != 3000 || rec.ImageDigests[0] != "sha256:aa" {
+		t.Fatal("the clone's record shares the source's lists")
 	}
 }
 

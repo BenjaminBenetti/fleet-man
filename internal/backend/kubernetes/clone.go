@@ -651,16 +651,25 @@ func (c *cloning) diskRefused(pvc string) func(context.Context) error {
 	}
 }
 
+// cloneRecord is fleetd's record of the clone's pod: the source's (its
+// image, user, creation time and published ports: its pod template is the
+// source's), under the clone's name, key and spec hash. StatefulSetUID comes
+// once the StatefulSet is applied.
+func (c *cloning) cloneRecord(o *podspec.Objects) InstanceRecord {
+	src := c.srcRec
+	return InstanceRecord{
+		Cluster: c.id.cluster, Namespace: c.ns, Key: c.id.key, Fleet: c.id.fleet, Instance: c.id.name,
+		StatefulSet: c.id.sts, Gen: c.gen, SpecHash: podspec.SpecHash(&o.StatefulSet.Spec.Template.Spec),
+		Image: src.Image, ImageDigests: slices.Clone(src.ImageDigests), Strategy: src.Strategy, RemoteUser: src.RemoteUser,
+		WorkspaceFolder: src.WorkspaceFolder, NonRoot: src.NonRoot, Created: src.Created, Ports: slices.Clone(src.Ports),
+	}
+}
+
 // startClone starts the clone's pod and waits for it, verified, with its
 // agent.
 func (c *cloning) startClone(ctx context.Context, o *podspec.Objects) (*backend.UpResult, error) {
 	src := c.srcRec
-	rec := InstanceRecord{
-		Cluster: c.id.cluster, Namespace: c.ns, Key: c.id.key, Fleet: c.id.fleet, Instance: c.id.name,
-		StatefulSet: c.id.sts, Gen: c.gen, SpecHash: podspec.SpecHash(&o.StatefulSet.Spec.Template.Spec),
-		Image: src.Image, ImageDigests: slices.Clone(src.ImageDigests), Strategy: src.Strategy, RemoteUser: src.RemoteUser,
-		WorkspaceFolder: src.WorkspaceFolder, NonRoot: src.NonRoot, Created: src.Created,
-	}
+	rec := c.cloneRecord(o)
 	if images := c.env.Images; images != nil {
 		if _, err := images.Share(c.id.cluster, src.Key, c.id.key); err != nil {
 			c.warn(ctx, fmt.Sprintf("recording the clone's use of the source's image: %v", err))
