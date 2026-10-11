@@ -77,18 +77,22 @@ func caseCloneStopped(c *C) {
 }
 
 // churnLoop is a writer the consistency case runs in the source while it is
-// cloned: commits in the workspace's repo and appends to a file, as fast as
-// it can, detached from the exec that starts it.
+// cloned: commits in a repo in $HOME and appends to a file, as fast as it
+// can, detached from the exec that starts it. $HOME is on the instance's root
+// filesystem, which a clone takes at one point in time (docker commit pauses
+// the container); a devcontainer's workspace is a host directory a clone
+// copies live.
 const churnLoop = `set -e
+cd "$HOME"
 git init -q churn-repo
 cd churn-repo
 git -c user.name=c -c user.email=c@example.invalid commit -q --allow-empty -m 0
 setsid sh -c 'n=0; while [ ! -e ../churn.stop ]; do n=$((n+1)); echo "$n" >> ../churn.log; echo "$n" > f; git add f; git -c user.name=c -c user.email=c@example.invalid commit -qm "$n" || true; done' >/dev/null 2>&1 </dev/null &`
 
 // caseCloneConsistent: an instance whose pod can be held still (privileged,
-// as docker-in-docker's are) clones consistently while it writes: the clone's
-// git repo passes fsck and its dpkg database --audit, wherever the copy was
-// cut. The source runs on.
+// as docker-in-docker's are) clones consistently while it writes: the git
+// repo it commits to in $HOME passes fsck in the clone, and the clone's dpkg
+// database --audit, wherever the copy was cut. The source runs on.
 func caseCloneConsistent(c *C) {
 	src := c.NewInstance(Fixture{Privileged: true})
 	if !src.B.SupportsClone() {
@@ -101,18 +105,18 @@ func caseCloneConsistent(c *C) {
 	leaveState(c, src, marker)
 	c.Sh(src, churnLoop)
 	c.Eventually("the source's writer to commit", lifecycleTimeout, func() (bool, string) {
-		n := c.Sh(src, `git -C churn-repo rev-list --count HEAD 2>/dev/null || echo 0`)
+		n := c.Sh(src, `git -C "$HOME/churn-repo" rev-list --count HEAD 2>/dev/null || echo 0`)
 		return n != "0" && n != "1", n + " commits"
 	})
 
 	dest := cloneOf(c, src)
 	waitStatus(c, dest, dest.ID(), backend.LiveStatusRunning, lifecycleTimeout)
-	c.Sh(src, `touch churn.stop`)
+	c.Sh(src, `touch "$HOME/churn.stop"`)
 	checkState(c, dest, marker, "a clone of an instance that wrote throughout")
-	if r := c.Exec(dest, ShArgv("git -C churn-repo fsck --full --no-progress"), nil); r.Err != nil {
+	if r := c.Exec(dest, ShArgv(`git -C "$HOME/churn-repo" fsck --full --no-progress`), nil); r.Err != nil {
 		c.Errorf("git fsck of the repo the source committed to throughout the clone: %s", r)
 	}
-	if got := c.Sh(dest, `git -C churn-repo rev-list --count HEAD`); got == "" || got == "0" {
+	if got := c.Sh(dest, `git -C "$HOME/churn-repo" rev-list --count HEAD`); got == "" || got == "0" {
 		c.Errorf("the clone's repo has %q commits", got)
 	}
 	if got := src.B.Status(src.ID()); got != backend.LiveStatusRunning {
