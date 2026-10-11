@@ -70,7 +70,8 @@ func kubePodNote(reason string) string {
 
 // kubeRunningNotes are the notes of a running Kubernetes instance's row, in
 // the order they show: the pod, the node it is moving off, the agent, the
-// cluster's health, the last restart. agentUnknown reports whether the
+// cluster's health, the last restart, a paused sync of the fleet's shared
+// folders. agentUnknown reports whether the
 // agent indicator and the stats are to be drawn unknown (the captures keep
 // failing, or the cluster's health says nothing answers).
 func (m *model) kubeRunningNotes(inst *fleet.Instance, rt *fleetgrpc.InstanceRuntime) (notes []string, agentUnknown bool) {
@@ -98,6 +99,7 @@ func (m *model) kubeRunningNotes(inst *fleet.Instance, rt *fleetgrpc.InstanceRun
 	}
 	add(cluster)
 	add(kubeRowNote(rt))
+	add(shareSyncNote(rt))
 	remote := fleetclient.IsRemote()
 	for _, p := range k.GetPublishedPorts() {
 		add(kubePortNote(p, remote))
