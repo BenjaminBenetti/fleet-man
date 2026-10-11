@@ -26,7 +26,7 @@ func (*kubeManager) startImages(context.Context, bool) []remote.Option { return 
 
 func (*kubeManager) attachTunnel(*remote.Manager) {}
 
-func (*kubeManager) deployTargets(bool) []fleet.DeployTargetOption { return nil }
+func (*kubeManager) deployTargets() []fleet.DeployTargetOption { return nil }
 
 func (*kubeManager) defaultCluster(string) string { return "" }
 

@@ -165,11 +165,15 @@ func TestValidateTemplateCreate(t *testing.T) {
 	if err := ValidateTemplateCreate("file:///home/me/proj", "", BackendDevcontainer); err != nil {
 		t.Fatalf("valid template: %v", err)
 	}
+	// A cluster's seed takes the copied workspace into the pod.
+	if err := ValidateTemplateCreate("file:///home/me/proj", "", BackendKubernetes); err != nil {
+		t.Fatalf("template on a cluster: %v", err)
+	}
 	if err := ValidateTemplateCreate("file:///home/me/proj", "main", BackendDevcontainer); err == nil || !strings.Contains(err.Error(), "branch") {
 		t.Fatalf("template + branch: want branch error, got %v", err)
 	}
 	for _, b := range []BackendType{BackendCoder, BackendCodespaces} {
-		if err := ValidateTemplateCreate("file:///home/me/proj", "", b); err == nil || !strings.Contains(err.Error(), "devcontainer") {
+		if err := ValidateTemplateCreate("file:///home/me/proj", "", b); err == nil || !strings.Contains(err.Error(), "devcontainer or kubernetes") {
 			t.Fatalf("template + %s: want backend error, got %v", b, err)
 		}
 	}

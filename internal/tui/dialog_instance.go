@@ -610,8 +610,8 @@ type addInstanceState struct {
 	editing     bool
 	// template is set when the target fleet's remote is a file:// template
 	// dir: the branch row is disabled and the daemon offers only the
-	// devcontainer target (the one that provisions from a local workspace
-	// copy).
+	// targets that provision from a workspace copied on its host
+	// (devcontainer and the clusters).
 	template bool
 }
 

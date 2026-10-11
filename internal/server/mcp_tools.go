@@ -395,7 +395,7 @@ type FleetUpInput struct {
 	Instance string `json:"instance" jsonschema:"instance name"`
 	Remote   string `json:"remote,omitempty" jsonschema:"git remote URL, or file:///abs/dir naming a local template directory on the daemon host that is copied into each instance instead of cloned; required only when creating the first instance of a new fleet"`
 	Branch   string `json:"branch,omitempty" jsonschema:"git branch to check out; defaults to the repository's default branch. Not allowed for a file:// template fleet"`
-	Backend  string `json:"backend,omitempty" jsonschema:"backend type: devcontainer, coder, codespaces or kubernetes; omit to use the daemon's remembered default deploy target (the one last picked in a TUI New instance dialog, else devcontainer). A file:// template fleet always uses devcontainer"`
+	Backend  string `json:"backend,omitempty" jsonschema:"backend type: devcontainer, coder, codespaces or kubernetes; omit to use the daemon's remembered default deploy target (the one last picked in a TUI New instance dialog, else devcontainer). A file:// template fleet runs on devcontainer or kubernetes only"`
 	Cluster  string `json:"cluster,omitempty" jsonschema:"Kubernetes connection to run the instance on: its id, name or kube context (see fleet_cluster_list); implies the kubernetes backend. Omitted with backend kubernetes: the remembered or only connection"`
 	Wait     bool   `json:"wait,omitempty" jsonschema:"block until provisioning completes instead of returning a job handle immediately; provisioning takes minutes, so only set this with a generous tool-call timeout"`
 }

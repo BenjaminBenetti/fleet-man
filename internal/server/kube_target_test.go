@@ -58,8 +58,8 @@ func TestRememberedDefaultKeepsItsCluster(t *testing.T) {
 }
 
 // A remembered Kubernetes default, cluster and all, is what an unspecified
-// create gets; a template fleet, which no cluster can take, still gets
-// devcontainer.
+// create gets, in a template fleet too (its copied workspace seeds the pod);
+// a remembered Coder default narrows to devcontainer there.
 func TestRememberedKubernetesDefaultIsUsed(t *testing.T) {
 	isolateFleetDir(t)
 	stubDaemonHost(t, "h", "devcontainer")
@@ -70,8 +70,14 @@ func TestRememberedKubernetesDefaultIsUsed(t *testing.T) {
 	if def.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES || def.GetKubeCluster() != "minikube" {
 		t.Fatalf("default target = %v, want kubernetes on minikube", def)
 	}
+	if got := defaultTarget("file:///srv/template"); got != (fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "minikube"}) {
+		t.Fatalf("a template fleet's default = %+v, want the remembered cluster", got)
+	}
+	if err := state.SaveConfig(&state.Config{DefaultBackend: string(fleet.BackendCoder)}); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
 	if got := defaultTarget("file:///srv/template"); got != (fleet.DeployTarget{Backend: fleet.BackendDevcontainer}) {
-		t.Fatalf("a template fleet's default = %+v, want devcontainer", got)
+		t.Fatalf("a template fleet's default with coder remembered = %+v, want devcontainer", got)
 	}
 }
 

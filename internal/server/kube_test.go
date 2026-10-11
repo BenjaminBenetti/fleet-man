@@ -758,11 +758,20 @@ func TestKubeDeployTargets(t *testing.T) {
 	if got = clusterTargets(); got[0].Available || got[0].Reason != "docker not found where fleetd runs" {
 		t.Errorf("without docker: %+v", got[0])
 	}
-	// Template fleets copy their template into the instance: not on a pod.
+	// Template fleets copy their template on the daemon host, which the
+	// seed takes into the pod: every cluster is listed for them too, and
+	// only Coder and Codespaces are dropped.
+	var templateClusters []string
 	for _, o := range f.svc.deployTargetOptions("file:///srv/template") {
-		if o.Target.Backend == fleet.BackendKubernetes {
+		switch o.Target.Backend {
+		case fleet.BackendKubernetes:
+			templateClusters = append(templateClusters, o.Target.KubeCluster)
+		case fleet.BackendCoder, fleet.BackendCodespaces:
 			t.Errorf("a template fleet lists %+v", o)
 		}
+	}
+	if len(templateClusters) != 2 || templateClusters[0] != ready || templateClusters[1] != broken {
+		t.Errorf("a template fleet's cluster targets = %v, want [%s %s]", templateClusters, ready, broken)
 	}
 	// Over the wire too.
 	reply, err := f.svc.ListDeployTargets(context.Background(), &fleetgrpc.ListDeployTargetsRequest{})

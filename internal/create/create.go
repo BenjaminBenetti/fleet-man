@@ -29,8 +29,9 @@ import (
 //
 // A file:// remote is a local TEMPLATE directory (fleet.IsTemplateRemote):
 // instead of cloning, its contents are copied into the workspace verbatim.
-// Only the devcontainer backend can do that (coder and codespaces provision
-// from a git URL on their own side), and a branch has no meaning for a copy.
+// Only the devcontainer and kubernetes backends can do that (coder and
+// codespaces provision from a git URL on their own side), and a branch has no
+// meaning for a copy.
 func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backendType fleet.BackendType) (err error) {
 	return RunContext(context.Background(), fleetName, instanceName, remoteURL, branch, verbose, backendType)
 }

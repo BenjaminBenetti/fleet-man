@@ -522,8 +522,9 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		}
 		// Resolved once the remote is known: an UNSPECIFIED target takes the
 		// remembered default, which a template fleet narrows to devcontainer
-		// (the only target that can consume a copied directory), as
-		// ListDeployTargets does. An explicit coder/codespaces still fails fast.
+		// or a cluster (the targets that can consume a copied directory), as
+		// ListDeployTargets does, so a remembered cluster default is kept. An
+		// explicit coder/codespaces still fails fast.
 		target = s.resolveTarget(req, remote)
 		// Refused before the record exists: a backend a new instance can't
 		// use would otherwise leave a FAILED record behind.
@@ -596,8 +597,8 @@ func remoteKind(remote string) string {
 
 // validateTemplateRemote fails a create FAST — before the StatusCreating record
 // exists — when the fleet's remote is a file:// template and the request asks
-// for something a copied directory cannot honor (a branch, a non-devcontainer
-// backend), or when the template directory is missing on THIS host. create.Run
+// for something a copied directory cannot honor (a branch, a Coder or
+// Codespaces backend), or when the template directory is missing on THIS host. create.Run
 // re-checks the same rules; doing it here turns a would-be failed instance
 // record into an immediate RPC error for `fleet up` / the TUI / MCP.
 func validateTemplateRemote(remote, branch string, backendType fleet.BackendType, wsDir string) error {

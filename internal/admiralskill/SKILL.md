@@ -91,7 +91,7 @@ surfaces as a tool error.
   is normally a git URL, but `file:///abs/dir` names a local TEMPLATE directory
   on the daemon host instead: fleet copies it into each new instance rather
   than cloning (a template fleet takes no `branch` and only the `devcontainer`
-  backend).
+  or `kubernetes` backend).
   `backend` selects where it runs: `devcontainer`, `coder`, `codespaces`, or
   `kubernetes` (a pod on one of the daemon's cluster connections).
   `cluster` names that connection by id, name or kube context (see

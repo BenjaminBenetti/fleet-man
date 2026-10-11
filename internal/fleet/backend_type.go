@@ -46,3 +46,9 @@ func ValidateBackendType(backendType BackendType) error {
 	_, err := ParseBackendType(string(backendType))
 	return err
 }
+
+// CopiesTemplates reports whether instances of this backend type can be
+// provisioned from a file:// template directory (DeployTarget.CopiesTemplates).
+func (t BackendType) CopiesTemplates() bool {
+	return t == BackendDevcontainer || t == BackendKubernetes
+}
