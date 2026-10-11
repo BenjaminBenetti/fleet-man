@@ -79,6 +79,9 @@ func RunJob(ctx context.Context, specPath string, log io.Writer) int {
 	case OpSeed:
 		run := &seedRun{spec: spec, seed: *spec.Seed, srv: srv, logf: logf, stall: stall}
 		out = run.run(ctx)
+	case OpClone:
+		run := &cloneRun{spec: spec, clone: *spec.Clone, srv: srv, logf: logf, stall: stall}
+		out = run.run(ctx)
 	case OpRollback:
 		out = outcomeOf(rollbackGeneration(spec.PVC, spec.Gen), spec.PVC)
 	case OpCommit:
