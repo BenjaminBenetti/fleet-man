@@ -11,15 +11,9 @@ setup_test
 # The instance-less fleet sorts before the fixture fleet, so a reconcile that
 # wrongly took it on would start its services before the fixture fleet's.
 idle_fleet="itest-a-empty"
-if itest_backend_is kubernetes; then
-  # Shared Buildkit does not run on a cluster yet (it needs per-instance
-  # TLS); the caches are Deployments in the connection's namespace.
-  services='"debCacheServer": true, "imageCacheServer": true'
-  wanted="debcache imagecache"
-else
-  services='"buildkitServer": true, "debCacheServer": true, "imageCacheServer": true'
-  wanted="buildkit debcache imagecache"
-fi
+# On a cluster each server is a Deployment in the connection's namespace.
+services='"buildkitServer": true, "debCacheServer": true, "imageCacheServer": true'
+wanted="buildkit debcache imagecache"
 cat > "${HOME}/.fleet/state.json" <<STATE
 {
   "fleets": {
