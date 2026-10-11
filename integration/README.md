@@ -229,6 +229,19 @@ StorageClass of csi-driver-nfs (`nfs.csi.k8s.io`): a kind cluster with two
 workers, an NFS server and the driver installed (its manifests, and
 `deploy/example/nfs-provisioner` for the server, on a tmpfs volume: an overlay
 folder cannot be exported); elsewhere it passes saying it did not run.
+`tests/825_k8s_attach_limit.sh` (the fleet-size cap of a node's volume attach
+limit, and the instance past it Pending with the limit named) needs a
+csi-hostpath driver that takes few volumes per node:
+`clusters/csi-hostpath-limit.sh <context> [limit]` sets one on a throwaway
+cluster with the driver (in the QA container,
+`FLEET_QA_MINIKUBE_FLAGS="--memory=6g --cpus=4 --addons=csi-hostpath-driver"`,
+then `clusters/csi-hostpath-limit.sh minikube 3`); elsewhere it passes saying
+it did not run. `tests/826_k8s_share_move.sh` (a stopped fleet's share moved
+to a new shared StorageClass) needs a second class to move the share to
+(`FLEET_ITEST_SHARE_TO_CLASS`, else an `nfs.csi.k8s.io` class,
+`fleet-shared-path` or a `hostpath.csi.k8s.io` one): on the minikube above it
+moves `standard` to `csi-hostpath-sc`, on the NFS kind cluster to the NFS
+class (multi-node mode).
 
 ## Prerequisites
 
