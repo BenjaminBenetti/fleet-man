@@ -451,6 +451,11 @@ func (m *model) startKubeTest(key, id string, req *fleetgrpc.TestKubeClusterRequ
 	if req.GetDeep() {
 		timeout = kubeDeepTestTimeout
 	}
+	// As the daemon bounds its run: longer where a class whose volumes are
+	// large may be tested (one named, or the connection's own shared class).
+	if len(req.GetStorageClasses()) > 0 || req.GetTestStorage() || m.kubeStatus(id).GetCluster().GetSharedStorageClass() != "" {
+		timeout += kubeLargeStorageTimeout
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	run := &kubeTestRun{key: key, id: id, gen: m.watchGen, cancel: cancel}
 	if m.kubeRuns == nil {

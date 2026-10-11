@@ -36,6 +36,17 @@ type mcpKubeCluster struct {
 	DeepCheckedAt   string         `json:"deep_checked_at,omitempty" jsonschema:"when the last deep test (fleet_cluster_test deep) finished"`
 	Settings        map[string]any `json:"settings" jsonschema:"every field the connection sets, by its kube.proto KubeCluster field name; an absent field takes its default"`
 	Capabilities    map[string]any `json:"capabilities,omitempty" jsonschema:"what the last full check found (version, admission, storage classes, nodes, quotas, ...), by kube.proto KubeCapabilities field name"`
+	// ShareMigrations are the fleets whose share moves to the shared class.
+	ShareMigrations []mcpShareMigration `json:"share_migrations,omitempty" jsonschema:"fleets whose share is moving to the connection's shared StorageClass (it changed): each moves with a one-time copy once its instances on the cluster are stopped"`
+}
+
+// mcpShareMigration is one fleet's share moving to another StorageClass.
+type mcpShareMigration struct {
+	Fleet     string `json:"fleet"`
+	FromClass string `json:"from_class,omitempty" jsonschema:"the class the share is in (empty: the cluster's default)"`
+	ToClass   string `json:"to_class,omitempty" jsonschema:"the class it moves to (empty: the cluster's default)"`
+	State     string `json:"state" jsonschema:"waiting (instances still run), moving, failed (tried again later) or blocked"`
+	Detail    string `json:"detail,omitempty"`
 }
 
 // mcpKubeCheck is one preflight check.
@@ -58,6 +69,9 @@ func toMCPKubeCluster(st *fleetgrpc.KubeClusterStatus) (mcpKubeCluster, error) {
 	}
 	if ts := st.GetDeepCheckedAt(); ts != nil {
 		out.DeepCheckedAt = ts.AsTime().UTC().Format(time.RFC3339)
+	}
+	for _, m := range st.GetShareMigrations() {
+		out.ShareMigrations = append(out.ShareMigrations, mcpShareMigration{Fleet: m.GetFleet(), FromClass: m.GetFromClass(), ToClass: m.GetToClass(), State: m.GetState(), Detail: m.GetDetail()})
 	}
 	var err error
 	if out.Settings, err = protoObject(c); err != nil {
@@ -128,6 +142,8 @@ type FleetClusterTestInput struct {
 	Deep    bool   `json:"deep,omitempty" jsonschema:"also run the throwaway-pod probes (a pod pulls through the gateway; pods test NetworkPolicy enforcement and reach to 169.254.169.254); takes minutes"`
 	// StorageClasses run the multi-node storage test now.
 	StorageClasses []string `json:"storage_classes,omitempty" jsonschema:"StorageClasses to run the multi-node storage test on now (an RWX volume mounted by pods on two nodes; about a minute each), cached result or not; naming a class whose volumes have a large minimum size (Filestore, 1Ti) is the consent Auto asks for before it tests one"`
+	// TestStorage runs the multi-node test again on the share's classes.
+	TestStorage bool `json:"test_storage,omitempty" jsonschema:"run the multi-node storage test again on every class a fleet share could use (Auto's candidates, or the connection's shared class), cached results or not"`
 }
 
 type FleetClusterTestOutput struct {
@@ -148,7 +164,7 @@ func (s *service) mcpClusterTest(ctx context.Context, _ *mcp.CallToolRequest, in
 		return nil, FleetClusterTestOutput{}, err
 	}
 	c := &streamCollector[fleetgrpc.TestKubeClusterEvent]{ctx: ctx}
-	if err := s.TestKubeCluster(&fleetgrpc.TestKubeClusterRequest{Id: st.GetCluster().GetId(), Deep: in.Deep, StorageClasses: in.StorageClasses}, c); err != nil {
+	if err := s.TestKubeCluster(&fleetgrpc.TestKubeClusterRequest{Id: st.GetCluster().GetId(), Deep: in.Deep, StorageClasses: in.StorageClasses, TestStorage: in.TestStorage}, c); err != nil {
 		return nil, FleetClusterTestOutput{}, mcpErr(err)
 	}
 	var result *fleetgrpc.KubeClusterStatus

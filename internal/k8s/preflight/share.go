@@ -50,7 +50,8 @@ const LimitedCopyTier = "logins may need repeating"
 const LimitedOneNode = "each fleet on one node"
 
 // OneNodeWarning is the capability line of single-node mode on a cluster
-// of several nodes.
+// of several nodes; the fleet-size cap follows it when known ("... (cap
+// 6)").
 const OneNodeWarning = "Each fleet's instances run together on one node"
 
 // EnvMultiNode set to "off" in the daemon's environment keeps new fleet
@@ -105,15 +106,23 @@ func (r *run) listedClass(name string) (*fleetgrpc.KubeStorageClass, string, boo
 	return nil, name, false
 }
 
-// sharedStorage reports the share mode and its class.
+// sharedStorage reports the share mode and its class, then the attach
+// limits (whose fleet-size cap is single-node mode's).
 func (r *run) sharedStorage(ctx context.Context) {
+	r.sharedStorageMode(ctx)
+	r.reportAttachLimits()
+}
+
+// sharedStorageMode decides the share mode and its class.
+func (r *run) sharedStorageMode(ctx context.Context) {
 	r.running(CheckSharedStorage)
 	// The deep test's probes run this again with their word: what an
 	// earlier evaluation limited the connection by goes, as its check's
 	// result does.
 	r.unlimit(LimitedCopyTier, limitedSharesUnavailable, limitedSharesImmediate, LimitedOneNode)
-	r.res.Warnings = slices.DeleteFunc(r.res.Warnings, func(w string) bool { return w == OneNodeWarning })
+	r.res.Warnings = slices.DeleteFunc(r.res.Warnings, func(w string) bool { return strings.HasPrefix(w, OneNodeWarning) })
 	r.caps.ShareRefused, r.caps.SharedStorageClass, r.caps.ShareMode = "", "", ""
+	r.caps.SingleNodeFleetCap, r.caps.SingleNodeFleetCapReason = 0, ""
 	r.testStorage(ctx, false)
 
 	picked := r.t.Cluster.SharedStorageClass
@@ -189,12 +198,18 @@ func (r *run) singleNodeMode(ctx context.Context) {
 	picked := r.t.Cluster.SharedStorageClass
 	class, name, ok := r.shareClass()
 	r.caps.SharedStorageClass = name
+	warning, capNote := OneNodeWarning, ""
+	if fits, reason, known := r.fleetCap(); known {
+		r.caps.SingleNodeFleetCap, r.caps.SingleNodeFleetCapReason = int32(fits), reason
+		warning += fmt.Sprintf(" (cap %d)", fits)
+		capNote = "; cap " + FleetCapLine(int32(fits), "")
+	}
 	// On a cluster of several nodes, single-node mode is a degradation:
 	// say why no class gave multi-node mode.
 	why, fix := "", ""
 	if r.multiNode {
 		r.limit(LimitedOneNode)
-		r.warning(OneNodeWarning)
+		r.warning(warning)
 		why, fix = r.whyNotMultiNode(picked)
 	}
 	if !ok {
@@ -202,7 +217,7 @@ func (r *run) singleNodeMode(ctx context.Context) {
 		if name != "" {
 			what = "class " + name
 		}
-		detail := "single-node mode: each fleet's instances run together on the node holding its share (" + what + ")"
+		detail := "single-node mode: each fleet's instances run together on the node holding its share (" + what + ")" + capNote
 		if why != "" {
 			r.warn(CheckSharedStorage, why+"; "+detail, fix)
 			return
@@ -219,11 +234,11 @@ func (r *run) singleNodeMode(ctx context.Context) {
 	} else {
 		traits = append(traits, "not expandable: a nearly full share only warns")
 	}
-	detail := fmt.Sprintf("single-node mode: each fleet's instances run together on the node holding its share (%s, %s)", class.Name, strings.Join(traits, ", "))
+	detail := fmt.Sprintf("single-node mode: each fleet's instances run together on the node holding its share (%s, %s)%s", class.Name, strings.Join(traits, ", "), capNote)
 	if picked == "" && why != "" {
 		detail = "auto → " + class.Name + ": " + detail
 	}
-	tc := topology.Class{Name: class.Name, Immediate: class.BindingMode == string(storagev1.VolumeBindingImmediate), NodeLocal: class.NodeLocal}
+	tc := topology.Class{Name: class.Name, Immediate: class.BindingMode == string(storagev1.VolumeBindingImmediate), NodeLocal: class.NodeLocal, TopologyFree: class.TopologyFree}
 	if tc.Immediate {
 		cctx, cancel := call(ctx)
 		if sc, err := r.t.Client.StorageV1().StorageClasses().Get(cctx, class.Name, metav1.GetOptions{}); err == nil {
@@ -231,7 +246,7 @@ func (r *run) singleNodeMode(ctx context.Context) {
 		}
 		cancel()
 	}
-	if problem := topology.ImmediateProblem(tc, len(r.caps.Nodes)); problem != "" {
+	if problem := topology.ImmediateProblem(tc, len(r.usableNodes())); problem != "" {
 		if why != "" {
 			detail = why + "; " + detail
 		}

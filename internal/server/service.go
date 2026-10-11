@@ -75,6 +75,9 @@ type service struct {
 	// and until a fleet has an instance on a cluster). Started by the serve
 	// loop; flushed and closed by the shutdown (shareFlush).
 	shareSync *shareSync
+	// shareMoves moves fleets' shares to their connection's shared
+	// StorageClass once it changed, each once its fleet is stopped there.
+	shareMoves *kubeShareMoves
 
 	// sshListen serves the token-gated gRPC server on a loopback port while
 	// remote fleet is enabled in SSH mode (sshlisten.go); sshTunnels maintains
@@ -172,7 +175,8 @@ func newService() *service {
 	svc.podAgents = newPodAgentHub(svc)
 	svc.kubeRecovery = newKubeRecovery(svc)
 	svc.shareSync = newShareSync(svc)
-	svc.hub.stateListeners = append(svc.hub.stateListeners, svc.kubePods.onState, svc.podAgents.onState, svc.shareSync.onState)
+	svc.shareMoves = newKubeShareMoves(svc)
+	svc.hub.stateListeners = append(svc.hub.stateListeners, svc.kubePods.onState, svc.podAgents.onState, svc.shareSync.onState, svc.shareMoves.onState)
 	// The in-flight jobs and their current steps are pushed over Watch. The
 	// set is taken on the hub loop, so pushes land in the order they happen
 	// and the last one is always current.

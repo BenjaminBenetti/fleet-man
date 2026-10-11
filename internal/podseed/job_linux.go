@@ -91,6 +91,9 @@ func RunJob(ctx context.Context, specPath string, log io.Writer) int {
 		out = toolOutcome(spec.PVC)
 	case OpSeedCache:
 		out = outcomeOf(trimSeedCache(spec.PVC, spec.Gen, spec.Cache), spec.PVC)
+	case OpShareCopy:
+		run := &shareCopyRun{spec: spec, copy: *spec.ShareCopy, srv: srv, logf: logf}
+		out = run.run(ctx)
 	}
 
 	term := jobboot.Termination{OK: out.err == nil, SHA256: out.sha, Bytes: out.bytes}

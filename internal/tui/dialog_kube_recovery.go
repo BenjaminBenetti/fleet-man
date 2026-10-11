@@ -83,6 +83,21 @@ var kubeCodeFixes = map[kubeerr.Code]kubeFix{
 	kubeerr.Unsupported.Narrow("dood-needs-privileged"): {"allow_privileged", "Allow privileged pods (cluster settings)"},
 }
 
+// kubeAttachLimitFix fixes an instance the scheduler keeps off a node whose
+// volume attach limit its fleet has reached (in single-node mode the
+// fleet's disks and share all attach there): a shared class that passes the
+// multi-node test spreads the fleet across nodes.
+var kubeAttachLimitFix = kubeFix{"shared_storage_class", "Switch the shared storage class (cluster storage)"}
+
+// fix is the dialog's fix: an unschedulable instance whose node's volume
+// attach limit is reached gets kubeAttachLimitFix, others fixFor's.
+func (d *kubeRecoveryState) fix() (kubeFix, bool) {
+	if d.code.Is(kubeerr.Unschedulable) && strings.Contains(d.detail, "volume attach limit") {
+		return kubeAttachLimitFix, true
+	}
+	return fixFor(d.code)
+}
+
 // fixFor is the fix of code: its own, else its class's.
 func fixFor(code kubeerr.Code) (kubeFix, bool) {
 	if fix, ok := kubeCodeFixes[code]; ok {
@@ -139,7 +154,7 @@ func (fleetPage *fleetPage) openKubeRecoveryForRefusal(fleetName, cluster string
 // actions are the dialog's buttons, in order.
 func (d *kubeRecoveryState) actions() []kubeRecoveryAction {
 	var out []kubeRecoveryAction
-	if fix, ok := fixFor(d.code); ok && fix.label != "" && d.cluster != "" {
+	if fix, ok := d.fix(); ok && fix.label != "" && d.cluster != "" {
 		out = append(out, kubeRecoverySettings)
 	}
 	if d.inst != "" {
@@ -168,7 +183,7 @@ func (d *kubeRecoveryState) focus(a kubeRecoveryAction) {
 func (d *kubeRecoveryState) actionLabel(a kubeRecoveryAction) string {
 	switch a {
 	case kubeRecoverySettings:
-		fix, _ := fixFor(d.code)
+		fix, _ := d.fix()
 		return "[ " + fix.label + " ]"
 	case kubeRecoveryRetry:
 		return "[ Retry (rebuild) ]"
@@ -245,7 +260,7 @@ func (fleetPage *fleetPage) runKubeRecovery(m *model, a kubeRecoveryAction) tea.
 	fleetPage.mode = viewNormal
 	switch a {
 	case kubeRecoverySettings:
-		fix, _ := fixFor(d.code)
+		fix, _ := d.fix()
 		return m.openKubeEditorAt(d.cluster, fix.field)
 	case kubeRecoveryLogs:
 		inst := fleetPage.recoveryInstance(m)
@@ -350,5 +365,5 @@ func (m *model) openKubeEditorAt(id, field string) tea.Cmd {
 		}
 	}
 	page.kubeDialog = editor
-	return cmd
+	return tea.Batch(cmd, editor.loadUsage())
 }

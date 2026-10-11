@@ -201,6 +201,7 @@ func (rb *rebuilding) run(ctx context.Context) (*backend.UpResult, error) {
 	if err := rb.connect(ctx); err != nil {
 		return nil, rb.unchanged(err)
 	}
+	defer rb.releaseMoveHolds()
 	if err := rb.prepare(ctx); err != nil {
 		return nil, rb.unchanged(err)
 	}

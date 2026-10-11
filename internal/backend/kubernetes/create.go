@@ -169,6 +169,9 @@ type creation struct {
 	// keptDiskClass is the StorageClass of the disk a rebuild keeps (""
 	// for a new disk: diskClass resolves it).
 	keptDiskClass string
+	// moveHolds hold off a move of the fleet's share until the job ends
+	// (shareMoveGate; releaseMoveHolds).
+	moveHolds []func()
 }
 
 // what is the job, for its messages.
@@ -183,6 +186,7 @@ func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
 	if err := c.connect(ctx); err != nil {
 		return nil, err
 	}
+	defer c.releaseMoveHolds()
 	if err := c.prepareShare(ctx); err != nil {
 		return nil, err
 	}
@@ -333,6 +337,32 @@ func (c *creation) build(ctx context.Context, cfg *devcli.Config) (*built, error
 	return &built{capture: capture, del: del}, nil
 }
 
+// pendingFacts is what explains the create's pods kept unscheduled.
+func (c *creation) pendingFacts(ctx context.Context) PendingFacts {
+	f := PendingFacts{Capabilities: c.facts.Capabilities, Cluster: c.rec, SingleNode: c.share.modeOf() == topology.SingleNode}
+	if f.SingleNode && c.p != nil {
+		// The fleet's instances that want to run, this one among them
+		// (its StatefulSet is not made before its seed ran).
+		n, found := c.p.groupWanting(ctx, c.id.cluster, names.FleetHash(c.daemonID, c.id.cluster, c.id.fleet), c.id.sts)
+		if !found {
+			n++
+		}
+		f.Instances = n
+	}
+	return f
+}
+
+// reportPending says in the provisioning log what the scheduler keeps the
+// create's pod (step's) waiting on, the node's room named when that is it.
+func (c *creation) reportPending(step fleet.JobStep) func(context.Context, string) {
+	return func(ctx context.Context, reason string) {
+		if note, _, ok := ExplainUnschedulable(reason, c.pendingFacts(ctx)); ok {
+			reason = note
+		}
+		backend.ReportStep(ctx, step, "pending: "+reason)
+	}
+}
+
 // admit translates the captured run into generation c.gen's objects, as the
 // cluster's admission takes them (debug grants dropped where only they are
 // refused), and returns them with their render's input.
@@ -427,9 +457,9 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 			return err
 		}
 		return pulls.check(ctx)
-	}})
+	}, Pending: c.reportPending(fleet.StepWaitPod)})
 	if err != nil {
-		return nil, classify(pulls.explain(err))
+		return nil, classify(explainWith(pulls.explain(err), c.pendingFacts(ctx)))
 	}
 	if err := c.learnNodeImage(pod, &rec, del); err != nil {
 		return nil, err
@@ -835,6 +865,7 @@ func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built, 
 		Progress: func(pr jobboot.Progress) {
 			backend.ReportStep(ctx, fleet.StepSeed, seedProgress(pr))
 		},
+		Scheduling: c.reportPending(fleet.StepSeed),
 		Check: func(pod *corev1.Pod) error {
 			id, err := checkJobPod(pod, &want, del, digests)
 			if id != "" {
@@ -850,7 +881,7 @@ func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built, 
 		return nil, serr
 	}
 	if err != nil {
-		return nil, classify(err)
+		return nil, classify(explainWith(err, c.pendingFacts(ctx)))
 	}
 	if !res.OK {
 		return nil, fmt.Errorf("the seed failed: %s", res.Error)

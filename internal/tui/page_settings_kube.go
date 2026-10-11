@@ -176,7 +176,7 @@ func (settingsPage *settingsPage) enterKubeClusterRow(m *model, i int) tea.Cmd {
 	editor := newKubeEditor(id)
 	editor.gen = m.watchGen
 	settingsPage.kubeDialog = editor
-	return nil
+	return editor.loadUsage()
 }
 
 // cursorToKubeCluster puts the cursor on connection id's row.

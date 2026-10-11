@@ -35,8 +35,13 @@ import (
 // SMB Azure Files and EFS access points fail it (fixed owners); NFS, CephFS
 // and Longhorn RWX typically pass.
 
-// StorageTestTimeout bounds one class's multi-node test.
-const StorageTestTimeout = 3 * time.Minute
+// StorageTestTimeout bounds one class's multi-node test; LargeStorageTestTimeout
+// one of a class with a large minimum size (Filestore), whose volume takes
+// minutes to make (and to delete).
+const (
+	StorageTestTimeout      = 3 * time.Minute
+	LargeStorageTestTimeout = 12 * time.Minute
+)
 
 // storageBatchTimeout bounds a full run's tests together (tests shorten it).
 var storageBatchTimeout = StorageTestTimeout
@@ -45,9 +50,12 @@ var storageBatchTimeout = StorageTestTimeout
 // the second pod, the checks.
 var (
 	storageTestStart = 90 * time.Second
-	storageTestMount = 75 * time.Second
-	storageTestRun   = 75 * time.Second
-	storageTestPoll  = 2 * time.Second
+	// storageTestStartLarge is the first phase of a class with a large
+	// minimum size: its volume is a whole file server.
+	storageTestStartLarge = 10 * time.Minute
+	storageTestMount      = 75 * time.Second
+	storageTestRun        = 75 * time.Second
+	storageTestPoll       = 2 * time.Second
 )
 
 // storageSecondWait is how many seconds the second test pod waits to see
@@ -123,6 +131,20 @@ type storageTestRequest struct {
 	size string
 }
 
+// large reports a test of a class whose volumes have a large minimum size:
+// it may take minutes to make one.
+func (req storageTestRequest) large() bool {
+	return req.sc != nil && LargeMinimum(req.sc.Provisioner) != ""
+}
+
+// timeout bounds the test.
+func (req storageTestRequest) timeout() time.Duration {
+	if req.large() {
+		return LargeStorageTestTimeout
+	}
+	return StorageTestTimeout
+}
+
 // runStorageTest runs one test (tests replace it).
 var runStorageTest = func(r *run, ctx context.Context, req storageTestRequest) StorageTest {
 	return r.storageTest(ctx, req)
@@ -134,7 +156,7 @@ func (r *run) storageTest(ctx context.Context, req storageTestRequest) StorageTe
 	if req.sc != nil {
 		res.Provisioner = req.sc.Provisioner
 	}
-	ctx, cancel := context.WithTimeout(ctx, StorageTestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, req.timeout())
 	defer cancel()
 	out := r.probeStorage(ctx, req)
 	res.Nodes, res.Mounted = out.nodes, out.mounted
@@ -216,7 +238,7 @@ func (r *run) probeStorage(ctx context.Context, req storageTestRequest) storageO
 		return storageOutcome{inconclusive: "creating the test volume: " + Message(err)}
 	}
 	group := id + "-mn-pod"
-	a, err := r.storagePod(first, group, "a", claim)
+	a, err := r.storagePod(first, group, "a", claim, req.timeout())
 	if err != nil {
 		return storageOutcome{inconclusive: err.Error()}
 	}
@@ -226,14 +248,18 @@ func (r *run) probeStorage(ctx context.Context, req storageTestRequest) storageO
 	if err != nil {
 		return storageOutcome{inconclusive: "creating the first test pod: " + Message(err)}
 	}
-	sctx, scancel := context.WithTimeout(ctx, storageTestStart)
+	start := storageTestStart
+	if req.large() {
+		start = storageTestStartLarge
+	}
+	sctx, scancel := context.WithTimeout(ctx, start)
 	nodeA, o := r.waitStoragePod(sctx, first, claim, since, true)
 	scancel()
 	if nodeA == "" {
 		return o
 	}
 	out := storageOutcome{nodes: []string{nodeA}}
-	b, err := r.storagePod(second, group, "b", claim)
+	b, err := r.storagePod(second, group, "b", claim, req.timeout())
 	if err != nil {
 		return storageOutcome{nodes: out.nodes, inconclusive: err.Error()}
 	}
@@ -468,7 +494,7 @@ func eventTime(ev *corev1.Event) time.Time {
 // what a share's layout takes: changing owners and modes) where the
 // namespace admits root, else as the share uid; placed like the
 // connection's instances, hardened, both at one SELinux level.
-func (r *run) storagePod(name, group, role, claim string) (*corev1.Pod, error) {
+func (r *run) storagePod(name, group, role, claim string, bound time.Duration) (*corev1.Pod, error) {
 	// The first pod waits for the second to start and run its checks; the
 	// second finds the first's files written already.
 	wait := int((storageTestMount + storageTestRun) / time.Second)
@@ -480,7 +506,7 @@ func (r *run) storagePod(name, group, role, claim string) (*corev1.Pod, error) {
 		return nil, err
 	}
 	pod.Spec.RestartPolicy = corev1.RestartPolicyNever
-	deadline := int64((StorageTestTimeout + time.Minute) / time.Second)
+	deadline := int64((bound + time.Minute) / time.Second)
 	pod.Spec.ActiveDeadlineSeconds = &deadline
 	c := &pod.Spec.Containers[0]
 	c.Image = storageTestImage
@@ -620,6 +646,41 @@ func classFix(sc *storagev1.StorageClass, check string) string {
 	return ""
 }
 
+// shareHint is what a fleet share on class sc is expected to do, for the
+// classes whose outcome is known (the multi-node test still decides): SMB
+// file shares and EFS access points fail it, Filestore must be enabled and
+// is large, NFS, CephFS and Longhorn's ReadWriteMany typically pass.
+func shareHint(sc *storagev1.StorageClass) string {
+	p := strings.ToLower(sc.Provisioner)
+	params := map[string]string{}
+	for k, v := range sc.Parameters {
+		params[strings.ToLower(k)] = strings.ToLower(v)
+	}
+	switch {
+	case strings.Contains(p, "file.csi.azure.com") || strings.Contains(p, "azure-file"):
+		if params["protocol"] == "nfs" {
+			return "NFS Azure Files: typically passes the multi-node test"
+		}
+		return "SMB Azure Files keeps no owners, modes or symlinks, so it fails the multi-node test: use an NFS Azure Files class (protocol: nfs, as azurefile-csi-nfs)"
+	case p == "efs.csi.aws.com":
+		if params["provisioningmode"] == "efs-ap" {
+			return "EFS access points give every file one owner, so they fail the multi-node test's ownership checks: statically provisioned EFS passes"
+		}
+		return "EFS: statically provisioned volumes typically pass the multi-node test"
+	case p == "filestore.csi.storage.gke.io":
+		return "Filestore: the cluster's Filestore CSI driver must be enabled, and each share is at least " + largeMinimum[p] + " (so is the test's volume)"
+	case strings.Contains(p, "smb"):
+		return "SMB keeps no owners, modes or symlinks, so it fails the multi-node test"
+	case strings.Contains(p, "cephfs"):
+		return "CephFS: typically passes the multi-node test"
+	case p == "driver.longhorn.io":
+		return "Longhorn ReadWriteMany: typically passes the multi-node test"
+	case strings.Contains(p, "nfs"):
+		return "NFS: typically passes the multi-node test (an export with root_squash fails its ownership checks)"
+	}
+	return ""
+}
+
 // noClassFix is the remedy when no class passed the multi-node test, by the
 // cloud the nodes run on.
 func noClassFix(nodes []*fleetgrpc.KubeNode, providers map[string]string) string {
@@ -696,13 +757,19 @@ func storageResult(t StorageTest) *fleetgrpc.KubeCheck {
 // is not tested twice. New results go in the cache and on the classes the
 // run lists.
 func (r *run) testStorage(ctx context.Context, force bool) {
-	todo := r.planStorageTests(force)
+	todo := r.planStorageTests(force || r.t.ForceStorage)
 	if len(todo) > 0 {
 		r.storageRunning(todo)
 		// More classes than run at once share one test's time, which is
 		// all FullTimeout counts for them: the run's later checks keep
 		// theirs, and a class cut short is tested by a later run.
-		tctx, cancel := context.WithTimeout(ctx, storageBatchTimeout)
+		bound := storageBatchTimeout
+		for _, req := range todo {
+			if req.large() {
+				bound = max(bound, LargeStorageTestTimeout)
+			}
+		}
+		tctx, cancel := context.WithTimeout(ctx, bound)
 		r.recordStorageTests(tctx, execStorageTests(r, tctx, todo))
 		cancel()
 	}

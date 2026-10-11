@@ -696,8 +696,10 @@ type fullRun struct {
 	// deep: the deep test's probes too.
 	deep bool
 	// storage are StorageClasses to run the multi-node test on now
-	// (preflight.Target.TestStorage).
-	storage []string
+	// (preflight.Target.TestStorage); forceStorage runs it again on the
+	// classes a share could use (preflight.Target.ForceStorage).
+	storage      []string
+	forceStorage bool
 }
 
 // runFullDeep is runFull, with what o asks.
@@ -708,10 +710,9 @@ func (w *kubeWorker) runFullDeep(ctx context.Context, report func(*fleetgrpc.Kub
 	wanted := w.fullWanted
 	w.fullWanted = false
 	w.mu.Unlock()
-	bound := preflight.FullTimeout + time.Minute
-	if deep {
-		bound += preflight.DeepTimeout
-	}
+	w.mu.Lock()
+	bound := preflight.Target{Cluster: w.rec, Deep: deep, TestStorage: o.storage}.Timeout() + time.Minute
+	w.mu.Unlock()
 	done := w.watchdog("full preflight", bound)
 	link, lease, rec, err := w.ensureLink(true)
 	var res preflight.Result
@@ -724,7 +725,7 @@ func (w *kubeWorker) runFullDeep(ctx context.Context, report func(*fleetgrpc.Kub
 		}
 	} else {
 		tgt := w.target(rec, link, lease)
-		tgt.Deep, tgt.TestStorage = deep, o.storage
+		tgt.Deep, tgt.TestStorage, tgt.ForceStorage = deep, o.storage, o.forceStorage
 		res = fullPreflight(ctx, tgt, report)
 		w.countOrphans(ctx, rec, link, &res)
 	}
@@ -801,6 +802,11 @@ func (w *kubeWorker) applyFull(rec fleet.KubeCluster, link *kubeLink, res prefli
 	leaseHeld := w.leaseHeld
 	w.mu.Unlock()
 	w.m.publish()
+	if w.m.svc != nil && w.m.svc.shareMoves != nil {
+		// The class new shares take may have changed: the fleets' shares
+		// are looked at again.
+		w.m.svc.shareMoves.poke()
+	}
 	// The REACHABLE edge: the reconciler's undo jobs and background pass
 	// for this connection go (kube_reconcile.go).
 	if link != nil && preflight.Usable(res.State) && leaseHeld && rec.ID != "" && w.m.svc != nil && w.m.svc.kubeRecovery != nil {
@@ -975,6 +981,10 @@ func (w *kubeWorker) status() *fleetgrpc.KubeClusterStatus {
 	defer w.mu.Unlock()
 	st := &fleetgrpc.KubeClusterStatus{Cluster: protoconv.KubeClusterToProto(w.rec)}
 	st.State, st.Message = w.stateLocked(now)
+	if w.m.svc != nil {
+		// The fleets whose share moves to the connection's shared class.
+		st.ShareMigrations = w.m.svc.shareMoves.status(w.rec.ID)
+	}
 	if !w.haveFull {
 		return st
 	}
@@ -997,6 +1007,7 @@ func (w *kubeWorker) status() *fleetgrpc.KubeClusterStatus {
 	if st.Capabilities != nil && w.m.svc != nil && w.m.svc.kubeRecovery != nil {
 		st.Capabilities.PendingTeardowns = w.m.svc.kubeRecovery.pendingTeardowns(w.rec.ID)
 	}
+
 	if w.m.svc != nil && w.m.svc.kubePods != nil {
 		// A fleet moving off a node the cluster empties, or unable to.
 		if moving, warnings := w.m.svc.kubePods.evac.status(w.rec.ID); moving || len(warnings) > 0 {

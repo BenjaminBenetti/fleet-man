@@ -86,7 +86,23 @@ func ClassifyStorageClass(sc *storagev1.StorageClass, drivers map[string]*storag
 	// A CSI clone needs a CSI driver: an in-tree or external provisioner
 	// takes a data source it does not know for an empty disk.
 	ks.CsiClone = drivers[sc.Provisioner] != nil && podspec.ClonesVolumes(sc.Provisioner)
+	ks.LargeMinimum = LargeMinimum(sc.Provisioner)
+	ks.ShareHint = shareHint(sc)
+	ks.DiskHint = diskHint(ks)
 	return ks
+}
+
+// diskHint warns about class ks for instance disks ("" when it suits them).
+func diskHint(ks *fleetgrpc.KubeStorageClass) string {
+	switch {
+	case containsAny(ks.Provisioner, nfsMarkers):
+		return "an NFS class for instance disks: root_squash breaks package installs"
+	case !ks.Block:
+		return "a network file share for instance disks: it may not keep owners, and small-file IO is slow"
+	case ks.NodeLocal:
+		return "on one node's disk: an instance's data goes with its node"
+	}
+	return ""
 }
 
 // PickInstanceClass is auto's instance-disk class: a block class, preferring
@@ -176,6 +192,7 @@ func (r *run) rootStorage(ctx context.Context) {
 	if err != nil {
 		if apierrors.IsForbidden(err) {
 			r.classesUnreadable = true
+			r.caps.StorageClassesUnreadable = true
 			if want != "" {
 				r.warn(CheckRootStorage, fmt.Sprintf("StorageClasses are not readable; using %q as set", want), "")
 			} else {
@@ -195,7 +212,13 @@ func (r *run) rootStorage(ctx context.Context) {
 	r.classObjs = map[string]*storagev1.StorageClass{}
 	for i := range list.Items {
 		r.classObjs[list.Items[i].Name] = &list.Items[i]
-		r.caps.StorageClasses = append(r.caps.StorageClasses, ClassifyStorageClass(&list.Items[i], drivers))
+		ks := ClassifyStorageClass(&list.Items[i], drivers)
+		// A CSI driver that reports no topology on any node places its
+		// volumes nowhere in particular: they attach on any node.
+		if topo, known := r.csiTopology[ks.Provisioner]; known && !topo && drivers[ks.Provisioner] != nil && !ks.NodeLocal {
+			ks.TopologyFree = true
+		}
+		r.caps.StorageClasses = append(r.caps.StorageClasses, ks)
 	}
 	sort.Slice(r.caps.StorageClasses, func(i, j int) bool { return r.caps.StorageClasses[i].Name < r.caps.StorageClasses[j].Name })
 

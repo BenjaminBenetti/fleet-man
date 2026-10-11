@@ -111,8 +111,28 @@ type Target struct {
 	// cached result or not (TestKubeClusterRequest.storage_classes): the
 	// consent a class with a large minimum size needs before Auto tests it.
 	TestStorage []string
+	// ForceStorage runs the multi-node test again on the classes a share
+	// could use (Auto's candidates, or the connection's shared class),
+	// cached result or not (TestKubeClusterRequest.test_storage), as the
+	// deep test does.
+	ForceStorage bool
 	// Now replaces time.Now (tests).
 	Now func() time.Time
+}
+
+// Timeout bounds Full's run of t: FullTimeout, the deep test's probes on
+// top with Deep, and longer where a class whose volumes have a large minimum
+// size may be tested (one named to test, or the connection's own shared
+// class, whose pick is the consent): its volume takes minutes to make.
+func (t Target) Timeout() time.Duration {
+	timeout := FullTimeout
+	if t.Deep {
+		timeout += DeepTimeout
+	}
+	if len(t.TestStorage) > 0 || t.Cluster.SharedStorageClass != "" {
+		timeout += LargeStorageTestTimeout - StorageTestTimeout
+	}
+	return timeout
 }
 
 func (t *Target) now() time.Time {
@@ -218,7 +238,10 @@ type run struct {
 	nodesKnown bool
 	providers  map[string]string
 	csiLimits  map[string]map[string]int32 // node -> CSI driver -> attach limit
-	rootClass  *fleetgrpc.KubeStorageClass
+	// csiTopology: CSI driver -> it reports a topology on some node (nil:
+	// CSINodes unreadable).
+	csiTopology map[string]bool
+	rootClass   *fleetgrpc.KubeStorageClass
 	// classObjs are the StorageClasses as listed, by name;
 	// classesUnreadable says the listing was forbidden.
 	classObjs         map[string]*storagev1.StorageClass
@@ -236,11 +259,7 @@ type run struct {
 // once it has a result, then, with t.Deep, the deep test's. report may be
 // nil.
 func Full(ctx context.Context, t Target, report func(*fleetgrpc.KubeCheck)) Result {
-	timeout := FullTimeout
-	if t.Deep {
-		timeout += DeepTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, t.Timeout())
 	defer cancel()
 	multiPod := t.MultiPodRWO
 	if multiPod == nil {

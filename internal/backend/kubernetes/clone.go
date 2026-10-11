@@ -187,6 +187,13 @@ func (c *cloning) run(ctx context.Context) (*backend.UpResult, error) {
 	if err := c.connect(ctx); err != nil {
 		return nil, err
 	}
+	// The clone's pod mounts the fleet's share as its source's does: a
+	// move of it is called off or waited for, and held off until the
+	// clone ends.
+	if err := c.shareMoveGate(ctx); err != nil {
+		return nil, err
+	}
+	defer c.releaseMoveHolds()
 	if err := c.loadSource(ctx); err != nil {
 		return nil, err
 	}

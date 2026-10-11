@@ -72,6 +72,9 @@ type JobRun struct {
 	// does not run yet: its error ends the wait (a disk the provisioner
 	// refused, which no deadline need be waited out for).
 	Pending func(context.Context) error
+	// Scheduling, when set, hears each new reason the scheduler gives for
+	// keeping the Job's pod unscheduled ("Unschedulable: ...").
+	Scheduling func(ctx context.Context, reason string)
 	// Barrier does what the job waits for at a barrier (jobboot): a clone's
 	// copier holding its source still for the final delta. nil refuses
 	// every barrier.
@@ -334,6 +337,7 @@ func jobPod(ctx context.Context, cs kclient.Interface, ns string, job *batchv1.J
 // waitJobPod waits for the Job's container to run.
 func (p *Pool) waitJobPod(ctx context.Context, cs kclient.Interface, ns string, job *batchv1.Job, r JobRun, d Deadlines, interval time.Duration) (*corev1.Pod, error) {
 	w := newPodWait(d, podspec.JobContainer, "Job "+job.Name+"'s pod")
+	lastScheduling := ""
 	for {
 		cur, err := cs.BatchV1().Jobs(ns).Get(ctx, job.Name, metav1.GetOptions{})
 		switch {
@@ -369,6 +373,18 @@ func (p *Pool) waitJobPod(ctx context.Context, cs kclient.Interface, ns string, 
 		}
 		if err := w.observe(p.opts.Now(), pod, pvc); err != nil {
 			return nil, explainMount(ctx, cs, pod, err)
+		}
+		if r.Scheduling != nil && pod != nil {
+			reason := ""
+			if c := unschedulable(pod); c != nil {
+				reason = joinReason(c.Reason, c.Message)
+			}
+			if reason != lastScheduling {
+				lastScheduling = reason
+				if reason != "" {
+					r.Scheduling(ctx, reason)
+				}
+			}
 		}
 		if r.Pending != nil {
 			if err := r.Pending(ctx); err != nil {

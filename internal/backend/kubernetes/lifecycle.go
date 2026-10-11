@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/topology"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -75,6 +76,15 @@ func (b *Backend) Start(containerID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
 	defer cancel()
 	p := b.p()
+	if rec.Share != nil && topology.Mode(rec.Share.Mode).Shared() {
+		// A move of the fleet's share is called off, or waited for, and
+		// held off until the pod is up (it then runs: no move begins).
+		release, err := p.ShareMoveGate(ctx, w.cluster, id.fleet)
+		if err != nil {
+			return classify(err)
+		}
+		defer release()
+	}
 	warmGateway(kubeimage.Strategy(rec.Strategy))
 	if err := p.Scale(ctx, w.cluster, w.sts, 1); err != nil {
 		return classify(err)
@@ -99,7 +109,11 @@ func (b *Backend) Start(containerID string) error {
 		return pulls.check(ctx)
 	}})
 	if err != nil {
-		return failed(pulls.explain(err))
+		mode := topology.Mode("")
+		if rec.Share != nil {
+			mode = topology.Mode(rec.Share.Mode)
+		}
+		return failed(p.explainDeadline(ctx, w.cluster, w.sts, mode, pulls.explain(err)))
 	}
 	t := rec.target()
 	t.Priority, t.Restage = PriorityInteractive, true

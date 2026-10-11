@@ -196,19 +196,24 @@ type Class struct {
 	Immediate bool
 	// NodeLocal: its volumes are on one node's disk (local-path, hostpath).
 	NodeLocal bool
+	// TopologyFree: its volumes carry no topology (a CSI driver that
+	// reports none on any node, as Ceph RBD's and Longhorn's): they attach
+	// on any node, wherever they were bound.
+	TopologyFree bool
 	// AllowedTopologies are the class's, as it lists them.
 	AllowedTopologies []corev1.TopologySelectorTerm
 }
 
 // ImmediateProblem says why volumes of class c cannot keep a fleet on one
-// node of a cluster of nodes nodes ("" when they can): a class that binds
-// Immediately places each instance disk and the share on its own, so they
-// can land on different nodes (or zones) and a pod needing two of them never
-// starts. It can on a cluster of one node, and with allowedTopologies
-// pinning one node, or one zone for a network volume (which attaches to any
-// node in it).
+// node of a cluster of nodes nodes (those its pods may run on) ("" when
+// they can): a class that binds Immediately places each instance disk and
+// the share on its own, so they can land on different nodes (or zones) and
+// a pod needing two of them never starts. It can on a cluster of one node,
+// with volumes that carry no topology (they attach anywhere), and with
+// allowedTopologies pinning one node, or one zone for a network volume
+// (which attaches to any node in it).
 func ImmediateProblem(c Class, nodes int) string {
-	if !c.Immediate || nodes <= 1 {
+	if !c.Immediate || nodes <= 1 || (c.TopologyFree && !c.NodeLocal) {
 		return ""
 	}
 	if pinsOne(c.AllowedTopologies, nodeKeys) || (!c.NodeLocal && pinsOne(c.AllowedTopologies, zoneKeys)) {

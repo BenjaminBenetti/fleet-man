@@ -11,6 +11,10 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	storagev1 "k8s.io/api/storage/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -250,6 +254,11 @@ func TestMCPAgentOnACluster(t *testing.T) {
 // gets none.
 func TestClusterTestNamesStorageClasses(t *testing.T) {
 	f := newKubeFixture(t)
+	for _, sc := range []struct{ name, provisioner string }{{"filestore", "filestore.csi.storage.gke.io"}, {"nfs", "nfs.csi.k8s.io"}, {"cephfs", "cephfs.csi.ceph.com"}} {
+		if _, err := f.apis["minikube"].StorageV1().StorageClasses().Create(context.Background(), &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: sc.name}, Provisioner: sc.provisioner}, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	f.start()
 	dev := f.add(&fleetgrpc.KubeCluster{Context: "minikube", DisplayName: "dev", Namespace: "fleet"}).GetCluster()
 	var mu sync.Mutex
@@ -259,6 +268,9 @@ func TestClusterTestNamesStorageClasses(t *testing.T) {
 		mu.Lock()
 		asked = append(asked, t)
 		mu.Unlock()
+		// The classes are real ones of the fake cluster, whose test pods
+		// never run: what the RPC asks is recorded, not tested.
+		t.TestStorage, t.ForceStorage = nil, false
 		return old(ctx, t, report)
 	}
 	defer func() { fullPreflight = old }()
@@ -285,9 +297,16 @@ func TestClusterTestNamesStorageClasses(t *testing.T) {
 
 	cs := mcpConnect(t, f.svc)
 	var out FleetClusterTestOutput
-	callJSON(t, cs, "fleet_cluster_test", map[string]any{"cluster": "dev", "storage_classes": []string{"nfs", "cephfs"}}, &out)
-	if _, ok := find("nfs", "cephfs"); !ok {
-		t.Fatal("fleet_cluster_test did not ask the preflight for its classes")
+	callJSON(t, cs, "fleet_cluster_test", map[string]any{"cluster": "dev", "storage_classes": []string{"nfs", "cephfs"}, "test_storage": true}, &out)
+	if got, ok := find("nfs", "cephfs"); !ok || !got.ForceStorage {
+		t.Fatalf("fleet_cluster_test did not ask the preflight for its classes (asked %v, again %v)", ok, got.ForceStorage)
+	}
+
+	// A class the cluster does not list is refused, naming the ones it does.
+	nope := &streamCollector[fleetgrpc.TestKubeClusterEvent]{ctx: context.Background()}
+	err := f.svc.TestKubeCluster(&fleetgrpc.TestKubeClusterRequest{Id: dev.GetId(), StorageClasses: []string{"nope"}}, nope)
+	if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), `no StorageClass "nope"`) || !strings.Contains(err.Error(), "cephfs") {
+		t.Fatalf("an unlisted class: %v", err)
 	}
 
 	draft := &streamCollector[fleetgrpc.TestKubeClusterEvent]{ctx: context.Background()}

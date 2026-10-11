@@ -335,7 +335,8 @@ func kubeOrphans(objects []*pruneObject) *fleetgrpc.KubeOrphans {
 		switch {
 		case obj.kind == "sts" && obj.labels[names.LabelRole] == string(names.RoleInstance):
 			o.Instances++
-		case obj.kind == "pvc" && strings.HasSuffix(obj.name, "-"+names.SuffixShare):
+		case obj.kind == "pvc" && (strings.HasSuffix(obj.name, "-"+names.SuffixShare) || names.Role(obj.labels[names.LabelRole]) == names.RoleShare):
+			// A share, or the copy a share move left.
 			o.Shares++
 		case obj.kind == "pvc" && (strings.HasSuffix(obj.name, "-"+names.SuffixAptCache) || strings.HasSuffix(obj.name, "-"+names.SuffixImageCache) || strings.HasSuffix(obj.name, "-"+names.SuffixBuildkit)):
 			o.CacheVolumes++

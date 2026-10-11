@@ -344,6 +344,9 @@ func Serve(ctx context.Context) error {
 	// sync runs on a context of its own.
 	shareKick = svc.shareSync.kickCluster
 	go svc.shareSync.run(hubCtx)
+	// The fleets' shares moving to their connection's shared StorageClass
+	// once it changed.
+	go svc.shareMoves.run(hubCtx)
 
 	select {
 	case <-ctx.Done():

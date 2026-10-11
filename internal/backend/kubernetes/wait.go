@@ -316,6 +316,10 @@ type WaitOptions struct {
 	// caller's own judgement, such as a StatefulSet whose pod creation the
 	// API refused).
 	Check func(ctx context.Context) error
+	// Pending, when set, hears each new reason the scheduler gives for
+	// keeping the pod unscheduled ("Unschedulable: ..."), so the caller can
+	// say what the instance waits on.
+	Pending func(ctx context.Context, reason string)
 }
 
 // WaitReady waits until the pod of instance StatefulSet sts on connection
@@ -340,6 +344,7 @@ func (p *Pool) WaitReady(ctx context.Context, clusterID, sts string, opts WaitOp
 	}
 	ns, podName := c.Namespace(), names.Pod(sts)
 	w := newPodWait(d, DevContainer, "the instance pod")
+	lastPending := ""
 	for {
 		objs, err := p.objects(c)
 		if err != nil {
@@ -365,6 +370,18 @@ func (p *Pool) WaitReady(ctx context.Context, clusterID, sts string, opts WaitOp
 		}
 		if err := w.observe(p.opts.Now(), pod, pvc); err != nil {
 			return nil, explainMount(ctx, cs, pod, err)
+		}
+		if opts.Pending != nil && pod != nil {
+			reason := ""
+			if c := unschedulable(pod); c != nil {
+				reason = joinReason(c.Reason, c.Message)
+			}
+			if reason != lastPending {
+				lastPending = reason
+				if reason != "" {
+					opts.Pending(ctx, reason)
+				}
+			}
 		}
 		if opts.Check != nil {
 			if err := opts.Check(ctx); err != nil {
