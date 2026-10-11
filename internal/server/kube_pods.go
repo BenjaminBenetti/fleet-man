@@ -526,8 +526,9 @@ func kubeAgentToProto(a kubernetes.AgentState) fleetgrpc.KubeAgentState {
 }
 
 // park scales a crash-looping instance to 0 and records it stopped, the
-// loop's message in its warning. A failed park is tried again after
-// parkRetry.
+// loop's message (its code first) in its warning and as its error, which
+// every client reads (the TUI's recovery dialog, `fleet ls`, MCP fleet_list)
+// and the next start clears. A failed park is tried again after parkRetry.
 func (k *kubePods) park(ctx context.Context, ref kubeRef, fleetName, name, key string, loop kubernetes.CrashLoop) {
 	pctx, cancel := context.WithTimeout(ctx, k.parkTimeout)
 	err := k.pool().Park(pctx, ref.cluster, ref.sts)
@@ -545,6 +546,7 @@ func (k *kubePods) park(ctx context.Context, ref kubeRef, fleetName, name, key s
 				return nil
 			}
 			inst.Status = fleet.StatusStopped
+			inst.Error = loop.Message()
 			parked = true
 			return nil
 		})

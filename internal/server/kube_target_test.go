@@ -101,17 +101,21 @@ func TestRememberedDefaultKeepsItsCluster(t *testing.T) {
 	}
 }
 
-// A remembered Kubernetes default is not one a create can use yet, so an
-// unspecified create still gets devcontainer.
-func TestRememberedKubernetesDefaultFallsBackToDevcontainer(t *testing.T) {
+// A remembered Kubernetes default, cluster and all, is what an unspecified
+// create gets; a template fleet, which no cluster can take, still gets
+// devcontainer.
+func TestRememberedKubernetesDefaultIsUsed(t *testing.T) {
 	isolateFleetDir(t)
 	stubDaemonHost(t, "h", "devcontainer")
 	if err := state.SaveConfig(&state.Config{DefaultBackend: string(fleet.BackendKubernetes), DefaultKubeCluster: "minikube"}); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
 	def := listTargets(t, newService(), "").GetDefaultTarget()
-	if def.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER || def.GetKubeCluster() != "" {
-		t.Fatalf("default target = %v, want devcontainer", def)
+	if def.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES || def.GetKubeCluster() != "minikube" {
+		t.Fatalf("default target = %v, want kubernetes on minikube", def)
+	}
+	if got := defaultTarget("file:///srv/template"); got != (fleet.DeployTarget{Backend: fleet.BackendDevcontainer}) {
+		t.Fatalf("a template fleet's default = %+v, want devcontainer", got)
 	}
 }
 

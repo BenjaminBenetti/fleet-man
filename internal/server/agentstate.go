@@ -23,13 +23,21 @@ type agentTracker struct {
 	states    map[string]agentdetect.State
 	tools     map[string]state.AgentTool
 	detectors map[string]agentdetect.Detector
+	// failures counts each container's failed captures in a row.
+	failures map[string]int
 }
+
+// unknownAfter is how many failed captures in a row (one per activity pass,
+// statsActivityInterval apart: about 15s) make a container's agent state
+// StateUnknown instead of the last one seen.
+const unknownAfter = 5
 
 func newAgentTracker() *agentTracker {
 	return &agentTracker{
 		states:    make(map[string]agentdetect.State),
 		tools:     make(map[string]state.AgentTool),
 		detectors: make(map[string]agentdetect.Detector),
+		failures:  make(map[string]int),
 	}
 }
 
@@ -47,9 +55,10 @@ func (t *agentTracker) Tool(containerID string) state.AgentTool {
 
 // Update processes new captures and probe results to derive agent states and
 // tool identifications. An OK=false capture preserves the previous state (no
-// flicker on a transient exec failure); an explicit empty probe drops the agent
-// to NotRunning and discards the detector. Containers absent from expectedIDs
-// are dropped.
+// flicker on a transient exec failure) until unknownAfter of them in a row
+// make it StateUnknown and discard the detector, so the next good capture
+// seeds a fresh one; an explicit empty probe drops the agent to NotRunning and
+// discards the detector. Containers absent from expectedIDs are dropped.
 func (t *agentTracker) Update(
 	captures map[string]backend.AllSessions,
 	probes map[string]string,
@@ -59,15 +68,21 @@ func (t *agentTracker) Update(
 	newStates := make(map[string]agentdetect.State, len(expectedIDs))
 	newTools := make(map[string]state.AgentTool, len(expectedIDs))
 	newDetectors := make(map[string]agentdetect.Detector, len(expectedIDs))
+	newFailures := make(map[string]int, len(expectedIDs))
 
 	for _, id := range expectedIDs {
 		capture, captured := captures[id]
 		if !captured || !capture.OK {
-			if prev, ok := t.states[id]; ok {
-				newStates[id] = prev
-			}
 			if tool, ok := t.tools[id]; ok {
 				newTools[id] = tool
+			}
+			newFailures[id] = t.failures[id] + 1
+			if newFailures[id] >= unknownAfter {
+				newStates[id] = agentdetect.StateUnknown
+				continue
+			}
+			if prev, ok := t.states[id]; ok {
+				newStates[id] = prev
 			}
 			if existing, ok := t.detectors[id]; ok {
 				newDetectors[id] = existing
@@ -89,6 +104,7 @@ func (t *agentTracker) Update(
 	t.states = newStates
 	t.tools = newTools
 	t.detectors = newDetectors
+	t.failures = newFailures
 }
 
 func (t *agentTracker) applyProbe(
@@ -123,10 +139,13 @@ func (t *agentTracker) applyProbe(
 // screen that redrew meanwhile) as working for a while, then as "just
 // stopped"; and a failed first capture would carry a pre-gap state forward the
 // same way. A fresh detector seeds on its first capture instead (StateWaiting),
-// and a failed one reads NotRunning for that pass. The tools are kept.
+// and a failed one reads NotRunning for that pass. The failed-capture counts
+// start over too: captures made before the gap say nothing about now. The
+// tools are kept.
 func (t *agentTracker) forgetHistory() {
 	t.detectors = make(map[string]agentdetect.Detector)
 	t.states = make(map[string]agentdetect.State)
+	t.failures = make(map[string]int)
 }
 
 func (t *agentTracker) detectorFor(containerID string, tool state.AgentTool) agentdetect.Detector {

@@ -55,6 +55,8 @@ func agentActivityToProto(s agentdetect.State) fleetgrpc.AgentActivity {
 		return fleetgrpc.AgentActivity_AGENT_ACTIVITY_WAITING
 	case agentdetect.StateNotRunning:
 		return fleetgrpc.AgentActivity_AGENT_ACTIVITY_NOT_RUNNING
+	case agentdetect.StateUnknown:
+		return fleetgrpc.AgentActivity_AGENT_ACTIVITY_UNKNOWN
 	default:
 		return fleetgrpc.AgentActivity_AGENT_ACTIVITY_UNSPECIFIED
 	}

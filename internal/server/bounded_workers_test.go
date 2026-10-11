@@ -221,3 +221,42 @@ func TestForEachBoundedPollsShareBackendsSafely(t *testing.T) {
 		t.Fatalf("%d polls, want %d", got, 2*n)
 	}
 }
+
+// failingBackend fails every capture and reports stats (the instance answers
+// docker stats, say, but not its execs).
+type failingBackend struct{ backend.Backend }
+
+func (failingBackend) CaptureAllSessions(string) backend.AllSessions { return backend.AllSessions{} }
+func (failingBackend) AgentToolProbe(string) (string, bool)          { return "", false }
+func (failingBackend) Stats(ids []string) (map[string]*backend.ContainerStats, error) {
+	out := map[string]*backend.ContainerStats{}
+	for _, id := range ids {
+		out[id] = &backend.ContainerStats{CPUMillicores: 5, MemoryMB: 10}
+	}
+	return out, nil
+}
+
+// An instance whose captures keep failing turns unknown after unknownAfter
+// passes (about 15s), and its stats go blank with it.
+func TestStatsActivityPassBlanksAnUnknownInstance(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHub()
+	go h.run(ctx)
+	seedRunning(t, h, 1, failingBackend{})
+	key := runtimeKey("alpha", "i00")
+	for i := 1; i <= unknownAfter; i++ {
+		statsActivityPass(h)
+		rt := runtimeSnapshot(h)[key]
+		unknown := rt.GetAgentActivity() == fleetgrpc.AgentActivity_AGENT_ACTIVITY_UNKNOWN
+		if i < unknownAfter {
+			if unknown || rt.GetStats() == nil {
+				t.Fatalf("pass %d: activity %v stats %v, want the stats and no unknown yet", i, rt.GetAgentActivity(), rt.GetStats())
+			}
+			continue
+		}
+		if !unknown || rt.GetStats() != nil {
+			t.Fatalf("pass %d: activity %v stats %v, want unknown and no stats", i, rt.GetAgentActivity(), rt.GetStats())
+		}
+	}
+}

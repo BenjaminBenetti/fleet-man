@@ -369,6 +369,11 @@ func TestKubePodsParksACrashLoop(t *testing.T) {
 	if err != nil || !strings.HasPrefix(string(warn), kubernetes.CodeOOMKilled+": ") {
 		t.Fatalf("warning %q %v", warn, err)
 	}
+	// The record says so too, for every client (the recovery dialog reads
+	// the code off it); the next start clears it.
+	if st, err := state.Load(); err != nil || !strings.HasPrefix(st.Fleets["alpha"].Instances[0].Error, kubernetes.CodeOOMKilled+": ") {
+		t.Fatalf("the parked record's error: %+v %v", st.Fleets["alpha"].Instances[0], err)
+	}
 	// Stopped now: the loop is not parked twice.
 	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusUnknown, CrashLoop: loop})
 	time.Sleep(50 * time.Millisecond)
