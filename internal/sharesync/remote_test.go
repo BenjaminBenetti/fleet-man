@@ -193,7 +193,9 @@ func fakeSpoke(t *testing.T, r *rig, info SideInfo) (*wire, chan error) {
 	hubEnd, spokeEnd := net.Pipe()
 	done := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { done <- ServeRemote(ctx, hubEnd, r.hub, info, RemoteOptions{HelloTimeout: 2 * time.Second, Logger: r.logs.logger()}) }()
+	go func() {
+		done <- ServeRemote(ctx, hubEnd, r.hub, info, RemoteOptions{HelloTimeout: 2 * time.Second, Logger: r.logs.logger()})
+	}()
 	w := newWire(spokeEnd)
 	go func() {
 		for {
