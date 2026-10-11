@@ -128,7 +128,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	}, s.mcpAutomationList)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_agent_create",
-		Description: "Create an automation agent in a fleet: a worker definition (launch command, system prompt, env backend) that triggers activate. Returns the fleet's resulting automation config.",
+		Description: "Create an automation agent in a fleet: a worker definition (launch command, system prompt, env backend or Kubernetes cluster) that triggers activate. Returns the fleet's resulting automation config.",
 	}, s.mcpAgentCreate)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_agent_update",

@@ -329,6 +329,11 @@ func (c *creation) buildSeedCache(ctx context.Context, adm *podspec.Admitted, r 
 	}
 	cleanup, cancel := c.cleanupContext()
 	defer cancel()
+	// The trim Job first: its pod would keep the cache's disk in use.
+	job := names.SeedCacheJob(c.id.sts)
+	if err := deleteAndWait(cleanup, c.cs, c.ns, KindJob, job); err != nil {
+		flog.Warn("kube create: deleting the seed cache's trim Job", "cluster", c.id.cluster, "job", job, "err", err)
+	}
 	if err := deleteAndWait(cleanup, c.cs, c.ns, KindPVC, p.name); err != nil {
 		flog.Warn("kube create: deleting the unfinished seed cache", "cluster", c.id.cluster, "cache", p.name, "err", err)
 	}
