@@ -76,6 +76,9 @@ const (
 	FleetService_PruneKubeCluster_FullMethodName        = "/fleetgrpc.FleetService/PruneKubeCluster"
 	FleetService_LoginKubeCluster_FullMethodName        = "/fleetgrpc.FleetService/LoginKubeCluster"
 	FleetService_CreateKubeNamespace_FullMethodName     = "/fleetgrpc.FleetService/CreateKubeNamespace"
+	FleetService_GetShareSync_FullMethodName            = "/fleetgrpc.FleetService/GetShareSync"
+	FleetService_WaitShareSync_FullMethodName           = "/fleetgrpc.FleetService/WaitShareSync"
+	FleetService_ListShareConflicts_FullMethodName      = "/fleetgrpc.FleetService/ListShareConflicts"
 	FleetService_InspectRepo_FullMethodName             = "/fleetgrpc.FleetService/InspectRepo"
 	FleetService_GetCoderTemplateParams_FullMethodName  = "/fleetgrpc.FleetService/GetCoderTemplateParams"
 	FleetService_GetBrowserConfig_FullMethodName        = "/fleetgrpc.FleetService/GetBrowserConfig"
@@ -236,6 +239,13 @@ type FleetServiceClient interface {
 	// CreateKubeNamespace creates a connection's namespace, an explicit action
 	// (fleet never creates one on its own), or with dry_run only renders it.
 	CreateKubeNamespace(ctx context.Context, in *CreateKubeNamespaceRequest, opts ...grpc.CallOption) (*CreateKubeNamespaceReply, error)
+	// GetShareSync reports each fleet's sync: its folders, sides, pauses,
+	// shares and conflict count.
+	GetShareSync(ctx context.Context, in *GetShareSyncRequest, opts ...grpc.CallOption) (*GetShareSyncReply, error)
+	// WaitShareSync waits until the fleet's sides agree (`fleet sync wait`).
+	WaitShareSync(ctx context.Context, in *WaitShareSyncRequest, opts ...grpc.CallOption) (*WaitShareSyncReply, error)
+	// ListShareConflicts lists the conflict copies kept on the daemon host.
+	ListShareConflicts(ctx context.Context, in *ListShareConflictsRequest, opts ...grpc.CallOption) (*ListShareConflictsReply, error)
 	// ---- Repo inspection (server-side clone + checks) ----
 	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
 	// devcontainer presence (and optionally the detected container home dir).
@@ -950,6 +960,36 @@ func (c *fleetServiceClient) CreateKubeNamespace(ctx context.Context, in *Create
 	return out, nil
 }
 
+func (c *fleetServiceClient) GetShareSync(ctx context.Context, in *GetShareSyncRequest, opts ...grpc.CallOption) (*GetShareSyncReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetShareSyncReply)
+	err := c.cc.Invoke(ctx, FleetService_GetShareSync_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) WaitShareSync(ctx context.Context, in *WaitShareSyncRequest, opts ...grpc.CallOption) (*WaitShareSyncReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WaitShareSyncReply)
+	err := c.cc.Invoke(ctx, FleetService_WaitShareSync_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) ListShareConflicts(ctx context.Context, in *ListShareConflictsRequest, opts ...grpc.CallOption) (*ListShareConflictsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListShareConflictsReply)
+	err := c.cc.Invoke(ctx, FleetService_ListShareConflicts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) InspectRepo(ctx context.Context, in *InspectRepoRequest, opts ...grpc.CallOption) (*InspectRepoReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InspectRepoReply)
@@ -1144,6 +1184,13 @@ type FleetServiceServer interface {
 	// CreateKubeNamespace creates a connection's namespace, an explicit action
 	// (fleet never creates one on its own), or with dry_run only renders it.
 	CreateKubeNamespace(context.Context, *CreateKubeNamespaceRequest) (*CreateKubeNamespaceReply, error)
+	// GetShareSync reports each fleet's sync: its folders, sides, pauses,
+	// shares and conflict count.
+	GetShareSync(context.Context, *GetShareSyncRequest) (*GetShareSyncReply, error)
+	// WaitShareSync waits until the fleet's sides agree (`fleet sync wait`).
+	WaitShareSync(context.Context, *WaitShareSyncRequest) (*WaitShareSyncReply, error)
+	// ListShareConflicts lists the conflict copies kept on the daemon host.
+	ListShareConflicts(context.Context, *ListShareConflictsRequest) (*ListShareConflictsReply, error)
 	// ---- Repo inspection (server-side clone + checks) ----
 	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
 	// devcontainer presence (and optionally the detected container home dir).
@@ -1335,6 +1382,15 @@ func (UnimplementedFleetServiceServer) LoginKubeCluster(*LoginKubeClusterRequest
 }
 func (UnimplementedFleetServiceServer) CreateKubeNamespace(context.Context, *CreateKubeNamespaceRequest) (*CreateKubeNamespaceReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateKubeNamespace not implemented")
+}
+func (UnimplementedFleetServiceServer) GetShareSync(context.Context, *GetShareSyncRequest) (*GetShareSyncReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetShareSync not implemented")
+}
+func (UnimplementedFleetServiceServer) WaitShareSync(context.Context, *WaitShareSyncRequest) (*WaitShareSyncReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WaitShareSync not implemented")
+}
+func (UnimplementedFleetServiceServer) ListShareConflicts(context.Context, *ListShareConflictsRequest) (*ListShareConflictsReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListShareConflicts not implemented")
 }
 func (UnimplementedFleetServiceServer) InspectRepo(context.Context, *InspectRepoRequest) (*InspectRepoReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InspectRepo not implemented")
@@ -2230,6 +2286,60 @@ func _FleetService_CreateKubeNamespace_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_GetShareSync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetShareSyncRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).GetShareSync(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_GetShareSync_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).GetShareSync(ctx, req.(*GetShareSyncRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_WaitShareSync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WaitShareSyncRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).WaitShareSync(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_WaitShareSync_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).WaitShareSync(ctx, req.(*WaitShareSyncRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_ListShareConflicts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListShareConflictsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ListShareConflicts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ListShareConflicts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ListShareConflicts(ctx, req.(*ListShareConflictsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_InspectRepo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(InspectRepoRequest)
 	if err := dec(in); err != nil {
@@ -2460,6 +2570,18 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateKubeNamespace",
 			Handler:    _FleetService_CreateKubeNamespace_Handler,
+		},
+		{
+			MethodName: "GetShareSync",
+			Handler:    _FleetService_GetShareSync_Handler,
+		},
+		{
+			MethodName: "WaitShareSync",
+			Handler:    _FleetService_WaitShareSync_Handler,
+		},
+		{
+			MethodName: "ListShareConflicts",
+			Handler:    _FleetService_ListShareConflicts_Handler,
 		},
 		{
 			MethodName: "InspectRepo",

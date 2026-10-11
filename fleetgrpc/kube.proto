@@ -630,6 +630,138 @@ message ShareSyncStatus {
 }
 
 // =====================================================================
+// SHARED-STATE SYNC (fleet sync status|wait|conflicts)
+// =====================================================================
+//
+// A fleet with instances on a cluster keeps its shared folders (agent dirs,
+// shared files, custom mounts) in a share there, kept converged with the
+// canonical copy on the daemon host (~/.fleet/workspaces/<fleet>) by the
+// daemon's sync hub. Its sides: "host" (the daemon host's folders),
+// "store:<cluster>" (that cluster's logins, kept on the daemon host), and
+// "k8s:<cluster>/<share>" (a share's spoke in one of its pods). Served to
+// remote clients exactly as to local ones. Mirrored by internal/fleet
+// ShareSync / ShareConflict (protoconv converts).
+
+// FleetShareSync is one fleet's sync.
+message FleetShareSync {
+  string fleet = 1;
+  // paused are the reasons sync is paused anywhere, as the `sync paused:
+  // <reason>` badge words them ("share full", "the daemon host's disk is
+  // under 5% free", ".claude is over its 8 GiB cap"). Nothing is dropped:
+  // what cannot sync waits.
+  repeated string paused = 2;
+  repeated ShareSyncRoot roots = 3;
+  // shares are the fleet's shares on its clusters, as full as each is.
+  repeated KubeShareUsage shares = 4;
+  // conflicts counts the conflict copies kept (ListShareConflicts).
+  int32 conflicts = 5;
+}
+
+// ShareSyncRoot is one synced folder of a fleet (".claude", ".config/gh",
+// "files", ".mnt").
+message ShareSyncRoot {
+  string root = 1;
+  int32 files = 2;
+  int64 bytes = 3;
+  // cap is the root's size cap (0: none, as for custom mounts).
+  int64 cap = 4;
+  // paused says why changes made in it wait (it is over its cap).
+  string paused = 5;
+  // broken says why it is not synced at all (its state is a newer fleet's).
+  string broken = 6;
+  repeated string warnings = 7;
+  repeated ShareSyncSide sides = 8;
+}
+
+// ShareSyncSide is one side's state in one root.
+message ShareSyncSide {
+  // side names it (FleetShareSync), location is where its content lives
+  // ("host", or a connection id).
+  string side = 1;
+  string location = 2;
+  // pending counts what is still to be sent the side; pending_bytes the
+  // size of those files.
+  int32 pending = 3;
+  int64 pending_bytes = 4;
+  // paused says why it cannot take files now ("share full").
+  string paused = 5;
+  // refused lists paths it refused, with why.
+  repeated string refused = 6;
+  string last_error = 7;
+}
+
+// KubeShareUsage is a fleet's share on one connection (fleet.ShareUsage).
+message KubeShareUsage {
+  string cluster = 1;
+  // location is the connection's display name.
+  string location = 2;
+  string fleet = 3;
+  // claim is the share's PVC.
+  string claim = 4;
+  int64 used_bytes = 5;
+  int64 capacity_bytes = 6;
+  // measured: used_bytes was measured (in a running pod of the fleet).
+  bool measured = 7;
+  // expandable: it grows by half when 90% full.
+  bool expandable = 8;
+  // warning is the nearly-full line of a share that cannot grow.
+  string warning = 9;
+}
+
+// ShareConflict is a conflict copy the hub kept: the version of a path that
+// lost to a concurrent change, on the daemon host.
+message ShareConflict {
+  string id = 1;
+  google.protobuf.Timestamp time = 2;
+  string fleet = 3;
+  string root = 4;
+  string path = 5;
+  // location is set for a path kept per location (a login).
+  string location = 6;
+  // side is the side whose version it is.
+  string side = 7;
+  // reason says what it lost to.
+  string reason = 8;
+  int64 size = 9;
+  // file holds the copy's content on the daemon host.
+  string file = 10;
+}
+
+// GetShareSyncRequest names the fleet ("" is every fleet with a sync).
+message GetShareSyncRequest {
+  string fleet = 1;
+}
+
+message GetShareSyncReply {
+  repeated FleetShareSync fleets = 1;
+}
+
+// WaitShareSyncRequest waits until every side of the fleet's sync ("" is
+// every fleet's) holds every path's state: a write on the daemon host is in
+// the clusters' shares, a write in a pod on the daemon host. timeout_ms
+// bounds it (0: 2 minutes).
+message WaitShareSyncRequest {
+  string fleet = 1;
+  int64 timeout_ms = 2;
+}
+
+// WaitShareSyncReply says whether it was in sync before the timeout;
+// pending names what was still behind ("host .claude: 3 to send (paused:
+// ...)", "k8s:prod/fs-...-share: rescan: ...").
+message WaitShareSyncReply {
+  bool synced = 1;
+  repeated string pending = 2;
+}
+
+message ListShareConflictsRequest {
+  string fleet = 1;
+}
+
+message ListShareConflictsReply {
+  repeated ShareConflict conflicts = 1;
+}
+
+// =====================================================================
 // CLUSTER CONNECTION RPCS
 // =====================================================================
 //

@@ -189,6 +189,18 @@ service FleetService {
   // (fleet never creates one on its own), or with dry_run only renders it.
   rpc CreateKubeNamespace(CreateKubeNamespaceRequest) returns (CreateKubeNamespaceReply);
 
+  // ---- Shared-state sync (kube.proto; `fleet sync`) ----
+  // A fleet's shared folders on its clusters, kept converged with the daemon
+  // host's. Served to remote clients exactly as to local ones.
+
+  // GetShareSync reports each fleet's sync: its folders, sides, pauses,
+  // shares and conflict count.
+  rpc GetShareSync(GetShareSyncRequest) returns (GetShareSyncReply);
+  // WaitShareSync waits until the fleet's sides agree (`fleet sync wait`).
+  rpc WaitShareSync(WaitShareSyncRequest) returns (WaitShareSyncReply);
+  // ListShareConflicts lists the conflict copies kept on the daemon host.
+  rpc ListShareConflicts(ListShareConflictsRequest) returns (ListShareConflictsReply);
+
   // ---- Repo inspection (server-side clone + checks) ----
   // InspectRepo shallow-clones remote_url on the DAEMON's host and reports
   // devcontainer presence (and optionally the detected container home dir).
