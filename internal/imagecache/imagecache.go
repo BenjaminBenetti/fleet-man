@@ -11,13 +11,18 @@
 // It is the network-based sibling of internal/buildkit: same host-side `docker`
 // orchestration and same best-effort contract. Unlike buildkit (which only
 // needs the buildx CLI), the consumer here is a docker DAEMON, so the feature
-// only helps instances that run their OWN dockerd (docker-in-docker);
-// docker-outside-of-docker and no-docker instances are silently skipped. Only
-// docker.io is mirrored — that is all docker registry-mirrors ever applies to.
+// only helps instances that run their OWN dockerd (docker-in-docker), or, on a
+// cluster, their pod's own engine (the docker-outside-of-docker sidecar);
+// docker-outside-of-docker on a docker host and no-docker instances are
+// silently skipped. Only docker.io is mirrored — that is all docker
+// registry-mirrors ever applies to.
 //
-// Callers reach it through the shared-service runtime for the daemon host's
-// docker (internal/svcruntime/dockerrt), which svcruntime.ForInstance hands
-// out only for instances on that docker (devcontainer).
+// Callers reach the server side through the shared-service runtime for the
+// daemon host's docker (internal/svcruntime/dockerrt), which
+// svcruntime.ForInstance hands out only for instances on that docker
+// (devcontainer). The in-instance side (ConfigureInstanceDockerPolling) serves
+// every runtime, pointed at its svcruntime.Endpoint (a cluster's runs the
+// mirror itself, internal/svcruntime/kubert).
 package imagecache
 
 import (

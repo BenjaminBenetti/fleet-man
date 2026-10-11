@@ -13,6 +13,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
+	"github.com/BenjaminBenetti/fleet-man/internal/debcache"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime"
@@ -41,11 +42,13 @@ type execBackend struct {
 	mountBackend
 	mu   sync.Mutex
 	runs int
+	cmds []string
 }
 
-func (b *execBackend) ExecCommand(string, []string) *backend.Cmd {
+func (b *execBackend) ExecCommand(_ string, command []string) *backend.Cmd {
 	b.mu.Lock()
 	b.runs++
+	b.cmds = append(b.cmds, strings.Join(command, " "))
 	b.mu.Unlock()
 	return backend.NewCmd(exec.Command("echo", "PRESENT"), nil)
 }
@@ -339,6 +342,32 @@ func TestCacheSetupEnsuresConnectsThenConfigures(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDebCacheSetupFallsBackWhereTheCacheMayBeDown: an endpoint that may be
+// down while the instance is up (a cluster's) becomes apt's proxy only while
+// it answers (the detector); docker's is apt's proxy as it is.
+func TestDebCacheSetupFallsBackWhereTheCacheMayBeDown(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	seedSettings(t, fleet.FleetSettings{DebCacheServer: true})
+	const url = "http://fs-alpha-1a2b3c4d-aptcache:3142"
+	for _, fallback := range []bool{true, false} {
+		rec := svcruntimetest.New("kubernetes:c1")
+		rec.Endpoints[fleet.ServiceDebCache] = fleet.ServiceEndpoint{URL: url, HostPort: "fs-alpha-1a2b3c4d-aptcache:3142", Fallback: fallback}
+		b := &execBackend{mountBackend: mountBackend{shared: true}}
+		if err := setupDebCache(rec, b, "alpha", "cid", "/ws"); err != nil {
+			t.Fatal(err)
+		}
+		if len(b.cmds) != 2 {
+			t.Fatalf("fallback %v: commands %q, want the probe and the write", fallback, b.cmds)
+		}
+		write := b.cmds[1]
+		detects := strings.Contains(write, debcache.ProxyDetector) && strings.Contains(write, "net-probe '"+url+"'")
+		fixed := strings.Contains(write, `Acquire::http::Proxy "`+url+`";`)
+		if detects != fallback || fixed == fallback {
+			t.Errorf("fallback %v: detector %v, fixed proxy %v in %s", fallback, detects, fixed, write)
+		}
 	}
 }
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Description: with the fleet's image cache on, a docker-in-docker instance's dockerd pulls Docker Hub images through the fleet's registry mirror, still does after a stop/start, the fleet options' Delete cache empties the mirror, and its data outlives a fleet destroy.
+# itest: k8s
+# Description: with the fleet's image cache on, a docker-in-docker instance's dockerd pulls Docker Hub images through the fleet's registry mirror, still does after a stop/start, the fleet options' Delete cache empties the mirror, and its data outlives a fleet destroy. On a cluster the mirror is the fleet's Service there.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -69,6 +70,12 @@ info "inner dockerd mirror: ${mirror}"
 if itest_backend_is devcontainer; then
   # Docker reaches the mirror by its container name on the fleet's network.
   assert_equals "http://fleet-${FIXTURE_REPO_NAME}-imgcache:5000/" "${mirror}" "the mirror should be the fleet's cache container"
+else
+  # A cluster's instances reach it by its Service in their namespace; the
+  # cluster brings its server up on its own time (until then dockerd pulls
+  # from Docker Hub itself).
+  assert_equals "http://$(itest_k8s_fleet_object "${FIXTURE_REPO_NAME}" services imgcache):5000/" "${mirror}" "the mirror should be the fleet's cache Service"
+  itest_wait_service "${FIXTURE_REPO_NAME}" imagecache running 240
 fi
 assert_not_contains "$(catalog)" "library/hello-world" "the mirror should start out without hello-world"
 

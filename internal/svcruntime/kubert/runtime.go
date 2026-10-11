@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -270,28 +272,39 @@ var errBuildkitNotServed = errors.New("shared Buildkit does not run on a cluster
 // network.
 func (r *Runtime) InstanceMounts(string, fleet.SharedService) []backend.Mount { return nil }
 
-// Endpoint answers ErrNoEndpoint: the services run, but this version of
-// fleet does not point a cluster's instances at them (their apt and docker
-// go direct).
-func (r *Runtime) Endpoint(_ string, svc fleet.SharedService) (fleet.ServiceEndpoint, error) {
-	if _, err := lookup(svc); err != nil {
+// Endpoint is svc's ClusterIP Service, by the short name the fleet's pods
+// resolve in their own namespace (their search domain), as docker's
+// instances reach a cache by its container name: the deb cache's proxy on
+// 3142, the image cache's mirror on 5000. Its server comes up on the
+// cluster's time after an ensure (watchReady) and no start revives it, so
+// the endpoint is a Fallback one: apt checks it answers first, and dockerd
+// falls back from a mirror that does not by itself. Shared Buildkit has none
+// (ErrNoEndpoint) until it is served. It reads only the daemon's id, which
+// the fleet's object names hash.
+func (r *Runtime) Endpoint(fleetName string, svc fleet.SharedService) (fleet.ServiceEndpoint, error) {
+	s, err := lookup(svc)
+	if err != nil {
 		return fleet.ServiceEndpoint{}, err
 	}
-	return fleet.ServiceEndpoint{}, noEndpoint{svc}
-}
-
-// noEndpoint is a service the connection runs but does not point its
-// instances at (fleet.ErrNoServiceEndpoint).
-type noEndpoint struct{ svc fleet.SharedService }
-
-func (e noEndpoint) Error() string {
-	if e.svc == fleet.ServiceBuildkit {
-		return errBuildkitNotServed.Error()
+	if svc == fleet.ServiceBuildkit {
+		return fleet.ServiceEndpoint{}, noEndpoint{}
 	}
-	return fmt.Sprintf("the fleet's %s runs on the cluster, but this version of fleet does not point the cluster's instances at it: they go direct", serviceText(e.svc))
+	id, err := daemonID()
+	if err != nil {
+		return fleet.ServiceEndpoint{}, fmt.Errorf("the daemon's identity: %w", err)
+	}
+	host := names.FleetObject(fleetName, names.FleetHash(id, r.cluster, fleetName), s.suffix)
+	hostPort := net.JoinHostPort(host, strconv.Itoa(int(s.port)))
+	return fleet.ServiceEndpoint{URL: "http://" + hostPort, HostPort: hostPort, Fallback: true}, nil
 }
 
-func (e noEndpoint) Is(target error) bool { return target == fleet.ErrNoServiceEndpoint }
+// noEndpoint is shared Buildkit, which the connection does not point its
+// instances at yet (fleet.ErrNoServiceEndpoint).
+type noEndpoint struct{}
+
+func (noEndpoint) Error() string { return errBuildkitNotServed.Error() }
+
+func (noEndpoint) Is(target error) bool { return target == fleet.ErrNoServiceEndpoint }
 
 // ConnectInstance does nothing: the fleet's NetworkPolicies already admit
 // every instance of the fleet to its caches.

@@ -151,3 +151,29 @@ func TestImageMirrorNeedsTheRuntimesEndpoint(t *testing.T) {
 		t.Fatalf("runtime calls %+v", calls)
 	}
 }
+
+// TestReviveSharedServicesAfterARestart: a restart fleet did not make (a pod
+// the cluster restarted) gets a start's shared-service work under the
+// fleet's settings: on a cluster's runtime, which needs no re-ensure, the
+// image mirror alone; nothing for a fleet the state no longer has.
+func TestReviveSharedServicesAfterARestart(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeLifecycleState(t, fleet.StatusRunning)
+	setLifecycleSettings(t, fleet.FleetSettings{DebCacheServer: true, ImageCacheServer: true})
+	rec := svcruntimetest.New("kubernetes:c1")
+	rec.Reconfigure = false
+	mirrored := stubStartServices(t, rec)
+	inst := &fleet.Instance{Name: "agent-1", ContainerID: "abc123"}
+
+	ReviveSharedServices("alpha", inst)
+	if calls := rec.Calls(); len(calls) != 0 {
+		t.Errorf("runtime calls %+v: a cluster's caches outlive the pod", calls)
+	}
+	if want := []string{"alpha/agent-1@abc123"}; !reflect.DeepEqual(*mirrored, want) {
+		t.Errorf("image mirror configured for %v, want %v", *mirrored, want)
+	}
+	ReviveSharedServices("gone", inst)
+	if len(*mirrored) != 1 {
+		t.Errorf("a fleet the state does not have was revived: %v", *mirrored)
+	}
+}

@@ -335,8 +335,52 @@ func TestEnsureService(t *testing.T) {
 	if err := rt.EnsureService("alpha", "nope"); err == nil {
 		t.Fatal("an unknown service was ensured")
 	}
-	if _, err := rt.Endpoint("alpha", fleet.ServiceDebCache); !errors.Is(err, fleet.ErrNoServiceEndpoint) {
-		t.Fatalf("endpoint = %v, want ErrNoEndpoint", err)
+}
+
+// TestEndpoint: a cluster's instances reach the deb and image caches at
+// their Services, by the short name their namespace resolves, on the
+// Services' ports; checking first that the server answers (Fallback). Shared
+// Buildkit has no endpoint yet.
+func TestEndpoint(t *testing.T) {
+	f := useFake(t)
+	rt := For(testCluster)
+	m := meta("alpha")
+	for svc, want := range map[fleet.SharedService]struct {
+		suffix string
+		port   int32
+	}{
+		fleet.ServiceDebCache:   {names.SuffixAptCache, 3142},
+		fleet.ServiceImageCache: {names.SuffixImageCache, 5000},
+	} {
+		if err := rt.EnsureService("alpha", svc); err != nil {
+			t.Fatal(err)
+		}
+		got, err := rt.Endpoint("alpha", svc)
+		if err != nil {
+			t.Fatalf("%s: %v", svc, err)
+		}
+		hostPort := fmt.Sprintf("%s:%d", m.name(want.suffix), want.port)
+		if got != (fleet.ServiceEndpoint{URL: "http://" + hostPort, HostPort: hostPort, Fallback: true}) {
+			t.Errorf("%s endpoint = %+v, want %s, falling back", svc, got, hostPort)
+		}
+		// The name and port are the Service's the ensure made.
+		s, err := f.cs.CoreV1().Services("fleet").Get(context.Background(), m.name(want.suffix), metav1.GetOptions{})
+		if err != nil || len(s.Spec.Ports) != 1 || s.Spec.Ports[0].Port != want.port {
+			t.Errorf("%s Service %v, %v", svc, s, err)
+		}
+	}
+	if other, _ := rt.Endpoint("beta", fleet.ServiceDebCache); !strings.Contains(other.URL, meta("beta").name(names.SuffixAptCache)) {
+		t.Errorf("fleet beta's deb cache at %q", other.URL)
+	}
+	if _, err := rt.Endpoint("alpha", fleet.ServiceBuildkit); !errors.Is(err, fleet.ErrNoServiceEndpoint) || !strings.Contains(err.Error(), "per-instance client certificate") {
+		t.Errorf("buildkit endpoint = %v, want ErrNoEndpoint naming why", err)
+	}
+	if _, err := rt.Endpoint("alpha", "nope"); err == nil || errors.Is(err, fleet.ErrNoServiceEndpoint) {
+		t.Errorf("unknown service endpoint = %v", err)
+	}
+	daemonID = func() (string, error) { return "", errors.New("no identity") }
+	if _, err := rt.Endpoint("alpha", fleet.ServiceDebCache); err == nil || !strings.Contains(err.Error(), "no identity") {
+		t.Errorf("endpoint without the daemon's identity = %v", err)
 	}
 }
 

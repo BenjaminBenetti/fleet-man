@@ -14,8 +14,11 @@ import (
 // shared-service runtime), connects the instance to it (on docker, joins the
 // fleet's shared network), and writes the apt http-proxy config inside the
 // instance, pointing at the cache's endpoint on the runtime (a runtime that
-// points no instance at it says so, and the instance's apt goes direct). Unlike buildkit there is no mount — the cache is reached over the
-// network — so this runs AFTER Up (when the container id is known).
+// points no instance at it says so, and the instance's apt goes direct). An
+// endpoint that may be down while the instance is up (a cluster's) is one apt
+// checks first, going direct when it does not answer. Unlike buildkit there is
+// no mount — the cache is reached over the network — so this runs AFTER Up
+// (when the container id is known).
 //
 // It is a no-op when the feature does not apply (the instance has no
 // shared-service runtime or the fleet has the setting off). Errors are returned
@@ -37,7 +40,8 @@ func setupDebCache(services svcruntime.Runtime, instanceBackend backend.Backend,
 	if err != nil {
 		return err
 	}
-	configured, err := debcache.ConfigureInstanceApt(instanceBackend, workspaceDir, endpoint.URL)
+	configured, err := debcache.ConfigureInstanceApt(instanceBackend, workspaceDir,
+		debcache.Proxy{URL: endpoint.URL, Detect: endpoint.Fallback})
 	if err != nil {
 		return err
 	}

@@ -96,6 +96,14 @@ type ServiceEndpoint struct {
 	// HostPort is URL's host:port, for configuration that names it bare (an
 	// insecure registry mirror).
 	HostPort string
+	// Fallback says the service may not answer while the instance is up (a
+	// cluster's server comes up on the cluster's time, after the instance is
+	// pointed at it, and no start revives it): the instance checks it answers
+	// before each use and goes direct when it does not (apt's
+	// Proxy-Auto-Detect through `fleet net-probe`; dockerd falls back from
+	// its mirrors by itself). Docker's servers are revived on every start,
+	// so the instance uses them as they are.
+	Fallback bool
 }
 
 // ErrNoServiceEndpoint is a shared service a runtime runs but does not point
