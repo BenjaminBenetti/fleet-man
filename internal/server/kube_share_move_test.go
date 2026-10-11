@@ -153,10 +153,18 @@ func TestKubeShareMoves(t *testing.T) {
 		t.Fatalf("in use: %v", got)
 	}
 
+	// The shared class changed since the last full preflight: waiting for
+	// the test to judge it, never begun.
+	f.moves[fleetShare{"c1", "alpha"}] = &kubernetes.ShareMove{Fleet: "alpha", From: "standard", To: "nfs2", Untested: "waits for the cluster test to judge nfs2"}
+	n := len(f.moved)
+	m.pass(ctx)
+	if got := m.status("c1"); len(got) != 1 || got[0].GetState() != shareMoveWaiting || got[0].GetDetail() != "waits for the cluster test to judge nfs2" || len(f.moved) != n {
+		t.Fatalf("untested: %v (moved %v)", got, f.moved)
+	}
+
 	// Blocked: listed with why, never begun.
 	f.result = nil
 	f.moves[fleetShare{"c1", "alpha"}] = &kubernetes.ShareMove{Fleet: "alpha", From: "nfs", To: "fast", Blocked: "its instances run on any node"}
-	n := len(f.moved)
 	m.pass(ctx)
 	if got := m.status("c1"); len(got) != 1 || got[0].GetState() != shareMoveBlocked || got[0].GetDetail() != "its instances run on any node" || len(f.moved) != n {
 		t.Fatalf("blocked: %v (moved %v)", got, f.moved)

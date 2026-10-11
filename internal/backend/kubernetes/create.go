@@ -169,6 +169,9 @@ type creation struct {
 	// keptDiskClass is the StorageClass of the disk a rebuild keeps (""
 	// for a new disk: diskClass resolves it).
 	keptDiskClass string
+	// moveHolds hold off a move of the fleet's share until the job ends
+	// (shareMoveGate; releaseMoveHolds).
+	moveHolds []func()
 }
 
 // what is the job, for its messages.
@@ -183,6 +186,7 @@ func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
 	if err := c.connect(ctx); err != nil {
 		return nil, err
 	}
+	defer c.releaseMoveHolds()
 	if err := c.prepareShare(ctx); err != nil {
 		return nil, err
 	}

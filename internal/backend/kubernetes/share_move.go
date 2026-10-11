@@ -52,7 +52,9 @@ import (
 // the fleet's instances calls the move off (its copy deleted: the share is
 // as it was, and moves the next time the fleet is stopped); after, it waits
 // for the move, or (the move was a daemon's that stopped) is refused until
-// the next pass finishes it (ShareMoveGate).
+// the next pass finishes it (ShareMoveGate). One that passes the gate holds
+// off any move of the share until it is done, so none begins between its
+// gate and its pod.
 //
 // A single-node share moves to single-node or multi-node mode (the fleet's
 // instances are then placed anywhere); a multi-node one only to a class
@@ -122,6 +124,10 @@ type ShareMove struct {
 	// NoInstance: the fleet has no instance on the connection to copy with
 	// (its image runs the copy); it moves once one exists and is stopped.
 	NoInstance bool
+	// Untested says why it waits for the connection's next full preflight
+	// ("" when it need not): the shared class changed since the last one,
+	// so the mode it gives (the multi-node test) is not known yet.
+	Untested string
 }
 
 // ShareMoveClaim is the copy a moving share goes through.
@@ -147,10 +153,33 @@ var (
 )
 
 // The moves this daemon runs: a create or a start calls one off, or waits.
+// holds counts, per share, the creates, clones, rebuilds and starts past
+// the gate and not done yet: a move begins only while none is held.
 var shareMoves = struct {
-	mu   sync.Mutex
-	runs map[string]*shareMoveRun
-}{runs: map[string]*shareMoveRun{}}
+	mu    sync.Mutex
+	runs  map[string]*shareMoveRun
+	holds map[string]int
+}{runs: map[string]*shareMoveRun{}, holds: map[string]int{}}
+
+// holdShareLocked holds off a move of share key until the release it
+// returns is called (once is enough; more do nothing). shareMoves.mu is
+// held.
+func holdShareLocked(key string) func() {
+	shareMoves.holds[key]++
+	return sync.OnceFunc(func() {
+		shareMoves.mu.Lock()
+		defer shareMoves.mu.Unlock()
+		if shareMoves.holds[key]--; shareMoves.holds[key] <= 0 {
+			delete(shareMoves.holds, key)
+		}
+	})
+}
+
+// shareMoveKey is the key of fleetName's share on connection clusterID in
+// shareMoves (and the share's bind lock).
+func shareMoveKey(daemonID, clusterID, fleetName string) string {
+	return clusterID + "/" + ShareClaim(fleetName, names.FleetHash(daemonID, clusterID, fleetName))
+}
 
 type shareMoveRun struct {
 	cancel    context.CancelCauseFunc
@@ -188,6 +217,9 @@ type moveScope struct {
 	shareInfo, moveRec shareMoveInfo
 	hasShareInfo       bool
 	hasCopy            bool
+	// dying is the share as deleted, while its deletion waits (a pod
+	// still holds it); share is nil then.
+	dying *corev1.PersistentVolumeClaim
 }
 
 // moveScopeOf reads fleetName's share and its move's copy on connection
@@ -216,7 +248,11 @@ func readMoveScope(ctx context.Context, p *Pool, cs kclient.Interface, ns, clust
 	pvcs := cs.CoreV1().PersistentVolumeClaims(s.ns)
 	want := shareLabels(ident.Owner(), clusterID, h8)
 	if pvc, err := pvcs.Get(ctx, s.claim, metav1.GetOptions{}); err == nil {
-		if notOurs(pvc.Labels, want) == "" && pvc.DeletionTimestamp == nil {
+		switch {
+		case notOurs(pvc.Labels, want) != "":
+		case pvc.DeletionTimestamp != nil:
+			s.dying = pvc
+		default:
 			s.share = pvc
 			s.shareInfo, s.hasShareInfo = readMoveInfo(pvc.ObjectMeta)
 		}
@@ -317,6 +353,12 @@ func (s *moveScope) move(ctx context.Context) (*ShareMove, error) {
 	if !moves || sameClass(from, to, caps) {
 		return nil, nil
 	}
+	if picked := s.rec.SharedStorageClass; picked != "" && caps.GetSharedStorageClass() != picked && caps.GetShareRefused() == "" {
+		// The last full preflight ran before the shared class changed: the
+		// mode the class gives is not known until its multi-node test ran,
+		// and a share moved now would stay in single-node mode there.
+		return &ShareMove{Fleet: s.fleetName, From: from, To: to, Untested: "waits for the cluster test to judge " + to}, nil
+	}
 	old := topology.Mode(s.share.Annotations[names.AnnotationShareMode])
 	if !old.Shared() {
 		old = topology.SingleNode
@@ -403,6 +445,10 @@ func (p *Pool) MoveShare(ctx context.Context, clusterID, fleetName string, repor
 		shareMoves.mu.Unlock()
 		return nil
 	}
+	if shareMoves.holds[key] > 0 {
+		shareMoves.mu.Unlock()
+		return fmt.Errorf("%w: an instance of the fleet is being created or started", ErrShareInUse)
+	}
 	shareMoves.runs[key] = run
 	shareMoves.mu.Unlock()
 	defer func() {
@@ -424,7 +470,7 @@ func (p *Pool) MoveShare(ctx context.Context, clusterID, fleetName string, repor
 		return err
 	}
 	m, err := s.move(ctx)
-	if err != nil || m == nil {
+	if err != nil || m == nil || m.Untested != "" {
 		return err
 	}
 	if m.Blocked != "" {
@@ -486,6 +532,14 @@ func (p *Pool) MoveShare(ctx context.Context, clusterID, fleetName string, repor
 		s.share = nil
 	} else {
 		run.commit()
+		// An earlier pass deleted the old share, which a pod held then:
+		// the new share takes its name only once it is gone.
+		if s.share == nil && s.dying != nil {
+			report("deleting the share in " + orDefault(info.From, "the default class"))
+			if err := s.deleteClaim(context.WithoutCancel(ctx), s.dying); err != nil {
+				return err
+			}
+		}
 	}
 	ctx = context.WithoutCancel(ctx)
 	// A share already in the new class and no longer marked was filled by
@@ -920,61 +974,84 @@ func (s *moveScope) codexHome(ctx context.Context, set *appsv1.StatefulSet, rec 
 // share this daemon runs is called off while it can be (its copy deleted,
 // the share as it was), else waited for (within ctx); a move an earlier
 // daemon left before its point of no return is called off the same way,
-// and one past it refuses, until the next pass finishes it.
-func (p *Pool) ShareMoveGate(ctx context.Context, clusterID, fleetName string) error {
-	s, err := p.moveScopeOf(ctx, clusterID, fleetName)
+// and one past it refuses, until the next pass finishes it. Passed, it
+// holds off any move of the share until release is called (once the
+// instance's pod is up, or the job ends).
+func (p *Pool) ShareMoveGate(ctx context.Context, clusterID, fleetName string) (release func(), err error) {
+	ident, err := owner.LoadIdentity()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return s.gate(ctx, func() (*moveScope, error) { return p.moveScopeOf(ctx, clusterID, fleetName) })
+	return gateShare(ctx, shareMoveKey(ident.DaemonID, clusterID, fleetName), func() (*moveScope, error) {
+		return p.moveScopeOf(ctx, clusterID, fleetName)
+	})
 }
 
-// shareMoveGate is ShareMoveGate for a create, on its own client.
+// shareMoveGate is ShareMoveGate for a create, on its own client; the hold
+// goes with the create (releaseMoveHolds).
 func (c *creation) shareMoveGate(ctx context.Context) error {
 	ident := owner.Identity{DaemonID: c.daemonID}
-	read := func() (*moveScope, error) {
+	release, err := gateShare(ctx, shareMoveKey(c.daemonID, c.id.cluster, c.id.fleet), func() (*moveScope, error) {
 		return readMoveScope(ctx, c.p, c.cs, c.ns, c.id.cluster, c.rec, ident, c.id.fleet)
-	}
-	s, err := read()
+	})
 	if err != nil {
 		return err
 	}
-	return s.gate(ctx, read)
+	c.moveHolds = append(c.moveHolds, release)
+	return nil
 }
 
-// gate is ShareMoveGate on s; again reads it once more after a move this
-// daemon ran ends.
-func (s *moveScope) gate(ctx context.Context, again func() (*moveScope, error)) error {
-	var err error
-	shareMoves.mu.Lock()
-	run := shareMoves.runs[s.clusterID+"/"+s.claim]
-	shareMoves.mu.Unlock()
-	if run != nil {
+// releaseMoveHolds lets go of the holds the create's gates took.
+func (c *creation) releaseMoveHolds() {
+	for _, release := range c.moveHolds {
+		release()
+	}
+	c.moveHolds = nil
+}
+
+// gateShare is ShareMoveGate of share key, whose state read reads: it takes
+// the hold first (a move this daemon runs is called off or waited for
+// before), so what it then reads no move changes until release.
+func gateShare(ctx context.Context, key string, read func() (*moveScope, error)) (func(), error) {
+	var release func()
+	for release == nil {
+		shareMoves.mu.Lock()
+		run := shareMoves.runs[key]
+		if run == nil {
+			release = holdShareLocked(key)
+		}
+		shareMoves.mu.Unlock()
+		if run == nil {
+			break
+		}
 		if !run.isCommitted() {
 			run.cancel(errShareMoveCalledOff)
 		}
 		select {
 		case <-run.done:
 		case <-ctx.Done():
-			return fmt.Errorf("waiting for the fleet's share to move: %w", ctx.Err())
-		}
-		if s, err = again(); err != nil {
-			return err
+			return nil, fmt.Errorf("waiting for the fleet's share to move: %w", ctx.Err())
 		}
 	}
+	s, err := read()
+	if err != nil {
+		release()
+		return nil, err
+	}
 	if !s.hasCopy && !s.hasShareInfo {
-		return nil
+		return release, nil
 	}
 	m, _ := s.move(ctx)
 	if m != nil && !m.Committed {
 		s.callOff(s.moveRec)
-		return nil
+		return release, nil
 	}
+	release()
 	to := s.moveRec.To
 	if !s.hasCopy {
 		to = s.shareInfo.To
 	}
-	return &kubeerr.Error{Code: kubeerr.Unavailable.Narrow("share_moving"),
+	return nil, &kubeerr.Error{Code: kubeerr.Unavailable.Narrow("share_moving"),
 		Err:  fmt.Errorf("the fleet's share on %s is moving to StorageClass %s", clusterName(s.rec), orDefault(to, "default")),
 		Hint: "try again once the move finishes (a minute or so; fleet cluster ls names the fleets still moving)"}
 }

@@ -330,9 +330,11 @@ func TestShareMoveGate(t *testing.T) {
 	if mv, _ := r.pool.ShareMoveOf(ctx, testCluster, "alpha"); mv == nil || !mv.Begun || mv.Committed {
 		t.Fatalf("a begun move: %+v", mv)
 	}
-	if err := r.pool.ShareMoveGate(ctx, testCluster, "alpha"); err != nil {
+	release, err := r.pool.ShareMoveGate(ctx, testCluster, "alpha")
+	if err != nil {
 		t.Fatalf("the gate did not call the move off: %v", err)
 	}
+	release()
 	if r.pvc(r.copyClaim) != nil || classOf(r.pvc(r.claim)) != "standard" {
 		t.Fatal("calling it off did not leave the share as it was")
 	}
@@ -346,7 +348,7 @@ func TestShareMoveGate(t *testing.T) {
 	if mv, _ := r.pool.ShareMoveOf(ctx, testCluster, "alpha"); mv == nil || !mv.Committed {
 		t.Fatalf("a committed move: %+v", mv)
 	}
-	err := r.pool.ShareMoveGate(ctx, testCluster, "alpha")
+	_, err = r.pool.ShareMoveGate(ctx, testCluster, "alpha")
 	if code, _ := kubeerr.Of(err); code != kubeerr.Unavailable.Narrow("share_moving") {
 		t.Fatalf("the gate let a start through a half-moved share: %v", err)
 	}
@@ -363,9 +365,11 @@ func TestShareMoveGate(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("a finished move ran %d copy Jobs, want the second alone", n)
 	}
-	if err := r.pool.ShareMoveGate(ctx, testCluster, "alpha"); err != nil {
+	release, err = r.pool.ShareMoveGate(ctx, testCluster, "alpha")
+	if err != nil {
 		t.Fatalf("after the move: %v", err)
 	}
+	release()
 }
 
 // A start while this daemon copies the share calls the move off: the copy
@@ -386,13 +390,125 @@ func TestShareMoveGateCallsOffAMoveInFlight(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if err := r.pool.ShareMoveGate(ctx, testCluster, "alpha"); err != nil {
+	release, err := r.pool.ShareMoveGate(ctx, testCluster, "alpha")
+	if err != nil {
 		t.Fatalf("gate: %v", err)
 	}
+	defer release()
 	if err := <-done; !errors.Is(err, errShareMoveCalledOff) {
 		t.Fatalf("the move ended with %v", err)
 	}
 	if r.pvc(r.copyClaim) != nil || classOf(r.pvc(r.claim)) != "standard" || r.pvc(r.claim).UID != "share-uid-1" {
 		t.Fatal("a called-off move changed the share")
+	}
+}
+
+// A create, clone, rebuild or start past the gate holds off a move until it
+// is done (its pod then runs, or it failed): a move meanwhile refuses with
+// the share untouched, and goes through once the hold is released.
+func TestShareMoveGateHoldsOffAMove(t *testing.T) {
+	ctx := context.Background()
+	r := newMoveRig(t, topology.SingleNode)
+	release, err := r.pool.ShareMoveGate(ctx, testCluster, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.pool.MoveShare(ctx, testCluster, "alpha", nil); !errors.Is(err, ErrShareInUse) {
+		t.Fatalf("a move beside a start past its gate: %v", err)
+	}
+	if share := r.pvc(r.claim); classOf(share) != "standard" || share.UID != "share-uid-1" || r.pvc(r.copyClaim) != nil {
+		t.Fatal("a move held off touched the share")
+	}
+	release()
+	release() // once is enough
+	if err := r.pool.MoveShare(ctx, testCluster, "alpha", nil); err != nil {
+		t.Fatal(err)
+	}
+	if classOf(r.pvc(r.claim)) != "nfs" {
+		t.Fatal("the move did not go through once the hold was released")
+	}
+	shareMoves.mu.Lock()
+	left := len(shareMoves.holds)
+	shareMoves.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d holds left", left)
+	}
+}
+
+// A shared class set since the connection's last full preflight is not
+// judged yet: the move waits for the test (moved now, the share would stay
+// in single-node mode in a class that may pass the multi-node test), then
+// moves in the mode the test gave.
+func TestMoveShareWaitsForTheTestOfTheClass(t *testing.T) {
+	ctx := context.Background()
+	r := newMoveRig(t, topology.SingleNode)
+	r.caps.StorageClasses = append(r.caps.StorageClasses, &fleetgrpc.KubeStorageClass{Name: "nfs2", Provisioner: "nfs.csi.k8s.io", BindingMode: "Immediate"})
+	r.setShared(t, "nfs2")
+	mv, err := r.pool.ShareMoveOf(ctx, testCluster, "alpha")
+	if err != nil || mv == nil || mv.Untested == "" || mv.To != "nfs2" || mv.Begun {
+		t.Fatalf("ShareMoveOf = %+v, %v", mv, err)
+	}
+	if err := r.pool.MoveShare(ctx, testCluster, "alpha", nil); err != nil {
+		t.Fatal(err)
+	}
+	if share := r.pvc(r.claim); classOf(share) != "standard" || share.UID != "share-uid-1" || r.pvc(r.copyClaim) != nil {
+		t.Fatal("the share moved before the test judged its new class")
+	}
+	// The test ran: nfs2 passed it.
+	r.caps.SharedStorageClass = "nfs2"
+	if err := r.pool.MoveShare(ctx, testCluster, "alpha", nil); err != nil {
+		t.Fatal(err)
+	}
+	if share := r.pvc(r.claim); classOf(share) != "nfs2" || share.Annotations[names.AnnotationShareMode] != string(topology.MultiNode) {
+		t.Fatalf("the moved share: %v %v", classOf(share), share.Annotations)
+	}
+}
+
+// A pass that finds the old share still being deleted (a pod held it when
+// an earlier pass deleted it) waits for it to go before it makes the new
+// share in its name, rather than filling the share that is going.
+func TestMoveShareWaitsForTheOldShareToGo(t *testing.T) {
+	ctx := context.Background()
+	r := newMoveRig(t, topology.SingleNode)
+	info := shareMoveInfo{From: "standard", To: "nfs", Mode: topology.MultiNode, OldMode: topology.SingleNode, Phase: moveCopied, Size: "15Gi"}
+	nfs := "nfs"
+	r.seed(&corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: r.copyClaim, Namespace: jobNS, UID: "copy-uid", Labels: shareLabels(r.ident.Owner(), testCluster, r.h8),
+			Annotations: map[string]string{names.AnnotationShareMove: info.annotation()}},
+		Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &nfs},
+	})
+	old := r.pvc(r.claim)
+	now := metav1.Now()
+	old.DeletionTimestamp, old.Finalizers = &now, []string{"kubernetes.io/pvc-protection"}
+	pvcs := corev1.SchemeGroupVersion.WithResource("persistentvolumeclaims")
+	if err := r.cs.Tracker().Update(pvcs, old, jobNS); err != nil {
+		t.Fatal(err)
+	}
+	// pvc-protection: the deleted share goes once no pod names it (the
+	// ended seed's pod does until a move deletes it).
+	r.cs.PrependReactor("get", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.(k8stesting.GetAction).GetName() != r.claim {
+			return false, nil, nil
+		}
+		if _, err := r.cs.Tracker().Get(corev1.SchemeGroupVersion.WithResource("pods"), jobNS, r.sts+"-seed-g1-x"); err == nil {
+			return false, nil, nil
+		}
+		if obj, err := r.cs.Tracker().Get(pvcs, jobNS, r.claim); err == nil && obj.(*corev1.PersistentVolumeClaim).DeletionTimestamp != nil {
+			_ = r.cs.Tracker().Delete(pvcs, jobNS, r.claim)
+		}
+		return false, nil, nil
+	})
+	if mv, _ := r.pool.ShareMoveOf(ctx, testCluster, "alpha"); mv == nil || !mv.Committed {
+		t.Fatalf("a committed move: %+v", mv)
+	}
+	if err := r.pool.MoveShare(ctx, testCluster, "alpha", nil); err != nil {
+		t.Fatal(err)
+	}
+	share := r.pvc(r.claim)
+	if share == nil || share.UID == "share-uid-1" || share.DeletionTimestamp != nil || classOf(share) != "nfs" {
+		t.Fatalf("the new share is the old one going: %+v", share)
+	}
+	if r.pvc(r.copyClaim) != nil {
+		t.Fatal("the move's copy is left")
 	}
 }

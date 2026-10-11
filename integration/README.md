@@ -241,7 +241,7 @@ to a new shared StorageClass) needs a second class to move the share to
 (`FLEET_ITEST_SHARE_TO_CLASS`, else an `nfs.csi.k8s.io` class,
 `fleet-shared-path` or a `hostpath.csi.k8s.io` one): on the minikube above it
 moves `standard` to `csi-hostpath-sc`, on the NFS kind cluster to the NFS
-class (multi-node mode).
+class (multi-node mode; `FLEET_ITEST_SHARE_MOVE_MODE=multi-node` asserts it).
 
 ## Prerequisites
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: a change of the cluster's shared StorageClass moves a stopped fleet's share: while an instance runs the fleet is listed waiting (fleet cluster ls), once all are stopped a copy Job moves the share to the new class (same name, the old volume gone, nothing left of the move), and the instances start on it with every file, link, mode and owner kept, placed for the new class's mode (multi-node: no share-holder affinity, Codex's SQLite on each pod's disk). Needs a WaitForFirstConsumer or single-node default class and a second class (FLEET_ITEST_SHARE_TO_CLASS, else an nfs.csi.k8s.io one, fleet-shared-path or a hostpath.csi.k8s.io one); elsewhere it passes as not run.
+# Description: a change of the cluster's shared StorageClass moves a stopped fleet's share: while an instance runs the fleet is listed waiting (fleet cluster ls), once all are stopped a copy Job moves the share to the new class (same name, the old volume gone, nothing left of the move), and the instances start on it with every file, link, mode and owner kept, placed for the new class's mode (multi-node: no share-holder affinity, Codex's SQLite on each pod's disk). Needs a WaitForFirstConsumer or single-node default class and a second class (FLEET_ITEST_SHARE_TO_CLASS, else an nfs.csi.k8s.io one, fleet-shared-path or a hostpath.csi.k8s.io one; FLEET_ITEST_SHARE_MOVE_MODE names the mode it must give); elsewhere it passes as not run.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -38,8 +38,10 @@ old_uid=$(itest_k8s_kubectl get pvc "${share}" -o 'jsonpath={.metadata.uid}')
 run_in "${alpha}" 'mkdir -p ~/.claude/deep/er && echo moved > ~/.claude/deep/er/file.txt && chmod 640 ~/.claude/deep/er/file.txt && ln -s deep/er/file.txt ~/.claude/link && echo x > ~/.codex/notes'
 
 info "the shared class becomes ${to}: the fleet waits while beta runs"
+# No cluster test: the daemon judges the new class itself (the full
+# preflight a change runs), and the move waits for that, so the share takes
+# the mode the class's multi-node test gives.
 "${FLEET_BIN}" cluster set itest shared_storage_class="${to}" >/dev/null
-"${FLEET_BIN}" cluster test itest >/dev/null 2>&1 || true
 "${FLEET_BIN}" stop "${alpha}" >/dev/null
 for _ in $(seq 1 60); do
   moves | grep -q "waiting" && break
@@ -61,6 +63,7 @@ assert_equals "" "$(moves)" "nothing listed moving"
 [ -z "$(itest_k8s_fleet_object "${FIXTURE_REPO_NAME}" persistentvolumeclaims share-mv)" ] || fail "the move's copy is left"
 mode=$(itest_k8s_kubectl get pvc "${share}" -o 'jsonpath={.metadata.annotations.fleet\.dev/share-mode}')
 info "the moved share is in ${mode} mode"
+[ -z "${FLEET_ITEST_SHARE_MOVE_MODE:-}" ] || assert_equals "${FLEET_ITEST_SHARE_MOVE_MODE}" "${mode}" "the mode the new class gives"
 
 info "the fleet starts on the moved share, everything kept"
 "${FLEET_BIN}" start "${alpha}" >/dev/null

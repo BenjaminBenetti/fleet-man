@@ -329,13 +329,15 @@ func storageHeadLines(st *fleetgrpc.KubeClusterStatus) []string {
 }
 
 // storageTailLines are the lines under the Storage group's last field:
-// the attach limits, the snapshot classes, each class with its multi-node
-// test result, the fleets' shares and the moves under way.
+// the attach limits, the snapshot classes, the deep test's two-pod probe,
+// each class with its multi-node test result, the fleets' shares and the
+// moves under way.
 func (e *kubeEditor) storageTailLines(st *fleetgrpc.KubeClusterStatus) []string {
 	caps := st.GetCapabilities()
 	var out []string
 	out = append(out, kubeCheckLines(kubeCheck(st, "attach_limits"), true)...)
 	out = append(out, kubeCheckLines(kubeCheck(st, "snapshots"), true)...)
+	out = append(out, kubeCheckLines(kubeCheck(st, "share_pods"), true)...)
 	for i, sc := range caps.GetStorageClasses() {
 		if i == 8 {
 			out = append(out, dimStyle.Render(fmt.Sprintf("… %d more classes", len(caps.GetStorageClasses())-8)))

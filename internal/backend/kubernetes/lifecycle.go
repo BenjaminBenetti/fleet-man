@@ -77,10 +77,13 @@ func (b *Backend) Start(containerID string) error {
 	defer cancel()
 	p := b.p()
 	if rec.Share != nil && topology.Mode(rec.Share.Mode).Shared() {
-		// A move of the fleet's share is called off, or waited for.
-		if err := p.ShareMoveGate(ctx, w.cluster, id.fleet); err != nil {
+		// A move of the fleet's share is called off, or waited for, and
+		// held off until the pod is up (it then runs: no move begins).
+		release, err := p.ShareMoveGate(ctx, w.cluster, id.fleet)
+		if err != nil {
 			return classify(err)
 		}
+		defer release()
 	}
 	warmGateway(kubeimage.Strategy(rec.Strategy))
 	if err := p.Scale(ctx, w.cluster, w.sts, 1); err != nil {

@@ -193,6 +193,8 @@ func (m *kubeShareMoves) decide(ctx context.Context, st *state.State, fs fleetSh
 	}
 	busy := runningInstances(st, fs)
 	switch {
+	case mv.Untested != "":
+		e.state, e.detail = shareMoveWaiting, mv.Untested
 	case mv.Blocked != "":
 		e.state, e.detail = shareMoveBlocked, mv.Blocked
 	case busy > 0:

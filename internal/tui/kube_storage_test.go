@@ -35,6 +35,7 @@ func storageStatus() *fleetgrpc.KubeClusterStatus {
 		{Name: "shared_storage", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, Detail: "no class passed the multi-node test · failed: azurefile",
 			Fix: "enable the Filestore CSI driver (RWX; each share is at least 1Ti)"},
 		{Name: "attach_limits", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, Detail: "127 volumes per node (pd.csi.storage.gke.io)\nfleet-size cap (single-node mode): 6 instances per fleet (node memory; attach limit 127)"},
+		{Name: "share_pods", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, Detail: "two pods on one node mount one volume"},
 	}
 	st.ShareMigrations = []*fleetgrpc.KubeShareMigration{{Fleet: "beta", FromClass: "standard-rwo", ToClass: "filestore", State: "waiting", Detail: "waits for 1 running instance on the cluster to stop"}}
 	return st
@@ -65,6 +66,7 @@ func TestEditorStorageSection(t *testing.T) {
 		"✓ auto → standard-rwo (RWO, WFFC, expandable, network)",
 		"[ test storage ]",
 		"attach limits 127 volumes per node (pd.csi.storage.gke.io) fleet-size cap (single-node mode): 6 instances per fleet",
+		"share pods two pods on one node mount one volume",
 		"class filestore",
 		"not tested: each volume is at least 1Ti ([ test storage ] asks first)",
 		"class azurefile",
