@@ -15,7 +15,7 @@ type admissionView struct {
 	HostNetwork bool
 	HostIPC     bool
 	HostPID     bool
-	DooD        bool
+	DooD        *DooD
 	Resources   Resources
 	DiskSize    string
 	Runtime     string

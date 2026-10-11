@@ -384,6 +384,33 @@ func TestKubeRecoveryActions(t *testing.T) {
 			t.Fatalf("the editor opened on %+v, want memory_limit", row)
 		}
 	})
+	// A devcontainer that needs privileged pods (docker-outside-of-docker,
+	// docker-in-docker) opens the editor on Allow privileged.
+	for _, code := range []string{"kubernetes:unsupported:dood-needs-privileged", "kubernetes:unsupported:privileged"} {
+		t.Run(code, func(t *testing.T) {
+			m, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, kubeInst("d", fleet.StatusFailed, code+": --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker-host.sock binds the docker engine's socket"))
+			fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyEnter})
+			if label := fp.kubeRecovery.actionLabel(kubeRecoverySettings); !strings.Contains(label, "Allow privileged pods") {
+				t.Fatalf("the settings button reads %q", label)
+			}
+			fp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}) // the first button
+			sp, ok := m.currentPage.(*settingsPage)
+			if !ok {
+				t.Fatalf("the settings button left page %T", m.currentPage)
+			}
+			e, ok := sp.kubeDialog.(*kubeEditor)
+			if !ok {
+				t.Fatalf("no cluster editor: %#v", sp.kubeDialog)
+			}
+			if row := e.current(); row.kind != kubeEditorRowField || row.field.path != "allow_privileged" {
+				t.Fatalf("the editor opened on %+v, want allow_privileged", row)
+			}
+		})
+	}
+	// Another unsupported code has no setting to change.
+	if _, ok := fixFor("kubernetes:unsupported:compose"); ok {
+		t.Error("a compose devcontainer offers a cluster setting")
+	}
 	t.Run("close", func(t *testing.T) {
 		m, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, kubeInst("a", fleet.StatusFailed, interruptedErr))
 		fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyEnter})

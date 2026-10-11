@@ -155,8 +155,7 @@ func (t *translation) optUseAPISocket(vals []string) Outcome {
 	if !lastBool(vals) {
 		return Ignore
 	}
-	t.spec.DooD = true
-	t.needsPrivilegeAllowed("--use-api-socket")
+	t.dood = append(t.dood, "--use-api-socket")
 	t.runMounts = append(t.runMounts, runMount{Mount{Kind: MountDockerSocket, Target: "/var/run/docker.sock"}, "use-api-socket"})
 	return ""
 }
@@ -371,6 +370,16 @@ func (t *translation) addBind(m rawMount, target string) {
 			return
 		}
 	}
+	if dockerSocketPath(source) {
+		// The pod's own engine serves it (the fleet-docker sidecar),
+		// never the daemon host's, so whatever is at the source there
+		// (a socket, a link, nothing on a host whose docker lives
+		// elsewhere) does not matter.
+		mt.Kind = MountDockerSocket
+		t.dood = append(t.dood, m.option)
+		t.runMounts = append(t.runMounts, runMount{mt, optionOf(m)})
+		return
+	}
 	info, err := t.host.Stat(source)
 	switch {
 	case errors.Is(err, fs.ErrNotExist) && m.fromVolumeFlag:
@@ -389,11 +398,14 @@ func (t *translation) addBind(m rawMount, target string) {
 			return
 		}
 	}
-	if mt.Kind == MountDockerSocket {
-		t.spec.DooD = true
-		t.needsPrivilegeAllowed(m.option)
-	}
 	t.runMounts = append(t.runMounts, runMount{mt, optionOf(m)})
+}
+
+// dockerSocketPath reports a bind source that is the docker engine's socket
+// (/var/run/docker.sock, a rootless engine's $XDG_RUNTIME_DIR/docker.sock,
+// Docker Desktop's ~/.docker/run/docker.sock).
+func dockerSocketPath(source string) bool {
+	return filepath.Base(source) == "docker.sock"
 }
 
 // classifyHostPath says what a pod gets for a daemon-host bind source.
@@ -401,9 +413,6 @@ func (t *translation) classifyHostPath(source string, info fs.FileInfo) (MountKi
 	mode := info.Mode()
 	switch {
 	case mode&fs.ModeSocket != 0:
-		if filepath.Base(source) == "docker.sock" {
-			return MountDockerSocket, nil
-		}
 		return MountHostSocket, nil
 	case mode.IsDir():
 		if t.onlySockets(source) {

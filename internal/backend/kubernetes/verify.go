@@ -131,6 +131,17 @@ func containerStatus(pod *corev1.Pod, name string) *corev1.ContainerStatus {
 	return nil
 }
 
+// initContainerStatus is the status of pod's init container name (a native
+// sidecar, the docker engine's), nil without one.
+func initContainerStatus(pod *corev1.Pod, name string) *corev1.ContainerStatus {
+	for i := range pod.Status.InitContainerStatuses {
+		if pod.Status.InitContainerStatuses[i].Name == name {
+			return &pod.Status.InitContainerStatuses[i]
+		}
+	}
+	return nil
+}
+
 // imageDigest is the sha256:<hex> an image reference or a container
 // status's imageID carries ("" when none): imageIDs come as
 // repo@sha256:<hex> (a pulled image), sha256:<hex> (a node-loaded one), or

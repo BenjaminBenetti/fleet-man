@@ -476,6 +476,7 @@
       "privileged": "map"
     },
     "changes": {
+      "/pid1/docker": {},
       "/pid1/privileged": true,
       "/security/privileged": true
     }
@@ -553,6 +554,7 @@
       "/mounts/1/kind": "workspace",
       "/mounts/1/source": "/home/dev/src/app",
       "/mounts/1/target": "/workspaces/app",
+      "/pid1/docker": {},
       "/pid1/privileged": true,
       "/security/privileged": true
     },
@@ -1023,6 +1025,7 @@
       "/hostAliases/0/hostnames/0": "devbox",
       "/hostAliases/0/ip": "127.0.0.1",
       "/hostNetwork": true,
+      "/pid1/docker": {},
       "/pid1/privileged": true,
       "/security/privileged": true
     },
@@ -1042,6 +1045,7 @@
       "privileged": "map"
     },
     "changes": {
+      "/pid1/docker": {},
       "/pid1/hostname": "devbox",
       "/pid1/privileged": true,
       "/security/privileged": true
@@ -1549,7 +1553,7 @@
       "type=bind,source=/var/run/docker.sock,target=/var/run/docker-host.sock"
     ],
     "outcomes": {},
-    "error": "kubernetes:unsupported:privileged: --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker-host.sock needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node)"
+    "error": "kubernetes:unsupported:dood-needs-privileged: --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker-host.sock binds the docker engine's socket; on a cluster that engine is the pod's own, a sidecar that needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node), or use a cluster with a sysbox runtime class"
   },
   "mount/docker-socket-local": {
     "args": [
@@ -1560,11 +1564,16 @@
       "mount": "map"
     },
     "changes": {
-      "/dood": true,
+      "/dood/privileged": true,
       "/mounts/1/kind": "docker-socket",
       "/mounts/1/source": "/var/run/docker.sock",
-      "/mounts/1/target": "/var/run/docker-host.sock"
-    }
+      "/mounts/1/target": "/var/run/docker-host.sock",
+      "/pid1/links/0/path": "/var/run/docker-host.sock",
+      "/pid1/links/0/target": "/opt/fleet/docker/docker.sock"
+    },
+    "warnings": [
+      "/var/run/docker-host.sock: the docker engine is the pod's own (the fleet-docker sidecar), not the daemon host's: the containers it runs are pod-local siblings, whose published ports are on the instance's localhost and whose binds see the workspace and nothing else of the instance, and its images live on the instance disk"
+    ]
   },
   "mount/duplicate": {
     "args": [
@@ -1983,6 +1992,7 @@
       "privileged": "map"
     },
     "changes": {
+      "/pid1/docker": {},
       "/pid1/privileged": true,
       "/security/privileged": true
     }
@@ -2003,6 +2013,7 @@
       "privileged": "map"
     },
     "changes": {
+      "/pid1/docker": {},
       "/pid1/privileged": true,
       "/security/privileged": true
     }
@@ -2023,6 +2034,7 @@
     },
     "changes": {
       "/annotations/io.kubernetes.cri-o.userns-mode": "auto:size=65536",
+      "/pid1/docker": {},
       "/runtimeClassName": "sysbox-runc"
     },
     "warnings": [
@@ -2047,6 +2059,7 @@
     },
     "changes": {
       "/annotations/io.kubernetes.cri-o.userns-mode": "auto:size=65536",
+      "/pid1/docker": {},
       "/runtimeClassName": "sysbox-runc"
     },
     "warnings": [
@@ -2440,6 +2453,7 @@
       "security-opt": "map"
     },
     "changes": {
+      "/pid1/docker": {},
       "/pid1/privileged": true,
       "/security/privileged": true
     }
@@ -2729,7 +2743,7 @@
       "--use-api-socket"
     ],
     "outcomes": {},
-    "error": "kubernetes:unsupported:privileged: --use-api-socket needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node)"
+    "error": "kubernetes:unsupported:dood-needs-privileged: --use-api-socket binds the docker engine's socket; on a cluster that engine is the pod's own, a sidecar that needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node), or use a cluster with a sysbox runtime class"
   },
   "use-api-socket/local": {
     "args": [
@@ -2739,10 +2753,15 @@
       "use-api-socket": "map"
     },
     "changes": {
-      "/dood": true,
+      "/dood/privileged": true,
       "/mounts/1/kind": "docker-socket",
-      "/mounts/1/target": "/var/run/docker.sock"
-    }
+      "/mounts/1/target": "/var/run/docker.sock",
+      "/pid1/links/0/path": "/var/run/docker.sock",
+      "/pid1/links/0/target": "/opt/fleet/docker/docker.sock"
+    },
+    "warnings": [
+      "/var/run/docker.sock: the docker engine is the pod's own (the fleet-docker sidecar), not the daemon host's: the containers it runs are pod-local siblings, whose published ports are on the instance's localhost and whose binds see the workspace and nothing else of the instance, and its images live on the instance disk"
+    ]
   },
   "user": {
     "args": [

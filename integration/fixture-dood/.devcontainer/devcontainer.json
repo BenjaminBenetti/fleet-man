@@ -1,0 +1,7 @@
+{
+  "name": "fleet-man docker-outside-of-docker fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": { "dockerDashComposeVersion": "none" }
+  }
+}

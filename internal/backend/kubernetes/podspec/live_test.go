@@ -135,7 +135,7 @@ func TestLiveAdmission(t *testing.T) {
 
 	// An unlabelled namespace admits everything a local cluster allows,
 	// the debug grants kept.
-	for _, fx := range []string{"fixture", "fixture-go-feature", "fixture-dind"} {
+	for _, fx := range []string{"fixture", "fixture-go-feature", "fixture-dind", "fixture-dood"} {
 		a, err := admit(fx, open, fleet.KubeCluster{}, nil)
 		if err != nil {
 			t.Errorf("%s in %s: %v", fx, open, err)
@@ -159,6 +159,10 @@ func TestLiveAdmission(t *testing.T) {
 	wantCode("go feature under baseline, require", err, CodeAdmissionDenied+":debug_capabilities", "SYS_PTRACE", "set it to auto")
 	_, err = admit("fixture-dind", baseline, fleet.KubeCluster{}, nil)
 	wantCode("dind under baseline", err, CodeAdmissionDenied, "pod security (baseline)", "privileged")
+	// The docker engine's sidecar is privileged too: baseline refuses it,
+	// naming the sidecar, never a silently dropped engine.
+	_, err = admit("fixture-dood", baseline, fleet.KubeCluster{}, nil)
+	wantCode("dood under baseline", err, CodeAdmissionDenied, "pod security (baseline)", DockerSidecar)
 	if _, err := admit("fixture", baseline, fleet.KubeCluster{}, nil); err != nil {
 		t.Errorf("plain fixture under baseline: %v", err)
 	}

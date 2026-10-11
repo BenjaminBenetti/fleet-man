@@ -178,9 +178,13 @@ func checkObjects(t *testing.T, res *Result, r RenderInput, o *Objects) {
 		checkLabels(t, obj.GetName(), obj.GetLabels(), r)
 	}
 	checkLabels(t, "pod", tmpl.Labels, r)
-	// The commands are fleet's own.
-	if dev := tmpl.Spec.Containers[0]; jsonString(dev.Command) != jsonString(Command()) || len(dev.Args) > 0 || len(tmpl.Spec.Containers) != 1 || len(tmpl.Spec.InitContainers) > 0 {
+	// The commands are fleet's own: pod-init, and the docker engine's
+	// sidecar when the run reaches the engine.
+	if dev := tmpl.Spec.Containers[0]; jsonString(dev.Command) != jsonString(Command()) || len(dev.Args) > 0 || len(tmpl.Spec.Containers) != 1 {
 		t.Errorf("the instance pod runs %q %q", dev.Command, dev.Args)
+	}
+	if n := len(tmpl.Spec.InitContainers); (n > 0) != (res.Pod.DooD != nil) || n > 1 || (n == 1 && !isDockerSidecar(tmpl.Spec.InitContainers[0])) {
+		t.Errorf("the instance pod's init containers %+v (docker engine %+v)", tmpl.Spec.InitContainers, res.Pod.DooD)
 	}
 	if o.Seed != nil {
 		if c := o.Seed.Job.Spec.Template.Spec.Containers[0]; jsonString(c.Command) != jsonString(r.Seed.Command) || len(c.Args) > 0 || len(c.Env) > 0 {
@@ -188,12 +192,16 @@ func checkObjects(t *testing.T, res *Result, r RenderInput, o *Objects) {
 		}
 	}
 	// Every env value comes from the env Secret, under a key it has, but
-	// the pod's uid for pod-init, which comes last.
+	// fleet's own fixed paths and the pod's uid for pod-init, which comes
+	// last.
 	env := tmpl.Spec.Containers[0].Env
 	if last := env[len(env)-1]; last.Name != podinit.PodUIDEnv || last.ValueFrom.FieldRef.FieldPath != "metadata.uid" {
 		t.Errorf("the last env is %+v, want the pod's uid", last)
 	}
 	for _, e := range env[:len(env)-1] {
+		if fleetOwnEnv(e) {
+			continue
+		}
 		ref := e.ValueFrom
 		if e.Value != "" || ref == nil || ref.SecretKeyRef == nil || ref.SecretKeyRef.Name != o.EnvSecret.Name {
 			t.Errorf("env %s does not come from the env Secret: %+v", e.Name, e)
@@ -208,6 +216,20 @@ func checkObjects(t *testing.T, res *Result, r RenderInput, o *Objects) {
 			t.Errorf("the spec Secret lacks %s", name)
 		}
 	}
+}
+
+// fleetOwnEnv reports a dev container variable fleet sets to a fixed value
+// of its own, never one of the run's.
+func fleetOwnEnv(e corev1.EnvVar) bool {
+	return e.Name == DockerConfigEnv && e.Value == DockerConfig && e.ValueFrom == nil
+}
+
+// isDockerSidecar reports the docker engine's sidecar, running fleet's own
+// script (with the connection's dockerd options) and no environment.
+func isDockerSidecar(c corev1.Container) bool {
+	want := DockerSidecarCommand()
+	return c.Name == DockerSidecar && len(c.Command) >= len(want) && jsonString(c.Command[:len(want)]) == jsonString(want) &&
+		len(c.Args) == 0 && len(c.Env) == 0 && len(c.EnvFrom) == 0 && c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
 }
 
 func checkLabels(t *testing.T, what string, l map[string]string, r RenderInput) {
@@ -340,10 +362,23 @@ func TestNoRunStringReachesKubeletExpansion(t *testing.T) {
 				if i > 0 {
 					want = job
 				}
-				if strings.Join(c.Command, "\x00") != strings.Join(want, "\x00") || len(c.Args) > 0 {
+				if i == 0 && c.Name == DockerSidecar {
+					if !isDockerSidecar(c) {
+						t.Errorf("%s: the docker sidecar runs %q %q", name, c.Command, c.Args)
+					}
+					// After fleet's script, only the connection's options.
+					for _, a := range c.Command[len(DockerSidecarCommand()):] {
+						if strings.Contains(a, "$(") || strings.Contains(a, "$$") {
+							t.Errorf("%s: the docker sidecar's option %q would be expanded", name, a)
+						}
+					}
+				} else if strings.Join(c.Command, "\x00") != strings.Join(want, "\x00") || len(c.Args) > 0 {
 					t.Errorf("%s: container %s runs %q %q", name, c.Name, c.Command, c.Args)
 				}
 				for _, e := range c.Env {
+					if fleetOwnEnv(e) {
+						continue
+					}
 					if e.Value != "" || e.ValueFrom == nil || (e.ValueFrom.SecretKeyRef == nil && e.Name != podinit.PodUIDEnv) {
 						t.Errorf("%s: env %s is not a secretKeyRef", name, e.Name)
 					}
@@ -647,8 +682,6 @@ func TestRenderRefusesWhatItCannotProvide(t *testing.T) {
 		"host dir":        {args: []string{"-v", "/home/dev/host/aws:/root/.aws"}, code: CodeUnsupportedMount},
 		"host file":       {args: []string{"-v", "/home/dev/host/gitconfig:/root/.gitconfig"}, code: CodeUnsupportedMount},
 		"shared volume":   {args: []string{"-v", "cache:/cache"}, code: CodeUnsupportedMount},
-		"docker socket":   {args: []string{"-v", "/var/run/docker.sock:/var/run/docker.sock"}, code: CodeUnsupportedMount},
-		"api socket":      {args: []string{"--use-api-socket"}, code: CodeUnsupportedMount},
 		"fleet mounts": {edit: func(in *Input, _ *RenderInput) {
 			in.FleetMounts = []backend.Mount{
 				{ContainerPath: "/home/vscode/.claude", Scope: backend.MountScopeFleetShared, SubPath: "claude"},
@@ -843,9 +876,15 @@ func FuzzRender(f *testing.F) {
 			t.Fatalf("Render(%q) runs %q %q", extra, dev.Command, dev.Args)
 		}
 		for _, e := range dev.Env {
+			if fleetOwnEnv(e) {
+				continue
+			}
 			if e.Value != "" || e.ValueFrom == nil || (e.ValueFrom.SecretKeyRef == nil && e.Name != podinit.PodUIDEnv) {
 				t.Fatalf("Render(%q): env %s", extra, e.Name)
 			}
+		}
+		if n := len(tmpl.Spec.InitContainers); n > 1 || (n == 1 && !isDockerSidecar(tmpl.Spec.InitContainers[0])) {
+			t.Fatalf("Render(%q): init containers %+v", extra, tmpl.Spec.InitContainers)
 		}
 	})
 }

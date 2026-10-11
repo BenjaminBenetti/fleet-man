@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 )
 
 // status.go is the instance status table: what fleetd tells of an instance
@@ -162,6 +163,11 @@ func podLive(pod *corev1.Pod) (backend.LiveStatus, string) {
 		}
 		return backend.LiveStatusUnknown, "not ready"
 	case corev1.PodPending:
+		// The dev container waits on the docker engine's sidecar
+		// (PodInitializing) while that one cannot start.
+		if s := initContainerStatus(pod, podspec.DockerSidecar); s != nil && s.State.Waiting != nil && s.State.Waiting.Reason != "PodInitializing" {
+			return backend.LiveStatusUnknown, podspec.DockerSidecar + ": " + waitingReason(s)
+		}
 		if r := waitingReason(dev); r != "" {
 			return backend.LiveStatusUnknown, r
 		}

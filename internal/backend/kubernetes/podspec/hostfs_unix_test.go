@@ -71,8 +71,8 @@ func TestBindClassificationOnTheRealFilesystem(t *testing.T) {
 	if len(want) > 0 {
 		t.Errorf("no mount at %v", want)
 	}
-	if !res.Pod.DooD {
-		t.Error("a docker.sock bind does not ask for the docker-in-docker sidecar")
+	if res.Pod.DooD == nil || !res.Pod.DooD.Privileged {
+		t.Error("a docker.sock bind does not get the docker engine's sidecar")
 	}
 
 	in = baseInput([]string{"--mount", "type=bind,source=" + filepath.Join(dir, "fifo") + ",target=/fifo"}, nil, nil)

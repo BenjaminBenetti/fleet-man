@@ -284,6 +284,8 @@ type liveBackend struct {
 	kctx     string
 	pool     *Pool
 	daemonID string
+	// prefix starts the names of the namespaces connect makes.
+	prefix string
 
 	mu      sync.Mutex
 	recs    []fleet.KubeCluster
@@ -390,16 +392,23 @@ func hostImageTags(t *testing.T, repo string) []string {
 }
 
 // connect adds a connection to a fresh namespace with labels, whose facts
-// say whether root pods are admitted.
-func (lb *liveBackend) connect(t *testing.T, labels map[string]string, rootAdmitted bool) *live {
+// say whether root pods are admitted, its record changed by edits.
+func (lb *liveBackend) connect(t *testing.T, labels map[string]string, rootAdmitted bool, edits ...func(*fleet.KubeCluster)) *live {
 	t.Helper()
-	return lb.connectIn(t, "fleet-it-p2-12a-k8s-backend-", labels, rootAdmitted)
+	prefix := lb.prefix
+	if prefix == "" {
+		prefix = "fleet-it-p2-12a-k8s-backend-"
+	}
+	return lb.connectIn(t, prefix, labels, rootAdmitted, edits...)
 }
 
 // connectIn is connect to a namespace named with prefix.
-func (lb *liveBackend) connectIn(t *testing.T, prefix string, labels map[string]string, rootAdmitted bool) *live {
+func (lb *liveBackend) connectIn(t *testing.T, prefix string, labels map[string]string, rootAdmitted bool, edits ...func(*fleet.KubeCluster)) *live {
 	t.Helper()
 	lv := newLiveIn(t, lb.kctx, prefix)
+	for _, edit := range edits {
+		edit(&lv.rec)
+	}
 	if len(labels) > 0 {
 		ns, err := lv.cs.CoreV1().Namespaces().Get(context.Background(), lv.ns, metav1.GetOptions{})
 		if err != nil {

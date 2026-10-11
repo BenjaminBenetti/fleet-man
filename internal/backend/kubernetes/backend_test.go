@@ -574,14 +574,29 @@ func TestInstanceIdentity(t *testing.T) {
 }
 
 func TestClusterFacts(t *testing.T) {
-	f := clusterFacts(Facts{Local: localcluster.Cluster{Kind: localcluster.Minikube, Name: "mk"}, Capabilities: &fleetgrpc.KubeCapabilities{
-		LimitRangeMemoryLimit: "4Gi", RuntimeClasses: []string{"sysbox"},
+	caps := &fleetgrpc.KubeCapabilities{
+		Version: "v1.37.0", LimitRangeMemoryLimit: "4Gi", RuntimeClasses: []string{"sysbox"},
 		Nodes: []*fleetgrpc.KubeNode{{Arch: "arm64", AllocatableCpu: "4", AllocatableMemory: "16Gi"}},
-	}})
+		StorageClasses: []*fleetgrpc.KubeStorageClass{
+			{Name: "standard", IsDefault: true, Block: true},
+			{Name: "nfs-csi", Provisioner: "nfs.csi.k8s.io"},
+		},
+	}
+	f := clusterFacts(Facts{Local: localcluster.Cluster{Kind: localcluster.Minikube, Name: "mk"}, Capabilities: caps}, "")
 	if !f.Local || f.LimitRangeMemoryLimit != "4Gi" || len(f.RuntimeClasses) != 1 || len(f.Nodes) != 1 || f.Nodes[0].Arch != "arm64" || f.Nodes[0].AllocatableMemory != "16Gi" {
 		t.Errorf("facts %+v", f)
 	}
-	if f := clusterFacts(Facts{}); f.Local || len(f.Nodes) != 0 {
+	if f.ServerVersion != "v1.37.0" || f.DiskFileShare != "" {
+		t.Errorf("version %q, the default class a file share: %q", f.ServerVersion, f.DiskFileShare)
+	}
+	if f := clusterFacts(Facts{Capabilities: caps}, "nfs-csi"); f.DiskFileShare != "nfs-csi" {
+		t.Errorf("an NFS instance disk: %q", f.DiskFileShare)
+	}
+	caps.StorageClasses[0].Block = false
+	if f := clusterFacts(Facts{Capabilities: caps}, ""); f.DiskFileShare != "standard" {
+		t.Errorf("a file-share default class: %q", f.DiskFileShare)
+	}
+	if f := clusterFacts(Facts{}, ""); f.Local || len(f.Nodes) != 0 || f.DiskFileShare != "" {
 		t.Errorf("no facts %+v", f)
 	}
 }

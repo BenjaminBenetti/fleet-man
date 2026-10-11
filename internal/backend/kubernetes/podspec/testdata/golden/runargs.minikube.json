@@ -25,6 +25,7 @@
       ],
       "hostname": "kubeshim-host",
       "privileged": true,
+      "docker": {},
       "remote_user": "vscode"
     },
     "env": [

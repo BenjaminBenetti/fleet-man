@@ -108,6 +108,12 @@ func Run(specPath string, stdout, stderr *os.File) int {
 	if spec.Cgroups != CgroupsOff {
 		layout = layoutCgroups(spec, warnf)
 	}
+	// After the layout, whose user cgroup the engine's containers go below.
+	if spec.Docker != nil {
+		for _, w := range configureDocker(spec.Docker, layout) {
+			warnf("%s", w)
+		}
+	}
 	// Last, so pod-init's own files and cgroups keep their modes; the start
 	// script inherits it.
 	if mask, err := spec.umask(); spec.Umask != "" && err == nil {
@@ -124,9 +130,10 @@ func Run(specPath string, stdout, stderr *os.File) int {
 
 // prepare does what docker's runtime does before the container's process:
 // the fleet link, a passwd entry for an unknown uid, the host and domain
-// names, the DinD MTU, the rlimits and the OOM score (set on PID 1, so the
-// start script and the agent's execs inherit it). Each is best-effort with a
-// warning: the start script runs regardless, as docker's would.
+// names, the links to sockets sidecars serve, the rlimits and the OOM score
+// (set on PID 1, so the start script and the agent's execs inherit it). Each
+// is best-effort with a warning: the start script runs regardless, as
+// docker's would.
 func prepare(spec Spec, warnf func(string, ...any)) {
 	if _, err := os.Lstat(fleetLink); errors.Is(err, fs.ErrNotExist) {
 		if fi, err := os.Stat(path.Dir(fleetLink)); err == nil && fi.IsDir() {
@@ -159,21 +166,8 @@ func prepare(spec Spec, warnf func(string, ...any)) {
 			}
 		}
 	}
-	if m := spec.DockerMTU; m != nil {
-		mtu, err := m.MTU, error(nil)
-		if mtu == 0 {
-			mtu, err = podMTU()
-		}
-		file := m.DaemonJSON
-		if file == "" {
-			file = DefaultDockerDaemonJSON
-		}
-		if err == nil {
-			_, err = mergeDockerMTU(file, mtu)
-		}
-		if err != nil {
-			warnf("docker mtu: %v", err)
-		}
+	for _, w := range makeLinks(spec.Links) {
+		warnf("%s", w)
 	}
 	for _, w := range applyRlimits(spec.Rlimits) {
 		warnf("%s", w)

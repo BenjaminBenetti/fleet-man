@@ -36,7 +36,8 @@ func validSpec() Spec {
 		Hostname:    "devbox",
 		Domainname:  "example.test",
 		Privileged:  true,
-		DockerMTU:   &DockerMTU{},
+		Docker:      &Docker{AddressPools: []AddressPool{{Base: "10.200.0.0/16", Size: 24}}},
+		Links:       []Link{{Path: "/var/run/docker-host.sock", Target: "/opt/fleet/docker/docker.sock"}},
 		RemoteUser:  "vscode",
 	}
 }
@@ -61,8 +62,14 @@ func TestSpecValidate(t *testing.T) {
 		"umask":        func(s *Spec) { s.Umask = "0999" },
 		"umask range":  func(s *Spec) { s.Umask = "1777" },
 		"oom score":    func(s *Spec) { n := 1001; s.OOMScoreAdj = &n },
-		"mtu":          func(s *Spec) { s.DockerMTU = &DockerMTU{MTU: 100} },
-		"daemon json":  func(s *Spec) { s.DockerMTU = &DockerMTU{DaemonJSON: "daemon.json"} },
+		"mtu":          func(s *Spec) { s.Docker = &Docker{MTU: 100} },
+		"daemon json":  func(s *Spec) { s.Docker = &Docker{DaemonJSON: "daemon.json"} },
+		"pool base":    func(s *Spec) { s.Docker = &Docker{AddressPools: []AddressPool{{Base: "10.200.0.0", Size: 24}}} },
+		"pool size":    func(s *Spec) { s.Docker = &Docker{AddressPools: []AddressPool{{Base: "10.200.0.0/16", Size: 8}}} },
+		"link path":    func(s *Spec) { s.Links = []Link{{Path: "docker.sock", Target: "/opt/fleet/docker/docker.sock"}} },
+		"link root":    func(s *Spec) { s.Links = []Link{{Path: "/", Target: "/opt/fleet/docker/docker.sock"}} },
+		"link unclean": func(s *Spec) { s.Links = []Link{{Path: "/var/run/../x", Target: "/opt/fleet/docker/docker.sock"}} },
+		"link target":  func(s *Spec) { s.Links = []Link{{Path: "/var/run/docker.sock", Target: "docker.sock"}} },
 		"sha":          func(s *Spec) { s.BinarySHA256 = "abc" },
 		"fallback sha": func(s *Spec) { s.FallbackSHA256 = strings.Repeat("G", 64) },
 		"remote user":  func(s *Spec) { s.RemoteUser = "a:b" },
@@ -283,7 +290,7 @@ func TestPasswdAppend(t *testing.T) {
 	}
 }
 
-func TestDockerMTU(t *testing.T) {
+func TestDockerConfig(t *testing.T) {
 	table := "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n" +
 		"eth1\t0000F40A\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n" +
 		"net0\t00000000\t0100F40A\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
@@ -305,37 +312,192 @@ func TestDockerMTU(t *testing.T) {
 		t.Fatalf("pod mtu %d %v", mtu, err)
 	}
 
+	pools := []AddressPool{{Base: "10.200.0.0/16", Size: 24}}
+	all := dockerConfig{mtu: 1450, pools: pools, cgroupParent: "/kubepods/pod1/ctr/fleet-user/docker"}
+	read := func(file string) map[string]any {
+		t.Helper()
+		var got map[string]any
+		data, _ := os.ReadFile(file)
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatalf("%s: %v", data, err)
+		}
+		return got
+	}
 	cfg := filepath.Join(dir, "etc", "docker", "daemon.json")
-	if changed, err := mergeDockerMTU(cfg, 1450); err != nil || !changed {
+	if changed, _, err := mergeDockerConfig(cfg, all); err != nil || !changed {
 		t.Fatalf("create: %v %v", changed, err)
 	}
-	if changed, err := mergeDockerMTU(cfg, 1450); err != nil || changed {
+	want := map[string]any{"mtu": float64(1450), "cgroup-parent": "/kubepods/pod1/ctr/fleet-user/docker",
+		"default-address-pools": []any{map[string]any{"base": "10.200.0.0/16", "size": float64(24)}}}
+	if got := read(cfg); !reflect.DeepEqual(got, want) {
+		t.Fatalf("created %v, want %v", got, want)
+	}
+	if changed, _, err := mergeDockerConfig(cfg, all); err != nil || changed {
 		t.Fatalf("no change: %v %v", changed, err)
 	}
-	_ = os.WriteFile(cfg, []byte(`{"registry-mirrors":["http://mirror"],"mtu":1500}`), 0o600)
+	// The user's keys are kept; fleet's are set over a stale value (a
+	// container cgroup of an earlier run, on the persisted /etc).
+	_ = os.WriteFile(cfg, []byte(`{"registry-mirrors":["http://mirror"],"mtu":1500,"cgroup-parent":"/kubepods/pod1/old/fleet-user/docker"}`), 0o600)
 	_ = os.Chmod(cfg, 0o600)
-	if changed, err := mergeDockerMTU(cfg, 1450); err != nil || !changed {
+	if changed, _, err := mergeDockerConfig(cfg, all); err != nil || !changed {
 		t.Fatalf("merge: %v %v", changed, err)
 	}
-	var got map[string]any
-	data, _ := os.ReadFile(cfg)
-	_ = json.Unmarshal(data, &got)
-	if got["mtu"] != float64(1450) || got["registry-mirrors"] == nil {
-		t.Fatalf("merged config %s", data)
+	got := read(cfg)
+	if got["mtu"] != float64(1450) || got["registry-mirrors"] == nil || got["cgroup-parent"] != all.cgroupParent {
+		t.Fatalf("merged config %v", got)
 	}
 	if fi, _ := os.Stat(cfg); fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", fi.Mode())
 	}
+	// Nothing asked: nothing changes, pools the user set stay.
+	_ = os.WriteFile(cfg, []byte(`{"default-address-pools":[{"base":"172.80.0.0/16","size":24}]}`), 0o644)
+	if changed, _, err := mergeDockerConfig(cfg, dockerConfig{}); err != nil || changed {
+		t.Fatalf("an empty config: %v %v", changed, err)
+	}
+	// The systemd driver needs a slice for a parent: the user's stays.
+	_ = os.WriteFile(cfg, []byte(`{"exec-opts":["native.cgroupdriver=systemd"]}`), 0o644)
+	if _, warn, err := mergeDockerConfig(cfg, all); err != nil || !strings.Contains(warn, "systemd cgroup driver") {
+		t.Fatalf("systemd driver: %q %v", warn, err)
+	}
+	if got := read(cfg); got["cgroup-parent"] != nil || got["mtu"] != float64(1450) {
+		t.Fatalf("systemd driver config %v", got)
+	}
 	_ = os.WriteFile(cfg, []byte("null\n"), 0o644)
-	if changed, err := mergeDockerMTU(cfg, 1450); err != nil || !changed {
+	if changed, _, err := mergeDockerConfig(cfg, all); err != nil || !changed {
 		t.Fatalf("a null config: %v %v", changed, err)
 	}
 	_ = os.WriteFile(cfg, []byte("not json"), 0o644)
-	if _, err := mergeDockerMTU(cfg, 1450); err == nil {
+	if _, _, err := mergeDockerConfig(cfg, all); err == nil {
 		t.Fatal("a broken config was overwritten")
 	}
 	if data, _ := os.ReadFile(cfg); string(data) != "not json" {
 		t.Fatal("a broken config changed")
+	}
+}
+
+// configureDocker configures an image's docker engine only: an image without
+// one gets no daemon.json; the docker-in-docker feature's own address pool
+// option wins over the connection's.
+func TestConfigureDocker(t *testing.T) {
+	dir := t.TempDir()
+	defer func(dirs []string, init string) { dockerdDirs, dindInit = dirs, init }(dockerdDirs, dindInit)
+	dockerdDirs = []string{filepath.Join(dir, "usr/bin")}
+	dindInit = filepath.Join(dir, "usr/local/share/docker-init.sh")
+	cfg := filepath.Join(dir, "etc/docker/daemon.json")
+	d := &Docker{MTU: 1400, AddressPools: []AddressPool{{Base: "10.200.0.0/16", Size: 24}}, DaemonJSON: cfg}
+	layout := &Layout{Docker: cgroupMount + "/kubepods/pod1/ctr/fleet-user/docker"}
+
+	if warns := configureDocker(d, layout); len(warns) != 0 {
+		t.Fatalf("no docker: %v", warns)
+	}
+	if _, err := os.Stat(cfg); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("an image without docker got a daemon.json: %v", err)
+	}
+	mustMkdirAll(t, dockerdDirs[0])
+	if err := os.WriteFile(filepath.Join(dockerdDirs[0], "dockerd"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if warns := configureDocker(d, layout); len(warns) != 0 {
+		t.Fatalf("warnings %v", warns)
+	}
+	data, _ := os.ReadFile(cfg)
+	for _, want := range []string{`"mtu": 1400`, `"base": "10.200.0.0/16"`, `"cgroup-parent": "/kubepods/pod1/ctr/fleet-user/docker"`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("daemon.json %s lacks %s", data, want)
+		}
+	}
+
+	_ = os.Remove(cfg)
+	mustMkdirAll(t, filepath.Dir(dindInit))
+	_ = os.WriteFile(dindInit, []byte("#!/bin/sh\nAZURE_DNS_AUTO_DETECTION=true\nDOCKER_DEFAULT_ADDRESS_POOL=base=192.165.0.0/16,size=24\n"), 0o755)
+	warns := configureDocker(d, nil)
+	if len(warns) != 1 || !strings.Contains(warns[0], "dockerDefaultAddressPool") {
+		t.Fatalf("the feature's own pool: %v", warns)
+	}
+	data, _ = os.ReadFile(cfg)
+	if strings.Contains(string(data), "default-address-pools") || strings.Contains(string(data), "cgroup-parent") {
+		t.Fatalf("daemon.json %s: no pools beside the feature's flag, no parent without a layout", data)
+	}
+	// The feature without the option leaves the pools to the connection.
+	_ = os.WriteFile(dindInit, []byte("#!/bin/sh\nDOCKER_DEFAULT_ADDRESS_POOL=\nDOCKER_DEFAULT_IP6_TABLES=\n"), 0o755)
+	if warns := configureDocker(d, nil); len(warns) != 0 {
+		t.Fatalf("warnings %v", warns)
+	}
+	if data, _ = os.ReadFile(cfg); !strings.Contains(string(data), "default-address-pools") {
+		t.Fatalf("daemon.json %s", data)
+	}
+}
+
+func TestMakeLinks(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "opt/fleet/docker/docker.sock")
+	// /var/run is a link to /run, as in debian images.
+	mustMkdirAll(t, filepath.Join(dir, "run"))
+	mustMkdirAll(t, filepath.Join(dir, "var"))
+	if err := os.Symlink("../run", filepath.Join(dir, "var/run")); err != nil {
+		t.Fatal(err)
+	}
+	// The image's placeholder (the docker-outside-of-docker feature
+	// leaves an empty file at its bind target), a stale link of an earlier
+	// run, a new path, and a directory, which stays.
+	placeholder := filepath.Join(dir, "var/run/docker-host.sock")
+	_ = os.WriteFile(filepath.Join(dir, "run/docker-host.sock"), nil, 0o644)
+	stale := filepath.Join(dir, "srv/old.sock")
+	mustMkdirAll(t, filepath.Dir(stale))
+	if err := os.Symlink("/nowhere", stale); err != nil {
+		t.Fatal(err)
+	}
+	asDir := filepath.Join(dir, "srv/a-dir.sock")
+	mustMkdirAll(t, filepath.Join(asDir, "kept"))
+	nested := filepath.Join(dir, "deep/new/dir/docker.sock")
+	links := []Link{{Path: placeholder, Target: target}, {Path: stale, Target: target}, {Path: asDir, Target: target}, {Path: nested, Target: target}}
+	warns := makeLinks(links)
+	if len(warns) != 1 || !strings.Contains(warns[0], "a directory is already there") {
+		t.Fatalf("warnings %v", warns)
+	}
+	for _, p := range []string{placeholder, stale, nested, filepath.Join(dir, "run/docker-host.sock")} {
+		if got, err := os.Readlink(p); err != nil || got != target {
+			t.Errorf("%s -> %q %v", p, got, err)
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(asDir, "kept")); err != nil || !fi.IsDir() {
+		t.Error("a directory at a link's path was replaced")
+	}
+	if warns := makeLinks(links[:1]); len(warns) != 0 {
+		t.Fatalf("again: %v", warns)
+	}
+
+	// A link to a socket owned by another group gets that group: stat of
+	// the link (as the docker-outside-of-docker feature reads it) says what
+	// stat of the daemon host's socket would.
+	mustMkdirAll(t, filepath.Dir(target))
+	_ = os.WriteFile(target, nil, 0o660)
+	gid := os.Getgid()
+	if os.Geteuid() == 0 {
+		gid = 2375
+		if err := os.Chown(target, 0, gid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owned := filepath.Join(dir, "run/owned.sock")
+	if warns := makeLinks([]Link{{Path: owned, Target: target}}); len(warns) != 0 {
+		t.Fatalf("warnings %v", warns)
+	}
+	if fi, err := os.Lstat(owned); err != nil || fi.Sys().(*syscall.Stat_t).Gid != uint32(gid) {
+		t.Fatalf("the link's group: %v %v, want %d", fi, err, gid)
+	}
+	// An earlier run's link follows the socket to a new group (another
+	// sidecar image's docker gid).
+	if os.Geteuid() == 0 {
+		if err := os.Chown(target, 0, 2376); err != nil {
+			t.Fatal(err)
+		}
+		if warns := makeLinks([]Link{{Path: owned, Target: target}}); len(warns) != 0 {
+			t.Fatalf("warnings %v", warns)
+		}
+		if fi, err := os.Lstat(owned); err != nil || fi.Sys().(*syscall.Stat_t).Gid != 2376 {
+			t.Fatalf("the kept link's group: %v %v, want 2376", fi, err)
+		}
 	}
 }
 
@@ -447,11 +609,26 @@ func TestSetupCgroups(t *testing.T) {
 	if !reflect.DeepEqual(slept, []time.Duration{time.Millisecond, 2 * time.Millisecond}) {
 		t.Fatalf("waits %v between the retries, want a short backoff", slept)
 	}
-	if !f.dirs[dir+"/fleet-agent"] || !f.dirs[dir+"/fleet-user"] {
-		t.Fatalf("children not created: %v", f.dirs)
+	for _, d := range []string{"/fleet-agent", "/fleet-user", "/fleet-user/procs", "/fleet-user/docker"} {
+		if !f.dirs[dir+d] {
+			t.Fatalf("%s not created: %v", d, f.dirs)
+		}
 	}
 	if !reflect.DeepEqual(l.Controllers, []string{"cpu", "memory", "pids"}) || f.files[dir+"/cgroup.subtree_control"] != "+cpu +memory +pids" {
 		t.Fatalf("controllers %v, subtree_control %q", l.Controllers, f.files[dir+"/cgroup.subtree_control"])
+	}
+	// The user cgroup is a parent: its processes and a nested docker's
+	// containers get the controllers too.
+	for _, d := range []string{"/fleet-user", "/fleet-user/docker"} {
+		if got := f.files[dir+d+"/cgroup.subtree_control"]; got != "+cpu +memory +pids" {
+			t.Fatalf("%s subtree_control %q", d, got)
+		}
+	}
+	if l.User != dir+"/fleet-user/procs" || l.UserTree != dir+"/fleet-user" || l.Docker != dir+"/fleet-user/docker" || l.V != LayoutVersion {
+		t.Fatalf("layout %+v", l)
+	}
+	if got := l.DockerParent(); got != "/pod/ctr/fleet-user/docker" {
+		t.Fatalf("docker parent %q", got)
 	}
 	if f.files[dir+"/cgroup.procs"] != "" {
 		t.Fatalf("processes left in the container cgroup: %q (writes %v)", f.files[dir+"/cgroup.procs"], f.writes)
@@ -484,7 +661,7 @@ func TestSetupCgroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := ReadLayout(file)
-	if err != nil || got.User != dir+"/fleet-user" || got.Agent != dir+"/fleet-agent" || !got.OOMGroup {
+	if err != nil || got.User != dir+"/fleet-user/procs" || got.UserTree != dir+"/fleet-user" || got.Agent != dir+"/fleet-agent" || !got.OOMGroup {
 		t.Fatalf("read back %+v %v", got, err)
 	}
 	if _, err := ReadLayout(filepath.Join(t.TempDir(), "none")); !errors.Is(err, fs.ErrNotExist) {
@@ -528,6 +705,11 @@ func TestSetupCgroupsUnprivilegedAndStubborn(t *testing.T) {
 	l, err := setupCgroups(none, dir, 0)
 	if err != nil || l.UserMemoryMax != -1 || !reflect.DeepEqual(l.Controllers, []string{"cpu", "pids"}) {
 		t.Fatalf("%+v %v", l, err)
+	}
+	// At a private cgroup namespace's root (cri-dockerd, sysbox) the docker
+	// parent is the namespace's own path.
+	if got := l.DockerParent(); got != "/fleet-user/docker" || none.files[dir+"/fleet-user/cgroup.subtree_control"] != "+cpu +pids" {
+		t.Fatalf("docker parent %q, user subtree_control %q", got, none.files[dir+"/fleet-user/cgroup.subtree_control"])
 	}
 }
 

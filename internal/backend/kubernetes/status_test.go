@@ -78,6 +78,12 @@ func TestStatusTable(t *testing.T) {
 			p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable", Message: "0/1 nodes are available"}}
 		})}, backend.LiveStatusUnknown, "Unschedulable: 0/1 nodes are available", AgentNone},
 		{"pending", statusInput{set: replicas(1), pod: podIn(corev1.PodPending)}, backend.LiveStatusUnknown, "Pending", AgentNone},
+		{"the docker sidecar does not pull", statusInput{set: replicas(1), pod: podIn(corev1.PodPending, devWaiting("PodInitializing", ""), func(p *corev1.Pod) {
+			p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "fleet-docker", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"}}}}
+		})}, backend.LiveStatusUnknown, "fleet-docker: ImagePullBackOff", AgentNone},
+		{"waiting on the docker sidecar", statusInput{set: replicas(1), pod: podIn(corev1.PodPending, devWaiting("PodInitializing", ""), func(p *corev1.Pod) {
+			p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "fleet-docker", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+		})}, backend.LiveStatusUnknown, "PodInitializing", AgentNone},
 		{"evicted", statusInput{set: replicas(1), pod: podIn(corev1.PodFailed, func(p *corev1.Pod) {
 			p.Status.Reason, p.Status.Message = "Evicted", "The node was low on resource: memory."
 		})}, backend.LiveStatusUnknown, "Evicted: The node was low on resource: memory.", AgentNone},

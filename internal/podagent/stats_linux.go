@@ -135,8 +135,11 @@ func (s *statsSampler) containerCgroup() (cgroupDir, error) {
 }
 
 // containerOf is the container's cgroup path for this process's: the parent
-// of pod-init's child groups.
+// of pod-init's child groups (fleet-agent, fleet-user and its procs).
 func containerOf(p string) string {
+	if path.Base(p) == "procs" && path.Base(path.Dir(p)) == "fleet-user" {
+		p = path.Dir(p)
+	}
 	switch path.Base(p) {
 	case "fleet-agent", "fleet-user":
 		return path.Dir(p)

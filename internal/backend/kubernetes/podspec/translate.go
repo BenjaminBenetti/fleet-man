@@ -85,12 +85,18 @@ type translation struct {
 	// privileged is --privileged; needsPrivileged lists what else needs a
 	// privileged dev container (--device), and needsAllowed what needs
 	// privileged pods allowed without making the dev container one (host
-	// namespaces, the docker-in-docker sidecar), each as written.
+	// namespaces), each as written.
 	privileged      bool
 	needsPrivileged []string
 	needsAllowed    []string
-	// sysbox marks --privileged served by a sysbox runtime class.
+	// sysbox marks --privileged (or the docker engine's sidecar) served by
+	// a sysbox runtime class.
 	sysbox bool
+	// dood lists what reaches the docker engine (a docker.sock bind,
+	// --use-api-socket), as written; doodPrivileged runs its sidecar
+	// privileged.
+	dood           []string
+	doodPrivileged bool
 	// debug are the debug grants asked for.
 	debug debugGrants
 
@@ -248,6 +254,7 @@ func (t *translation) finish() {
 	t.finishMounts()
 	t.finishPorts()
 	t.finishPrivilege()
+	t.finishDocker()
 	t.finishDebug()
 	t.finishCaps()
 	t.finishProcess()

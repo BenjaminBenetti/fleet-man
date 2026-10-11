@@ -1,0 +1,6 @@
+{
+  "error": "kubernetes:unsupported:dood-needs-privileged: --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker-host.sock binds the docker engine's socket; on a cluster that engine is the pod's own, a sidecar that needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node), or use a cluster with a sysbox runtime class",
+  "refusals": [
+    "kubernetes:unsupported:dood-needs-privileged"
+  ]
+}

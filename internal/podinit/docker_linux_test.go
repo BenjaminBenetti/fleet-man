@@ -84,7 +84,7 @@ while :; do sleep 1 & wait $!; done`
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
 	logs := waitDockerLog(t, name, "ready")
-	want := map[string]string{"uid": "65534", "pid1": "/fleet-agent", "self": "/fleet-user", "oom": "0",
+	want := map[string]string{"uid": "65534", "pid1": "/fleet-agent", "self": "/fleet-user/procs", "oom": "0",
 		"usermax": "469762048", "nofile": "2048"}
 	got := map[string]string{}
 	for _, line := range strings.Split(logs, "\n") {
@@ -109,11 +109,12 @@ while :; do sleep 1 & wait $!; done`
 	}
 
 	// An OOM in fleet-user kills the hog, not the container. (A docker exec
-	// lands in PID 1's cgroup, fleet-agent; the hog moves itself.) The kernel
+	// lands in PID 1's cgroup, fleet-agent; the hog moves itself into
+	// fleet-user's process cgroup, as the agent moves a user's.) The kernel
 	// may pick a second victim while the first one's memory is still being
 	// freed, so the test looks at the outcome, not the hog's own output.
 	hog := `C=$(sed -n 's/^0:://p' /proc/1/cgroup); C=/sys/fs/cgroup${C%/fleet-agent}
-echo $$ > $C/fleet-user/cgroup.procs
+echo $$ > $C/fleet-user/procs/cgroup.procs
 head -c 900m /dev/zero | tail > /dev/null`
 	_ = exec.Command("docker", "exec", name, "sh", "-c", hog).Run()
 	events := docker(t, "exec", name, "sh", "-c", `C=$(sed -n 's/^0:://p' /proc/1/cgroup); cat /sys/fs/cgroup${C%/fleet-agent}/fleet-user/memory.events`)
