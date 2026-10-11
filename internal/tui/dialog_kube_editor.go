@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -540,6 +542,11 @@ func (e *kubeEditor) view(m *model, _ *settingsPage) string {
 			}
 			if f.path == "allow_privileged" {
 				body = kubeLines(body, kubeHangingIndent("      "+indent+kubeWarnStyle.Render(kubeGlyphWarn+" "+kubePrivilegedWarning), inner, 8+len(indent)))
+			}
+			// The ports a pod reaches are the daemon host's, not this
+			// machine's, once the daemon is remote.
+			if w := fleet.HostGatewayWarning(st.GetCluster().GetHostGateway(), fleetclient.IsRemote()); f.path == "host_gateway" && w != "" {
+				body = kubeLines(body, kubeHangingIndent("      "+indent+kubeWarnStyle.Render(kubeGlyphWarn+" "+w), inner, 8+len(indent)))
 			}
 		}
 		if i == e.row {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -70,12 +71,12 @@ func TestPodSocketsFollowTheDaemon(t *testing.T) {
 	h.warn = func(msg string, _ ...any) { warns = append(warns, msg) }
 
 	t.Setenv(agentsock.EnvOverride, "off")
-	if got := h.sockets(podTarget); got != (podwire.Sockets{MCP: true}) || loads != 1 {
+	if got := h.sockets(podTarget); !reflect.DeepEqual(got, podwire.Sockets{MCP: true}) || loads != 1 {
 		t.Fatalf("before any state: %+v (loads %d)", got, loads)
 	}
 	svc.hub.hasSubs.Store(true)
 	h.onState(fleetState(false))
-	if got := h.sockets(podTarget); got != (podwire.Sockets{Control: true}) || loads != 1 {
+	if got := h.sockets(podTarget); !reflect.DeepEqual(got, podwire.Sockets{Control: true}) || loads != 1 {
 		t.Fatalf("a TUI attached, Fleet MCP off: %+v (loads %d)", got, loads)
 	}
 
@@ -103,6 +104,7 @@ type fakePodPool struct {
 	source    kubernetes.DesiredSource
 	inbound   kubernetes.InboundHandler
 	refreshes int
+	dead      bool
 }
 
 func (p *fakePodPool) SetDesiredSource(fn kubernetes.DesiredSource) {
@@ -121,6 +123,13 @@ func (p *fakePodPool) RefreshDesired() {
 	p.mu.Lock()
 	p.refreshes++
 	p.mu.Unlock()
+}
+
+// Live: every pod the hub asks about has a session, unless dead says.
+func (p *fakePodPool) Live(t kubernetes.PodTarget) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.dead
 }
 
 func (p *fakePodPool) count() int {
@@ -242,7 +251,7 @@ func relayPair(t *testing.T, serve func(*podwire.Stream)) *yamux.Session {
 		t.Fatal(err)
 	}
 	handlers := map[podwire.Tag]podwire.Handler{}
-	for _, tag := range append([]podwire.Tag{podwire.TagSockHost}, podwire.SockTags...) {
+	for _, tag := range append([]podwire.Tag{podwire.TagSockHost, podwire.TagHostDial, podwire.TagSyncCtl}, podwire.SockTags...) {
 		handlers[tag] = serve
 	}
 	go func() { _ = (&podwire.Mux{Handlers: handlers}).Serve(fleetd) }()
@@ -332,8 +341,8 @@ func TestPodInboundServesEachSocketBehindItsGate(t *testing.T) {
 	if _, err := podwire.DialSock(empty, podwire.TagSockControl, podwire.SockOpen{}); !podwire.IsSockRefused(err, podwire.RefusedGate) {
 		t.Fatalf("a session with no instance: %v", err)
 	}
-	if _, err := podwire.DialSock(sess, podwire.TagSockHost, podwire.SockOpen{}); !podwire.IsSockRefused(err, podwire.RefusedUnsupported) {
-		t.Fatalf("a host socket: %v", err)
+	if _, err := podwire.DialSock(sess, podwire.TagSyncCtl, podwire.SockOpen{}); !podwire.IsSockRefused(err, podwire.RefusedUnsupported) {
+		t.Fatalf("a kind with no in-pod socket: %v", err)
 	}
 }
 

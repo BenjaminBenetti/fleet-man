@@ -104,6 +104,25 @@ func TestWithOriginAgent(t *testing.T) {
 	}
 }
 
+// TestHostAgentPaths: every daemon-host path a devcontainer's bind of the
+// user's agent may name: the relay, the origin agent, SSH_AUTH_SOCK now and
+// a FLEET_SSH_AGENT_SOCK path, each once; never "off".
+func TestHostAgentPaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(EnvAuthSock, HostSocketPath())
+	t.Setenv(EnvOrigin, "/tmp/origin.sock")
+	t.Setenv(EnvOverride, "/run/host-services/ssh-auth.sock")
+	want := []string{HostSocketPath(), "/tmp/origin.sock", "/run/host-services/ssh-auth.sock"}
+	if got := HostAgentPaths(); !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	t.Setenv(EnvAuthSock, "/tmp/other.sock")
+	t.Setenv(EnvOverride, "off")
+	if got := HostAgentPaths(); !slices.Equal(got, []string{HostSocketPath(), "/tmp/other.sock"}) {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestRelayUsable(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(func() {

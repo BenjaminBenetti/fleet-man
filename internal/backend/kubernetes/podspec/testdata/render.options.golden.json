@@ -12,10 +12,7 @@
     "changes": {
       "/pod/spec/hostAliases/0/hostnames/0": "host.docker.internal",
       "/pod/spec/hostAliases/0/ip": "127.0.0.2"
-    },
-    "warnings": [
-      "host-gateway: 127.0.0.2 resolves in the pod, but fleet does not mirror the daemon host's ports there yet"
-    ]
+    }
   },
   "add-host/host-gateway-off": {
     "changes": {
@@ -28,10 +25,7 @@
       "/pod/spec/hostAliases/0/hostnames/0": "gw",
       "/pod/spec/hostAliases/0/hostnames/1": "host.docker.internal",
       "/pod/spec/hostAliases/0/ip": "127.0.0.2"
-    },
-    "warnings": [
-      "host-gateway: 127.0.0.2 resolves in the pod, but fleet does not mirror the daemon host's ports there yet"
-    ]
+    }
   },
   "add-host/host-gateway-own-address": {
     "changes": {
@@ -39,10 +33,7 @@
       "/pod/spec/hostAliases/0/ip": "127.0.0.2",
       "/pod/spec/hostAliases/1/hostnames/0": "host.docker.internal",
       "/pod/spec/hostAliases/1/ip": "10.0.0.9"
-    },
-    "warnings": [
-      "host-gateway: 127.0.0.2 resolves in the pod, but fleet does not mirror the daemon host's ports there yet"
-    ]
+    }
   },
   "annotation": {},
   "attach": {},
@@ -484,21 +475,15 @@
       "/seed/spec/containers/0/resources/requests/memory": "512Mi"
     }
   },
-  "mount/bind-agent": {
-    "error": "kubernetes:unsupported:mount: /home/dev/host/agent.sock at /run/agent.sock (ssh-agent): a bind of the ssh-agent socket needs fleet's agent relay in the pod, which fleet does not provide on Kubernetes yet"
-  },
+  "mount/bind-agent": {},
   "mount/bind-dir-file": {
     "error": "kubernetes:unsupported:mount: /home/dev/host/aws at /home/vscode/.aws (host-dir): a bind of a daemon-host directory needs fleet's host-bind sync, which fleet does not provide on Kubernetes yet; kubernetes:unsupported:mount: /home/dev/host/gitconfig at /home/vscode/.gitconfig (host-file): a bind of a daemon-host file needs fleet's host-bind sync, which fleet does not provide on Kubernetes yet"
   },
   "mount/bind-empty-dir": {
     "error": "kubernetes:unsupported:mount: /home/dev/host/empty-dir at /empty (host-dir): a bind of a daemon-host directory needs fleet's host-bind sync, which fleet does not provide on Kubernetes yet"
   },
-  "mount/bind-socket": {
-    "error": "kubernetes:unsupported:mount: /home/dev/host/S.gpg-agent at /run/gpg.sock (host-socket): a bind of a daemon-host socket needs fleet's socket relay in the pod, which fleet does not provide on Kubernetes yet"
-  },
-  "mount/bind-socket-dir": {
-    "error": "kubernetes:unsupported:mount: /home/dev/host/x11 at /tmp/.X11-unix (host-socket-dir): a bind of a daemon-host socket directory needs fleet's socket relay in the pod, which fleet does not provide on Kubernetes yet"
-  },
+  "mount/bind-socket": {},
+  "mount/bind-socket-dir": {},
   "mount/bind-workspace-folder": {
     "changes": {
       "/pod/spec/containers/0/volumeMounts/16/mountPath": "/sub",

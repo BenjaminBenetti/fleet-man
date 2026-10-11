@@ -1,6 +1,10 @@
 package podspec
 
-import "github.com/BenjaminBenetti/fleet-man/internal/fleet"
+import (
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/hostrelay"
+	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
+)
 
 // PodSpec is an instance pod as Translate decided it: everything the
 // captured docker run, its image and the cluster connection say about the
@@ -52,8 +56,17 @@ type PodSpec struct {
 	// cannot take).
 	HostAliases []HostAlias `json:"hostAliases,omitempty"`
 	// HostGateway mirrors the daemon host's listening ports on HostGatewayIP
-	// inside the pod (--add-host <name>:host-gateway).
-	HostGateway bool `json:"hostGateway,omitempty"`
+	// inside the pod (--add-host <name>:host-gateway), but for GatewaySkip:
+	// the ports the devcontainer serves in the pod itself (its published
+	// container ports, its forwardPorts), which the mirror would hold
+	// against the pod's own listeners.
+	HostGateway bool     `json:"hostGateway,omitempty"`
+	GatewaySkip []uint16 `json:"gatewaySkip,omitempty"`
+	// HostSockets are the daemon-host sockets the run binds (other than the
+	// ssh-agent's, which PID1.Links point at fleet's agent relay), one per
+	// socket of a bound socket directory: the pod's agent binds each target,
+	// and fleetd relays its connections to the recorded source.
+	HostSockets []hostrelay.Socket `json:"hostSockets,omitempty"`
 	// DNS adds to the pod's resolver configuration (--dns, --dns-search,
 	// --dns-option).
 	DNS *DNSConfig `json:"dns,omitempty"`
@@ -265,7 +278,7 @@ type HostAlias struct {
 // HostGatewayIP is where a pod reaches the daemon host's mirrored ports when
 // its devcontainer declares host-gateway: a loopback address the pod agent
 // listens on.
-const HostGatewayIP = "127.0.0.2"
+const HostGatewayIP = podwire.HostGatewayAddr
 
 // DNSConfig adds to the pod's resolver configuration.
 type DNSConfig struct {

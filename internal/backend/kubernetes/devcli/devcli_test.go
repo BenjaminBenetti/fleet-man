@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
 )
@@ -253,6 +255,52 @@ func TestCaptureUpEnvironment(t *testing.T) {
 	t.Setenv("FLEET_DEVCONTAINER_BUILDKIT", "sometimes")
 	if _, err := CaptureUp(context.Background(), CaptureRequest{Tools: f.Tools, WorkspaceDir: ws, Config: cfg}); err == nil || !strings.Contains(err.Error(), "invalid FLEET_DEVCONTAINER_BUILDKIT") {
 		t.Errorf("an invalid FLEET_DEVCONTAINER_BUILDKIT: %v", err)
+	}
+}
+
+// TestCaptureUpBindsTheOriginAgent: a configuration whose
+// ${localEnv:SSH_AUTH_SOCK} read as the daemon's relay socket is captured
+// with the agent the daemon was started with, as the devcontainer backend's
+// up does; one that does not name the relay keeps fleetd's environment.
+func TestCaptureUpBindsTheOriginAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir, err := os.MkdirTemp("/tmp", "dca")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	origin := filepath.Join(dir, "agent.sock")
+	ln, err := net.Listen("unix", origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	relay := agentsock.HostSocketPath()
+	t.Setenv(agentsock.EnvAuthSock, relay)
+	t.Setenv(agentsock.EnvOrigin, origin)
+
+	f := newFakeTools(t)
+	ws, configFile := appWorkspace(t, map[string]string{".devcontainer/.dockerignore": "x\n"})
+	f.writeConfigs(t, configFile, `,"image":"base:1"`)
+	cfg, err := ReadMerged(context.Background(), ReadRequest{Tools: f.Tools, WorkspaceDir: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, config, want string
+	}{
+		{"names the relay", `{"mounts":["source=` + relay + `,target=/ssh.sock,type=bind"]}`, origin},
+		{"does not", `{"image":"base:1"}`, relay},
+	} {
+		c := *cfg
+		c.Configuration = json.RawMessage(tc.config)
+		if _, err := CaptureUp(context.Background(), CaptureRequest{Tools: f.Tools, WorkspaceDir: ws, Config: &c, Builder: "pinned"}); err != nil {
+			t.Fatal(err)
+		}
+		env := "\n" + f.read(t, "cli.env")
+		if !strings.Contains(env, "\n"+agentsock.EnvAuthSock+"="+tc.want+"\n") {
+			t.Errorf("%s: CLI env lacks SSH_AUTH_SOCK=%s:\n%s", tc.name, tc.want, env)
+		}
 	}
 }
 

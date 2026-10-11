@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -192,6 +193,29 @@ func savedStatus(st *fleetgrpc.KubeClusterStatus) func(kubeUpdateCall) (*fleetgr
 		}
 		next.Cluster.Revision = c.rev + 1
 		return next, nil
+	}
+}
+
+// TestEditorWarnsOfARemoteDaemonsHostGateway: a TUI whose daemon is remote
+// says beside Host gateway that pods reach that host's ports, until it is
+// off; a local one says nothing.
+func TestEditorWarnsOfARemoteDaemonsHostGateway(t *testing.T) {
+	st := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	m, sp := kubeTestModel(t, st)
+	openEditor(m, sp, "eu-1")
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_SSH", "")
+	t.Setenv("FLEET_SERVER", "")
+	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "Host gateway: [ auto ]") || strings.Contains(out, fleet.HostGatewayRemoteWarning) {
+		t.Fatalf("a local daemon:\n%s", out)
+	}
+	t.Setenv("FLEET_SSH", "ssh://dev@build-box")
+	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "⚠ "+fleet.HostGatewayRemoteWarning) {
+		t.Fatalf("a remote daemon with host_gateway auto:\n%s", out)
+	}
+	st.Cluster.HostGateway = "off"
+	if out := flatText(sp.viewSettings(m)); strings.Contains(out, fleet.HostGatewayRemoteWarning) {
+		t.Fatalf("host_gateway off still warns:\n%s", out)
 	}
 }
 

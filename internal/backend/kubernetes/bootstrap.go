@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/binstore"
+	"github.com/BenjaminBenetti/fleet-man/internal/hostrelay"
 	"github.com/BenjaminBenetti/fleet-man/internal/jobboot"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
@@ -42,6 +43,12 @@ type PodTarget struct {
 	// it, an agent of another build that speaks a common protocol is used
 	// as it is.
 	Restage bool
+	// HostSockets, HostGateway and GatewaySkip are the host relays fleetd
+	// recorded for the instance (InstanceRecord's): what the pod's agent
+	// binds, and all a pod's relay stream can reach on the daemon host.
+	HostSockets []hostrelay.Socket
+	HostGateway bool
+	GatewaySkip []uint16
 }
 
 // Pod is the target's pod name.

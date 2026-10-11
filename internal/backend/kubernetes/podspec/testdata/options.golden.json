@@ -28,7 +28,10 @@
       "/hostAliases/0/hostnames/0": "host.docker.internal",
       "/hostAliases/0/ip": "127.0.0.2",
       "/hostGateway": true
-    }
+    },
+    "warnings": [
+      "host-gateway: host.docker.internal is 127.0.0.2 in the pod, where fleet mirrors every TCP port the daemon host listens on, loopback-only ones too; a pod process cannot listen on 0.0.0.0 at a mirrored port (the devcontainer's forwardPorts and published ports are not mirrored)"
+    ]
   },
   "add-host/host-gateway-off": {
     "args": [
@@ -57,7 +60,10 @@
       "/hostAliases/0/hostnames/1": "host.docker.internal",
       "/hostAliases/0/ip": "127.0.0.2",
       "/hostGateway": true
-    }
+    },
+    "warnings": [
+      "host-gateway: host.docker.internal is 127.0.0.2 in the pod, where fleet mirrors every TCP port the daemon host listens on, loopback-only ones too; a pod process cannot listen on 0.0.0.0 at a mirrored port (the devcontainer's forwardPorts and published ports are not mirrored)"
+    ]
   },
   "add-host/host-gateway-own-address": {
     "args": [
@@ -73,7 +79,10 @@
       "/hostAliases/1/hostnames/0": "host.docker.internal",
       "/hostAliases/1/ip": "10.0.0.9",
       "/hostGateway": true
-    }
+    },
+    "warnings": [
+      "host-gateway: host.docker.internal is 127.0.0.2 in the pod, where fleet mirrors every TCP port the daemon host listens on, loopback-only ones too; a pod process cannot listen on 0.0.0.0 at a mirrored port (the devcontainer's forwardPorts and published ports are not mirrored)"
+    ]
   },
   "add-host/invalid": {
     "args": [
@@ -1441,7 +1450,9 @@
     "changes": {
       "/mounts/1/kind": "ssh-agent",
       "/mounts/1/source": "/home/dev/host/agent.sock",
-      "/mounts/1/target": "/run/agent.sock"
+      "/mounts/1/target": "/run/agent.sock",
+      "/pid1/links/0/path": "/run/agent.sock",
+      "/pid1/links/0/target": "/fleet-mounts/control/ssh-agent.sock"
     }
   },
   "mount/bind-device": {
@@ -1513,6 +1524,9 @@
       "mount": "map"
     },
     "changes": {
+      "/hostSockets/0/mode": 384,
+      "/hostSockets/0/source": "/home/dev/host/S.gpg-agent",
+      "/hostSockets/0/target": "/run/gpg.sock",
       "/mounts/1/kind": "host-socket",
       "/mounts/1/source": "/home/dev/host/S.gpg-agent",
       "/mounts/1/target": "/run/gpg.sock"
@@ -1527,6 +1541,9 @@
       "mount": "map"
     },
     "changes": {
+      "/hostSockets/0/mode": 511,
+      "/hostSockets/0/source": "/home/dev/host/x11/X0",
+      "/hostSockets/0/target": "/tmp/.X11-unix/X0",
       "/mounts/1/kind": "host-socket-dir",
       "/mounts/1/source": "/home/dev/host/x11",
       "/mounts/1/target": "/tmp/.X11-unix"

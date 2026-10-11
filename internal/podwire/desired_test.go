@@ -147,6 +147,64 @@ func TestDesiredStateValidate(t *testing.T) {
 	if SockName(TagExec) != "" || (Sockets{Control: true, SSHAgent: true, MCP: true}).Wants(TagSockHost) {
 		t.Error("a socket for a kind that is none")
 	}
+	relays := Sockets{Host: []HostSocket{{Target: "/run/user/1000/gnupg/S.gpg-agent", Mode: 0o700}}, Gateway: []uint16{8080}}
+	if !relays.Wants(TagSockHost) || !relays.Wants(TagHostDial) {
+		t.Error("Wants of the host relays")
+	}
+}
+
+// TestDesiredStateValidatesTheHostRelays: host-socket targets are clean
+// absolute socket paths, distinct, with plain permission bits; gateway ports
+// are distinct and non-zero; both within their limits.
+func TestDesiredStateValidatesTheHostRelays(t *testing.T) {
+	ok := DesiredState{Sockets: Sockets{
+		Host:    []HostSocket{{Target: "/run/itest-host-gpg-agent.sock", Mode: 0o700}, {Target: "/tmp/.X11-unix/X0", Mode: 0o777}},
+		Gateway: []uint16{22, 5432, 8080},
+	}}
+	if err := ok.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	host := func(targets ...string) Sockets {
+		var s Sockets
+		for _, p := range targets {
+			s.Host = append(s.Host, HostSocket{Target: p})
+		}
+		return s
+	}
+	tooMany := Sockets{}
+	for i := 0; i <= MaxHostSockets; i++ {
+		tooMany.Host = append(tooMany.Host, HostSocket{Target: "/run/s" + strings.Repeat("x", i%40) + string(rune('a'+i/40)) + string(rune('a'+i%26))})
+	}
+	ports := Sockets{}
+	for i := 1; i <= MaxGatewayPorts+1; i++ {
+		ports.Gateway = append(ports.Gateway, uint16(i))
+	}
+	for name, s := range map[string]Sockets{
+		"relative":       host("run/s"),
+		"root":           host("/"),
+		"unclean":        host("/run/../etc/s"),
+		"trailing slash": host("/run/s/"),
+		"too long":       host("/" + strings.Repeat("s", MaxSocketPath)),
+		"newline":        host("/run/a\nb"),
+		"twice":          host("/run/s", "/run/s"),
+		"setuid":         {Host: []HostSocket{{Target: "/run/s", Mode: 0o4700}}},
+		"too many":       tooMany,
+		"zero port":      {Gateway: []uint16{0}},
+		"port twice":     {Gateway: []uint16{80, 80}},
+		"too many ports": ports,
+	} {
+		if err := (DesiredState{Sockets: s}).Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if !ValidHostSocketTarget("/" + strings.Repeat("s", MaxSocketPath-1)) {
+		t.Error("a target of the longest length a socket address holds")
+	}
+	for p, want := range map[string]string{"/dev/log": "/dev", "/dev": "/dev", "/opt/fleet/bin/s": "/opt/fleet", "/devx/s": "", "/run/s": "", "/opt/fleetx": ""} {
+		if got := ReservedHostSocketDir(p); got != want {
+			t.Errorf("ReservedHostSocketDir(%q) = %q, want %q", p, got, want)
+		}
+	}
 }
 
 // TestSockRelayHalfClose: a relay stream the agent opens is answered by

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -32,6 +33,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/hostrelay"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/imageserve"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/localcluster"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
@@ -212,8 +214,10 @@ func TestPodTargetFromTheRecord(t *testing.T) {
 	if _, err := b.PodTarget(); !errors.Is(err, errNoInstanceRecord) {
 		t.Fatalf("without a record: %v", err)
 	}
+	socks := []hostrelay.Socket{{Target: "/run/gpg.sock", Source: "/home/u/.gnupg/S.gpg-agent.extra", Mode: 0o700}}
 	rec := InstanceRecord{Cluster: handleCluster, Namespace: handleNS, Key: handleKey, Fleet: "alpha", Instance: "web",
-		StatefulSet: handleSTS(), StatefulSetUID: "uid-sts", Gen: 2, SpecHash: "sha256:h", ImageDigests: []string{"sha256:" + strings.Repeat("a", 64)}}
+		StatefulSet: handleSTS(), StatefulSetUID: "uid-sts", Gen: 2, SpecHash: "sha256:h", ImageDigests: []string{"sha256:" + strings.Repeat("a", 64)},
+		HostSockets: socks, HostGateway: true, GatewaySkip: []uint16{3000}}
 	if err := SaveInstanceRecord(rec); err != nil {
 		t.Fatal(err)
 	}
@@ -226,13 +230,49 @@ func TestPodTargetFromTheRecord(t *testing.T) {
 		len(tgt.Expect.ImageDigests) != 1 {
 		t.Fatalf("target %+v", tgt)
 	}
+	// The host relays a pod may reach are the record's.
+	if !reflect.DeepEqual(tgt.HostSockets, socks) || !tgt.HostGateway || !reflect.DeepEqual(tgt.GatewaySkip, []uint16{3000}) {
+		t.Fatalf("target host relays %+v %v %v", tgt.HostSockets, tgt.HostGateway, tgt.GatewaySkip)
+	}
+}
+
+// TestRecordedHostSocketsAreResolved: the record keeps each host socket's
+// source with its links resolved (what hostrelay.Dial then insists on), and
+// one it cannot resolve as written.
+func TestRecordedHostSocketsAreResolved(t *testing.T) {
+	dir, err := hostrelay.Resolve(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(dir, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "s"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	got := recordedHostSockets([]hostrelay.Socket{
+		{Target: "/a", Source: filepath.Join(dir, "link", "s"), Mode: 0o600},
+		{Target: "/b", Source: filepath.Join(dir, "gone")},
+	})
+	want := []hostrelay.Socket{{Target: "/a", Source: filepath.Join(real, "s"), Mode: 0o600}, {Target: "/b", Source: filepath.Join(dir, "gone")}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v", got)
+	}
+	if recordedHostSockets(nil) != nil {
+		t.Fatal("no sockets recorded as some")
+	}
 }
 
 func TestInstanceRecord(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	rec := InstanceRecord{Cluster: handleCluster, Namespace: handleNS, Key: handleKey, Fleet: "alpha", Instance: "web",
 		StatefulSet: handleSTS(), StatefulSetUID: "u", Gen: 1, SpecHash: "sha256:h", Image: "img@sha256:x", Strategy: "passthrough",
-		RemoteUser: "vscode", WorkspaceFolder: "/workspaces/alpha", Created: time.Unix(1700000000, 5).UTC()}
+		RemoteUser: "vscode", WorkspaceFolder: "/workspaces/alpha", Created: time.Unix(1700000000, 5).UTC(),
+		HostSockets: []hostrelay.Socket{{Target: "/run/x.sock", Source: "/tmp/x.sock", Mode: 0o777}}, HostGateway: true, GatewaySkip: []uint16{80}}
 	rec.addImageDigest("sha256:a")
 	rec.addImageDigest("sha256:a")
 	rec.addImageDigest("")

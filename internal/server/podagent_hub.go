@@ -30,7 +30,8 @@ import (
 //
 // The control files (the status mod's) reach the pods through the backend
 // handle's control channel (controlSinkFor), which the pool delivers with
-// the same state.
+// the same state. The host relays (host-socket binds and the host-gateway
+// port mirror) are podagent_hostrelay.go's.
 
 // podAgentsInterval is how often the answers that do not come with a state
 // change (a TUI attached, the agent relay's usability) are checked.
@@ -41,6 +42,7 @@ type podAgentPool interface {
 	SetDesiredSource(kubernetes.DesiredSource)
 	SetInbound(kubernetes.InboundHandler)
 	RefreshDesired()
+	Live(kubernetes.PodTarget) bool
 }
 
 // podAgentHub is the daemon's side of the pods' in-pod sockets.
@@ -52,6 +54,9 @@ type podAgentHub struct {
 	// is fleet.log's warning (tests stand in for both).
 	loadState func() (*state.State, error)
 	warn      func(msg string, args ...any)
+	// gateway is the host relays: the daemon host's listening ports the
+	// pods mirror, and the host-socket dials.
+	gateway *podGateway
 
 	wake chan struct{}
 
@@ -79,6 +84,7 @@ func newPodAgentHub(svc *service) *podAgentHub {
 		interval:  podAgentsInterval,
 		loadState: state.Load,
 		warn:      flog.Warn,
+		gateway:   newPodGateway(),
 		wake:      make(chan struct{}, 1),
 		fleetMCP:  map[string]bool{},
 	}
@@ -134,6 +140,8 @@ func (h *podAgentHub) run(ctx context.Context) {
 	h.mu.Unlock()
 	t := time.NewTicker(h.interval)
 	defer t.Stop()
+	gw := time.NewTicker(h.gateway.interval)
+	defer gw.Stop()
 	for {
 		changed := false
 		select {
@@ -142,6 +150,8 @@ func (h *podAgentHub) run(ctx context.Context) {
 		case <-h.wake:
 			changed = true
 		case <-t.C:
+		case <-gw.C:
+			changed = h.gateway.tick(ctx, pool.Live)
 		}
 		g := h.globals()
 		h.mu.Lock()
@@ -161,7 +171,9 @@ func (h *podAgentHub) globals() podGlobals {
 	return podGlobals{control: h.svc.hub.hasSubscribers(), agent: agentsock.PodAgentUsable(src)}
 }
 
-// sockets is the pool's DesiredSource: which in-pod sockets t's pod binds.
+// sockets is the pool's DesiredSource: which in-pod sockets t's pod binds,
+// with its host relays (the host-socket binds fleetd recorded for it, the
+// daemon-host ports it mirrors).
 // The pool asks only for a pod it has a session to, so the override's
 // fallback warning is written here, once, and never by a daemon that serves
 // no pods (whose override may well be a Docker VM's path).
@@ -170,7 +182,10 @@ func (h *podAgentHub) sockets(t kubernetes.PodTarget) podwire.Sockets {
 		h.warnFallback()
 	}
 	g := h.globals()
-	return podwire.Sockets{Control: g.control, SSHAgent: g.agent, MCP: h.fleetMCPOf(t.Fleet)}
+	ctx, cancel := context.WithTimeout(context.Background(), h.gateway.interval)
+	defer cancel()
+	return podwire.Sockets{Control: g.control, SSHAgent: g.agent, MCP: h.fleetMCPOf(t.Fleet),
+		Host: hostSockets(t), Gateway: h.gateway.portsFor(ctx, t)}
 }
 
 // warnFallback says, once, that FLEET_SSH_AGENT_SOCK names no socket on the
@@ -252,6 +267,10 @@ func (h *podAgentHub) inbound(t kubernetes.PodTarget, st *podwire.Stream) {
 			return
 		}
 		h.svc.instanceMCP.serveFrom(key)(conn)
+	case podwire.TagSockHost:
+		h.serveHostSocket(t, st)
+	case podwire.TagHostDial:
+		h.serveHostDial(t, st)
 	default:
 		podwire.RefuseSock(st, podwire.RefusedUnsupported, st.Tag.String()+" streams are not served here")
 	}

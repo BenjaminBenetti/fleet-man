@@ -108,6 +108,10 @@
       }
     ],
     "hostGateway": true,
+    "gatewaySkip": [
+      3000,
+      4000
+    ],
     "nodeSelector": {
       "kubernetes.io/arch": "amd64",
       "kubernetes.io/os": "linux"
@@ -115,6 +119,9 @@
     "debugGrants": [
       "--cap-add SYS_PTRACE",
       "--security-opt seccomp=unconfined"
+    ],
+    "warnings": [
+      "host-gateway: host.docker.internal is 127.0.0.2 in the pod, where fleet mirrors every TCP port the daemon host listens on, loopback-only ones too; a pod process cannot listen on 0.0.0.0 at a mirrored port (the devcontainer's forwardPorts and published ports are not mirrored)"
     ],
     "options": [
       {

@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -107,6 +108,7 @@ func CaptureUp(ctx context.Context, req CaptureRequest) (*CaptureResult, error) 
 	if err != nil {
 		return nil, err
 	}
+	env = append(env, originAgentEnv(cfg)...)
 	dir, err := req.shimDir(kubeshim.Config{Mode: kubeshim.ModeCapture, Docker: docker})
 	if err != nil {
 		return nil, err
@@ -200,6 +202,24 @@ func captureEnv(ctx context.Context, docker string, req CaptureRequest) ([]strin
 		return nil, fmt.Errorf("invalid FLEET_DEVCONTAINER_BUILDKIT value %q (valid: auto, never)", mode)
 	}
 	return env, nil
+}
+
+// originAgentEnv points SSH_AUTH_SOCK back at the agent the daemon was
+// started with for a configuration that names the daemon's relay socket
+// (its ${localEnv:SSH_AUTH_SOCK}, read with fleetd's own environment, where
+// the relay replaced it), as the devcontainer backend's up does: the captured
+// run binds the user's own agent, and initializeCommand gets it too. Either
+// path is a bind of the user's agent to the translation, which links it to
+// the pod's agent relay.
+func originAgentEnv(cfg *Config) []string {
+	cur := agentsock.EnvAuthSock + "=" + os.Getenv(agentsock.EnvAuthSock)
+	if cfg == nil || !bytes.Contains(cfg.Configuration, []byte(agentsock.HostSocketPath())) {
+		return nil
+	}
+	if env := agentsock.WithOriginAgent([]string{cur}); env[0] != cur {
+		return env
+	}
+	return nil
 }
 
 // contextBuilder is the name of the current docker context, which is also

@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 )
 
@@ -160,6 +161,9 @@ func printClusterTable(out io.Writer, clusters []*fleetgrpc.KubeClusterStatus) {
 func printClusterDetail(out io.Writer, st *fleetgrpc.KubeClusterStatus) {
 	for _, warning := range st.GetWarnings() {
 		fmt.Fprintf(out, "warning: %s\n", warning)
+	}
+	if w := fleet.HostGatewayWarning(st.GetCluster().GetHostGateway(), fleetclient.IsRemote()); w != "" {
+		fmt.Fprintf(out, "warning: %s\n", w)
 	}
 	fmt.Fprintln(out)
 	for _, line := range clusterFieldLines(st.GetCluster()) {
