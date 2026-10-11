@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
@@ -647,5 +648,97 @@ func TestFlushOutcomeKeepsOnlyTheSharesBehind(t *testing.T) {
 				t.Errorf("flushed %v, err %v", ff.flushed, ff.err)
 			}
 		})
+	}
+}
+
+// TestJobsWireTheSync: a create carries the Ready gate in its hooks; a stop
+// flushes before its backend stops the pod; a fleet destroy flushes before
+// the teardown and retires the share after it.
+func TestJobsWireTheSync(t *testing.T) {
+	r := newSyncRig(t)
+	r.hostLayout()
+	claim := "fs-f-1a2b3c4d-share"
+	r.instance("alpha", "aaaaaaaa", claim, fleet.StatusRunning)
+	r.spokes.up("aaaaaaaa")
+	r.wait()
+	side := shareSide(claim)
+
+	gated := make(chan error, 1)
+	origCreate := jobRunCreate
+	jobRunCreate = func(ctx context.Context, fleetName, instance, _, _ string, _ bool, _ fleet.BackendType) error {
+		ready := backend.HooksFrom(ctx).SharedStateReady
+		if ready == nil {
+			gated <- errors.New("no Ready gate in the create's hooks")
+			return nil
+		}
+		gated <- ready(ctx)
+		return nil
+	}
+	t.Cleanup(func() { jobRunCreate = origCreate })
+	j, err := r.svc.startCreateInstanceJob(&fleetgrpc.CreateInstanceRequest{Fleet: r.fleet, Instance: "gamma"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := awaitJob(context.Background(), j); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := <-gated; err != nil {
+		t.Errorf("the create's gate: %v", err)
+	}
+
+	stopped := make(chan string, 1)
+	origStop := jobRunStop
+	jobRunStop = func(string, string) error {
+		stopped <- syncRead(r.host(".claude/stop.txt"))
+		return nil
+	}
+	t.Cleanup(func() { jobRunStop = origStop })
+	syncWrite(t, r.share(side, ".claude/stop.txt"), "before the stop")
+	j, err = r.svc.startStopInstanceJob(&fleetgrpc.StopInstanceRequest{Fleet: r.fleet, Instance: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := awaitJob(context.Background(), j); err != nil {
+		t.Fatalf("stop job: %v", err)
+	}
+	if got := <-stopped; got != "before the stop" {
+		t.Errorf("when the backend stopped the pod the host had %q", got)
+	}
+
+	origDown := jobDownInstance
+	downed := make(chan string, 4)
+	jobDownInstance = func(i *fleet.Instance) error {
+		downed <- syncRead(r.host(".claude/destroy.txt"))
+		r.spokes.down(i.KubeKey)
+		return nil
+	}
+	t.Cleanup(func() { jobDownInstance = origDown })
+	syncWrite(t, r.share(side, ".claude/destroy.txt"), "before the destroy")
+	j, err = r.svc.startDestroyInstanceJob(&fleetgrpc.DestroyInstanceRequest{Fleet: r.fleet, DestroyFleet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := awaitJob(context.Background(), j); err != nil {
+		t.Fatalf("destroy job: %v", err)
+	}
+	if got := <-downed; got != "before the destroy" {
+		t.Errorf("when the instance was torn down the host had %q", got)
+	}
+	if got := r.spokes.retired; len(got) != 1 || got[0] != syncCluster+"/f keep=false" {
+		t.Errorf("retired %v, want the flushed share deleted", got)
+	}
+}
+
+// TestShareSyncDoesNotWaitForAShareNoPodRuns: a destroy of a fleet whose
+// instance never got a pod (a failed create) flushes what there is at once:
+// nothing on that share can change.
+func TestShareSyncDoesNotWaitForAShareNoPodRuns(t *testing.T) {
+	r := newSyncRig(t)
+	r.hostLayout()
+	r.instance("alpha", "aaaaaaaa", "fs-f-1a2b3c4d-share", fleet.StatusDeleting)
+	start := time.Now()
+	ff := r.m.beforeDestroy(r.fleet, "", true)
+	if !ff.flushed || time.Since(start) > 2*time.Second {
+		t.Errorf("flushed %v (%v) after %v", ff.flushed, ff.err, time.Since(start))
 	}
 }
