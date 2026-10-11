@@ -268,7 +268,7 @@ func TestRunPodSendsPodStart(t *testing.T) {
 	code, err := run(fake, Options{
 		Pod: &PodExecTarget{
 			Cluster: "prod-abc", Namespace: "ns", Pod: "fi-f-i-k8-0", Container: "dev",
-			Class: "script", User: "vscode", Cwd: "/w", Bulk: true,
+			Class: "script", User: "vscode", Cwd: "/w", Bulk: true, Quiet: true,
 		},
 		Argv:   []string{"id", "-u"},
 		Stdout: &stdout,
@@ -286,7 +286,7 @@ func TestRunPodSendsPodStart(t *testing.T) {
 		t.Fatalf("first frame is not pod_start: %v", fake.sent[0])
 	}
 	if ps.GetClusterId() != "prod-abc" || ps.GetPod() != "fi-f-i-k8-0" || ps.GetContainer() != "dev" ||
-		ps.GetClass() != "script" || ps.GetUser() != "vscode" || ps.GetCwd() != "/w" || !ps.GetBulk() {
+		ps.GetClass() != "script" || ps.GetUser() != "vscode" || ps.GetCwd() != "/w" || !ps.GetBulk() || !ps.GetQuiet() {
 		t.Fatalf("pod_start = %+v", ps)
 	}
 	if got := ps.GetArgv(); len(got) != 2 || got[0] != "id" {

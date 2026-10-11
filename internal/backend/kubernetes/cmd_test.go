@@ -51,6 +51,36 @@ func TestExecCommandBuildsTheKubeExecArgv(t *testing.T) {
 	}
 }
 
+// A process that is not the fleet binary (the conformance suite's test
+// binary running fleetd) names the one to hand out: the argvs and the
+// capture shim run it, and "" puts this process's own back.
+func TestSetFleetExecutable(t *testing.T) {
+	r := newHandleRig(t)
+	writeHandleCluster(t)
+	inst := r.inst()
+	inst.ContainerID = ContainerID(handleCluster, handleNS, handleSTS(), 1)
+	b := newHandle(inst, r.pool)
+	SetFleetExecutable("/opt/itest/fleet")
+	t.Cleanup(func() { SetFleetExecutable("") })
+	if argv := b.ExecCommand("/ws", []string{"true"}).Args; argv[0] != "/opt/itest/fleet" {
+		t.Errorf("ExecCommand runs %q", argv[0])
+	}
+	if argv := b.LogsCommand(inst.ContainerID, false).Args; argv[0] != "/opt/itest/fleet" {
+		t.Errorf("LogsCommand runs %q", argv[0])
+	}
+	if exe := currentEnvironment().Tools.Exe; exe != "/opt/itest/fleet" {
+		t.Errorf("the capture shim runs %q", exe)
+	}
+	SetFleetExecutable("")
+	self, _ := os.Executable()
+	if argv := b.ExecCommand("/ws", []string{"true"}).Args; argv[0] != self {
+		t.Errorf("after the reset ExecCommand runs %q, want %q", argv[0], self)
+	}
+	if exe := currentEnvironment().Tools.Exe; exe != "" {
+		t.Errorf("after the reset the capture shim runs %q, want the default", exe)
+	}
+}
+
 // LogsCommand builds the `fleet kube-exec logs` argv, carrying the fleet and
 // instance (for the saved log) and -f when following.
 func TestLogsCommandBuildsTheKubeExecLogsArgv(t *testing.T) {
@@ -93,6 +123,25 @@ func TestFolderExecCommandIsBulk(t *testing.T) {
 	argv := b.FolderExecCommand("/ws", []string{"tar", "-cf", "-", "."}).Args
 	if indexOf(argv, "--bulk") < 0 || indexOf(argv, "--") < 0 {
 		t.Fatalf("FolderExecCommand argv not a bulk kube-exec: %v", argv)
+	}
+	if indexOf(argv, "--quiet") < 0 {
+		t.Errorf("FolderExecCommand should be quiet: %v", argv)
+	}
+}
+
+// ExecCommandQuiet's argv asks fleetd to leave the command out of its log
+// (a poll loop's command would flood it); ExecCommand's does not.
+func TestExecCommandQuietIsQuiet(t *testing.T) {
+	r := newHandleRig(t)
+	writeHandleCluster(t)
+	inst := r.inst()
+	inst.ContainerID = ContainerID(handleCluster, handleNS, handleSTS(), 1)
+	b := newHandle(inst, r.pool)
+	if argv := b.ExecCommandQuiet("/ws", []string{"true"}).Args; indexOf(argv, "--quiet") < 0 || indexOf(argv, "--quiet") > indexOf(argv, "--") {
+		t.Errorf("ExecCommandQuiet argv has no --quiet shim flag: %v", argv)
+	}
+	if argv := b.ExecCommand("/ws", []string{"true"}).Args; indexOf(argv, "--quiet") >= 0 {
+		t.Errorf("ExecCommand argv is quiet: %v", argv)
 	}
 }
 

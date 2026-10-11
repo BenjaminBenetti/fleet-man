@@ -6,6 +6,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +21,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -378,5 +382,71 @@ func TestKubeShutdownEndsThePoolAfterTheCheckpoint(t *testing.T) {
 	runShutdownSteps(5*time.Second, svc.kubeShutdownSteps())
 	if got, want := pool.recorded(), []string{"sessions", "job stopped", "close"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("shutdown %v, want %v", got, want)
+	}
+}
+
+// A quiet PodExec (the shim's argv for ExecCommandQuiet: polls, probes) is
+// left out of fleet.log; any other is logged once it ends. In a process of
+// its own, so the process-wide log is this test's.
+func TestPodExecQuietStaysOutOfTheLog(t *testing.T) {
+	if os.Getenv("FLEET_TEST_POD_EXEC_LOG") == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestPodExecQuietStaysOutOfTheLog$", "-test.count=1")
+		cmd.Env = append(os.Environ(), "FLEET_TEST_POD_EXEC_LOG=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("log subprocess: %v\n%s", err, out)
+		}
+		return
+	}
+	key := names.InstanceKey("daemon12", "alpha", "web", time.Unix(1700000000, 0).UTC())
+	sts := names.Instance("alpha", "web", key)
+	client, served := startServeSeeded(t, func() {
+		if err := state.Update(func(st *state.State) error {
+			f := st.GetOrCreateFleet("alpha", "https://example.invalid/a.git")
+			return f.AddInstance(&fleet.Instance{Name: "web", Status: fleet.StatusRunning, Backend: fleet.BackendKubernetes, KubeCluster: "mk-abc", KubeKey: key})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Cleanup(func() { shutdownAndWait(t, client, served) })
+	orig := podExecerFor
+	podExecerFor = func(*fleet.Instance) (podExecer, bool) {
+		cmd := newOpenPodExec()
+		_ = cmd.Close() // the command ends at once
+		return cmd, true
+	}
+	t.Cleanup(func() { podExecerFor = orig })
+
+	run := func(marker string, quiet bool) {
+		t.Helper()
+		stream, err := client.PodExec(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := stream.Send(&fleetgrpc.ExecIn{Msg: &fleetgrpc.ExecIn_PodStart{PodStart: &fleetgrpc.PodExecStart{
+			ClusterId: "mk-abc", Pod: names.Pod(sts), Argv: []string{"echo", marker}, Quiet: quiet,
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+		_ = stream.CloseSend()
+		for {
+			if _, err := stream.Recv(); err != nil {
+				break
+			}
+		}
+	}
+	run("itest-quiet-marker", true)
+	run("itest-loud-marker", false)
+	logged := func() string {
+		data, _ := os.ReadFile(flog.Path())
+		return string(data)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logged(), "itest-loud-marker") && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if log := logged(); !strings.Contains(log, "itest-loud-marker") {
+		t.Fatalf("the PodExec was not logged:\n%s", log)
+	} else if strings.Contains(log, "itest-quiet-marker") {
+		t.Fatalf("a quiet PodExec was logged:\n%s", log)
 	}
 }

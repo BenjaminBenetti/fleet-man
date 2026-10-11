@@ -212,8 +212,11 @@ func (b *Backend) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpRe
 
 // Status is the instance's row of the pool's status table (no API call):
 // unknown until the pool watches the instance's connection, never missing
-// while the cluster cannot be asked.
+// while the cluster cannot be asked, and unknown for no container at all.
 func (b *Backend) Status(containerID string) backend.LiveStatus {
+	if containerID == "" {
+		return backend.LiveStatusUnknown
+	}
 	w, err := b.where(containerID)
 	if err != nil {
 		return backend.LiveStatusUnknown

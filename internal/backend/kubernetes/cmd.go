@@ -36,16 +36,25 @@ import (
 // KubeExecVerb is the fleet subcommand the shim's argv starts with.
 const KubeExecVerb = "kube-exec"
 
+// shimMode says how the shim runs a command: on the pod's bulk session (a
+// folder's tar), and kept out of fleetd's event log (a quiet exec).
+type shimMode uint8
+
+const (
+	shimBulk shimMode = 1 << iota
+	shimQuiet
+)
+
 // kubeExecArgv is the self-contained `fleet kube-exec` argv that runs command
 // in the instance's pod as the class's user (user and cwd for the explicit
 // and root classes). It carries the connection's kubeconfig and context so
 // the shim can reach the pod on its own while fleetd is down.
-func (b *Backend) kubeExecArgv(class execas.Class, user, cwd string, bulk bool, command []string) ([]string, error) {
+func (b *Backend) kubeExecArgv(class execas.Class, user, cwd string, mode shimMode, command []string) ([]string, error) {
 	w, err := b.where("")
 	if err != nil {
 		return nil, err
 	}
-	exe, err := os.Executable()
+	exe, err := fleetExecutable()
 	if err != nil {
 		return nil, fmt.Errorf("the fleet binary: %w", err)
 	}
@@ -62,8 +71,11 @@ func (b *Backend) kubeExecArgv(class execas.Class, user, cwd string, bulk bool, 
 		"-c", DevContainer,
 		"--class", string(class),
 	}
-	if bulk {
+	if mode&shimBulk != 0 {
 		argv = append(argv, "--bulk")
+	}
+	if mode&shimQuiet != 0 {
+		argv = append(argv, "--quiet")
 	}
 	if rec.Context != "" {
 		argv = append(argv, "--context", rec.Context)
@@ -97,8 +109,8 @@ func (b *Backend) clusterRecord() (fleet.KubeCluster, error) {
 // kubeExecCmd is the *exec.Cmd running kubeExecArgv; an argv it cannot build
 // (the record names no connection) becomes a command that fails with the
 // reason when started, so a caller sees it rather than a missing program.
-func (b *Backend) kubeExecCmd(class execas.Class, user, cwd string, bulk bool, command []string) *exec.Cmd {
-	argv, err := b.kubeExecArgv(class, user, cwd, bulk, command)
+func (b *Backend) kubeExecCmd(class execas.Class, user, cwd string, mode shimMode, command []string) *exec.Cmd {
+	argv, err := b.kubeExecArgv(class, user, cwd, mode, command)
 	if err != nil {
 		return failingCmd(err)
 	}
@@ -114,7 +126,7 @@ func failingCmd(err error) *exec.Cmd {
 // inherited (the Backend.Exec contract): a `fleet kube-exec` in direct mode
 // when stdin is a terminal, daemon mode otherwise.
 func (b *Backend) Exec(workspaceDir string, command []string) error {
-	cmd := b.kubeExecCmd(execas.ClassExec, "", "", false, command)
+	cmd := b.kubeExecCmd(execas.ClassExec, "", "", 0, command)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	start := time.Now()
 	err := cmd.Run()
@@ -126,21 +138,22 @@ func (b *Backend) Exec(workspaceDir string, command []string) error {
 // in the pod as the devcontainer's remote user (class exec), logging one
 // timed "container exec" entry when the caller runs it.
 func (b *Backend) ExecCommand(workspaceDir string, command []string) *backend.Cmd {
-	return backend.NewCmd(b.kubeExecCmd(execas.ClassExec, "", "", false, command), func(d time.Duration, err error) {
+	return backend.NewCmd(b.kubeExecCmd(execas.ClassExec, "", "", 0, command), func(d time.Duration, err error) {
 		flog.ContainerExec("kubernetes", workspaceDir, command, d, err)
 	})
 }
 
-// ExecCommandQuiet is ExecCommand without the event-log entry.
+// ExecCommandQuiet is ExecCommand without the event-log entry, fleetd's
+// PodExec one included.
 func (b *Backend) ExecCommandQuiet(workspaceDir string, command []string) *backend.Cmd {
-	return backend.NewCmd(b.kubeExecCmd(execas.ClassExec, "", "", false, command), nil)
+	return backend.NewCmd(b.kubeExecCmd(execas.ClassExec, "", "", shimQuiet, command), nil)
 }
 
 // FolderExecCommand is ExecCommandQuiet routed to the pod's bulk session: the
 // `fleet copy` server handler runs a folder's `tar` through it so a large
 // transfer does not hold up the agent's main session (backend.FolderExecer).
 func (b *Backend) FolderExecCommand(workspaceDir string, command []string) *backend.Cmd {
-	return backend.NewCmd(b.kubeExecCmd(execas.ClassExec, "", "", true, command), nil)
+	return backend.NewCmd(b.kubeExecCmd(execas.ClassExec, "", "", shimBulk|shimQuiet, command), nil)
 }
 
 // CopyFile streams src into the pod at remotePath as the remote user,
@@ -218,7 +231,7 @@ func (b *Backend) logsArgv(containerID string, follow bool) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	exe, err := os.Executable()
+	exe, err := fleetExecutable()
 	if err != nil {
 		return nil, fmt.Errorf("the fleet binary: %w", err)
 	}

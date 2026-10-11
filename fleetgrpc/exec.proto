@@ -75,6 +75,10 @@ message PodExecStart {
   // out), so a large transfer does not hold up the latency-sensitive traffic
   // of the agent's main session. It is never set with tty.
   bool bulk = 13;
+  // quiet keeps the command out of fleet.log: the shim's argv for a
+  // backend's ExecCommandQuiet (polls, probes), whose callers would
+  // otherwise flood the log.
+  bool quiet = 14;
 }
 
 message ExecResize {

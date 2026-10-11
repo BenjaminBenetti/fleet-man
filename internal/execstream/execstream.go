@@ -67,6 +67,8 @@ type PodExecTarget struct {
 	User, Cwd string
 	// Bulk runs the command on the pod's bulk session (a folder's tar).
 	Bulk bool
+	// Quiet keeps the command out of fleetd's event log (a poll's).
+	Quiet bool
 }
 
 // Run executes opts over svc's Exec stream and blocks until the remote command
@@ -254,7 +256,7 @@ func startFrame(opts Options) *fleetgrpc.ExecIn {
 		p := opts.Pod
 		return &fleetgrpc.ExecIn{Msg: &fleetgrpc.ExecIn_PodStart{PodStart: &fleetgrpc.PodExecStart{
 			ClusterId: p.Cluster, Namespace: p.Namespace, Pod: p.Pod, Container: p.Container,
-			Class: p.Class, User: p.User, Cwd: p.Cwd, Argv: opts.Argv, Env: opts.Env, Tty: opts.TTY, Bulk: p.Bulk,
+			Class: p.Class, User: p.User, Cwd: p.Cwd, Argv: opts.Argv, Env: opts.Env, Tty: opts.TTY, Bulk: p.Bulk, Quiet: p.Quiet,
 		}}}
 	}
 	return &fleetgrpc.ExecIn{Msg: &fleetgrpc.ExecIn_Start{Start: &fleetgrpc.ExecStart{
