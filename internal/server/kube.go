@@ -31,6 +31,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/kubert"
 )
 
 // kube.go serves the Kubernetes connection RPCs. Every one is served to
@@ -430,6 +431,14 @@ func (s *service) RemoveKubeCluster(ctx context.Context, req *fleetgrpc.RemoveKu
 	}
 	// Asked before the removal stops the worker (and releases its Lease).
 	leaseHeld := s.kube.leaseHeld(rec.ID)
+	// The fleets' own objects there (their cache volumes included) go with
+	// a connection that is not forgotten: nothing reaches them afterwards. A
+	// forget leaves everything in the cluster.
+	if req.GetMode() != fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET && leaseHeld {
+		for _, line := range kubert.PurgeConnection(ctx, rec.ID) {
+			reply.Warnings = append(reply.Warnings, "left in namespace "+rec.Namespace+": "+line)
+		}
+	}
 	// The users are looked at again, and the record removed, under the state
 	// lock a create holds while it checks its connection and adds its
 	// record: a create cannot slip in between and leave an instance on a

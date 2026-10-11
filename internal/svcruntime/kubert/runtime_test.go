@@ -683,3 +683,31 @@ func TestRuntimeAnswers(t *testing.T) {
 		t.Fatal("reachable while the daemon judges it unusable")
 	}
 }
+
+// TestPurgeConnection: a connection being removed takes the objects of the
+// fleets recorded on it, cache volumes included, but none of a fleet a
+// record still names there.
+func TestPurgeConnection(t *testing.T) {
+	f := useFake(t)
+	rt := For(testCluster)
+	for _, name := range []string{"alpha", "beta"} {
+		if err := rt.EnsureService(name, fleet.ServiceDebCache); err != nil {
+			t.Fatal(err)
+		}
+		if err := rt.PrepareFleet(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fleetUsesCluster = func(fleetName, _ string) bool { return fleetName == "beta" }
+	if failed := PurgeConnection(context.Background(), testCluster); len(failed) != 0 {
+		t.Fatalf("failed %v", failed)
+	}
+	beta := want(meta("beta"), append(append([]string(nil), preparedObjects...), "pvc/aptcache", "deploy/aptcache", "svc/aptcache")...)
+	sameList(t, "objects", f.objects(t), beta)
+	if got := PresentClusters("alpha"); len(got) != 0 {
+		t.Fatalf("alpha still recorded on %v", got)
+	}
+	if got := PresentClusters("beta"); len(got) != 1 {
+		t.Fatalf("beta recorded on %v", got)
+	}
+}

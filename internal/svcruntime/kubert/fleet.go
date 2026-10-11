@@ -444,6 +444,47 @@ func (r *Runtime) finishPending(ctx context.Context, p kubernetes.FleetPresence)
 	return kubernetes.SettleFleetTeardown(r.cluster, p.Fleet, gone)
 }
 
+// PurgeConnection deletes every object of the fleets recorded on connection
+// clusterID, their cache volumes included, as the connection is
+// disconnected: no later connection reaches them (a connection added again
+// is another, with other names). A fleet a record still names there is left
+// alone. It returns a line for each fleet whose objects could not all go.
+func PurgeConnection(ctx context.Context, clusterID string) []string {
+	fp, err := kubernetes.LoadFootprint()
+	if err != nil {
+		return []string{"reading the footprint: " + err.Error()}
+	}
+	var failed []string
+	for _, p := range fp.PresencesOf(clusterID) {
+		if err := For(clusterID).purge(ctx, p.Fleet); err != nil {
+			failed = append(failed, fmt.Sprintf("fleet %s: %v", p.Fleet, err))
+		}
+	}
+	return failed
+}
+
+func (r *Runtime) purge(ctx context.Context, fleetName string) error {
+	unlock := r.lock(fleetName)
+	defer unlock()
+	if fleetUsesCluster(fleetName, r.cluster) {
+		return nil
+	}
+	c, err := r.connect()
+	if err != nil {
+		return err
+	}
+	m := c.meta(fleetName)
+	ctx, cancel := context.WithTimeout(ctx, opTimeout)
+	defer cancel()
+	td, err := c.deleteFleetObjects(ctx, m, true)
+	if err != nil {
+		return err
+	}
+	forgetFleetReady(r.cluster, m)
+	flog.Info("kube caches: deleted a fleet's objects on a connection being removed", "cluster", r.cluster, "fleet", fleetName, "deleted", len(td.Deleted))
+	return kubernetes.SettleFleetTeardown(r.cluster, fleetName, true)
+}
+
 // PendingTeardowns counts the fleet teardowns owed on connection clusterID.
 func PendingTeardowns(clusterID string) int {
 	fp, err := kubernetes.LoadFootprint()
