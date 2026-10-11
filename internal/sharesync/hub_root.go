@@ -91,6 +91,9 @@ type hubRoot struct {
 	journal *journal
 	// broken is why the root is not synced (its state is a newer fleet's).
 	broken error
+	// writer is the one side whose changes a one-way root takes ("" for a
+	// root every side changes: HubOptions.Writers).
+	writer string
 }
 
 // holdKey names a change waiting for the cap.
@@ -397,6 +400,20 @@ func (root *hubRoot) prepare(k key, m Merger, side *hubSide, c Change, base uint
 		return nil, &Ack{Path: c.Path, Entry: c.Entry, Status: Accepted, Rev: cur.Rev}
 	case cur == nil && !c.Entry.Live():
 		return nil, &Ack{Path: c.Path, Entry: c.Entry, Status: Accepted}
+	case root.writer != "" && side.info.ID != root.writer:
+		// A one-way root: the change is refused, and the side gets the
+		// root's state back (or the path's delete, for what the root never
+		// had), as for a change the policy keeps the hub's state over.
+		if sr := root.sides[side.info.ID]; sr != nil {
+			if c.Entry.Live() {
+				sr.held[c.Path] = 0
+			} else {
+				delete(sr.held, c.Path)
+			}
+			sr.mark(c.Path, root.hub.now())
+		}
+		root.hub.log.Debug("sharesync: change refused on a one-way root", "root", root.name, "side", side.info.ID, "path", c.Path, "writer", root.writer)
+		return nil, &Ack{Path: c.Path, Entry: c.Entry, Status: Superseded}
 	}
 	if c.Entry.Kind == File && root.overCap(c.Entry.Size, cur) {
 		root.holds[hk] = true

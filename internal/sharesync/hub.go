@@ -45,6 +45,11 @@ type HubOptions struct {
 	// when it keeps a conflict copy: 5%. Space reports it; nil is statfs.
 	MinFree float64
 	Space   SpaceFunc
+	// Writers makes roots one-way: a root named here takes changes from the
+	// side with that ID alone (a read-only host bind: the daemon host's).
+	// Another side's change there is refused, and the side is sent the
+	// root's state again, which undoes it.
+	Writers map[string]string
 }
 
 // Hub is the sequencer of a fleet's shared state: sides report their
@@ -126,6 +131,7 @@ func OpenHub(dir string, table syncpolicy.Table, roots []string, opts HubOptions
 			h.Close()
 			return nil, err
 		}
+		root.writer = opts.Writers[name]
 		h.roots[name] = root
 		h.order = append(h.order, root)
 	}

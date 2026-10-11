@@ -34,6 +34,10 @@ type TreeRoot struct {
 	// Skip are paths beneath Dir the tree leaves alone: another root's
 	// folder nested inside this one.
 	Skip []string
+	// Only, when set, are the names directly in Dir the root holds; the tree
+	// leaves everything else there alone, as if not there. A bound file's
+	// root is the folder it is in, holding only it (internal/mounts/hostbind).
+	Only []string
 }
 
 // TreeOptions configure a Tree.
@@ -535,7 +539,8 @@ func (tr *treeRoot) settled(c candidate) bool {
 }
 
 // synced reports whether the tree syncs name (relative to the root): not a
-// temp file, not in a skipped folder, not location-local.
+// temp file, not in a skipped folder, among the root's Only names when it has
+// them, not location-local.
 func (tr *treeRoot) synced(name string) bool {
 	if !validPath(name) {
 		return false
@@ -547,6 +552,12 @@ func (tr *treeRoot) synced(name string) bool {
 	}
 	for _, skip := range tr.Skip {
 		if within(name, skip) {
+			return false
+		}
+	}
+	if len(tr.Only) > 0 {
+		top, _, _ := strings.Cut(name, "/")
+		if !slices.Contains(tr.Only, top) {
 			return false
 		}
 	}

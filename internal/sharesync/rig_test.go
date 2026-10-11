@@ -69,8 +69,9 @@ type rigSide struct {
 	side *Side
 	// peer is what the hub sees (the side, or a faulty wrapper).
 	peer Peer
-	// reserved are the root folders' reserved paths.
+	// reserved are the root folders' reserved paths, only their Only names.
 	reserved map[string][]string
+	only     map[string][]string
 	// stop ends the side's Run.
 	stop func()
 	// rep, when set, is the side's reporter instead of the hub.
@@ -107,11 +108,21 @@ func (r *rig) openHub() {
 // addSide makes a side's folders and attaches it.
 func (r *rig) addSide(info SideInfo) *rigSide {
 	r.t.Helper()
-	s := &rigSide{info: info, dir: filepath.Join(r.base, "sides", info.ID), reserved: map[string][]string{}}
+	return r.addSideWith(info, nil)
+}
+
+// addSideWith is addSide, with prepare seeing the side (its folders made)
+// before it opens.
+func (r *rig) addSideWith(info SideInfo, prepare func(*rigSide)) *rigSide {
+	r.t.Helper()
+	s := &rigSide{info: info, dir: filepath.Join(r.base, "sides", info.ID), reserved: map[string][]string{}, only: map[string][]string{}}
 	for _, root := range r.roots {
 		if err := os.MkdirAll(filepath.Join(s.dir, root), 0o755); err != nil {
 			r.t.Fatal(err)
 		}
+	}
+	if prepare != nil {
+		prepare(s)
 	}
 	r.sides[info.ID] = s
 	r.order = append(r.order, info.ID)
@@ -124,7 +135,7 @@ func (r *rig) openSide(s *rigSide) {
 	r.t.Helper()
 	var roots []TreeRoot
 	for _, root := range r.roots {
-		roots = append(roots, TreeRoot{Name: root, Dir: filepath.Join(s.dir, root), Reserved: s.reserved[root]})
+		roots = append(roots, TreeRoot{Name: root, Dir: filepath.Join(s.dir, root), Reserved: s.reserved[root], Only: s.only[root]})
 	}
 	opts := r.topts(s.info.ID)
 	opts.StateDir = filepath.Join(r.base, "state", s.info.ID)
