@@ -71,6 +71,13 @@ browser-proxy)
 landing-page) echo "fleet landing-page: listening on [::]:16767" >&2 ;;
 *) exit 3 ;;
 esac
+if [ -f "$(dirname "$0")/stubborn" ]; then
+  # A server that does not exit on SIGTERM.
+  trap '' TERM
+  sleep 120 & c=$!
+  while kill -0 "$c" 2>/dev/null; do wait "$c"; done
+  exit 0
+fi
 trap 'kill "$c" 2>/dev/null; exit 0' TERM
 sleep 120 & c=$!
 wait
@@ -208,6 +215,38 @@ func TestBrowserServicesRestartAfterARefresh(t *testing.T) {
 	if n := len(launches(t, dir)); n != 4 {
 		t.Fatalf("launches: %d: %q", n, launches(t, dir))
 	}
+}
+
+// A server that does not exit on SIGTERM is killed before the restart, so
+// the new one gets the port.
+func TestBrowserServicesKillAServerThatIgnoresSIGTERM(t *testing.T) {
+	dir := browserRig(t)
+	b := &localBrowserBackend{}
+	if err := os.WriteFile(filepath.Join(dir, "stubborn"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureBrowserServices(b, "/ws", true); err != nil {
+		t.Fatal(err)
+	}
+	landing := readPid(browserPaths.landingPid)
+	b.refresh = true
+	if err := ensureBrowserServices(b, "/ws", false); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the stubborn server to be gone", func() bool { return !alive(landing) || isZombie(landing) })
+	if l := readPid(browserPaths.landingPid); l == landing || !alive(l) {
+		t.Fatalf("the landing page should run again: %d -> %d", landing, l)
+	}
+}
+
+// isZombie reports whether pid has exited and waits for its parent.
+func isZombie(pid int) bool {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	fields := strings.Fields(string(data))
+	return len(fields) > 2 && fields[2] == "Z"
 }
 
 // A pid file left by a restart, naming a process that is not the proxy,

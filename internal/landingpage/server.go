@@ -8,7 +8,9 @@
 package landingpage
 
 import (
+	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -45,10 +47,11 @@ var templatesFS embed.FS
 var staticFS embed.FS
 
 // Run loads the landing-page configuration from the workspace's
-// devcontainer.json and serves the page until the process is killed.
-// It blocks; callers (the `fleet landing-page` subcommand) run it as the
-// foreground of the injected process.
-func Run(cfg Config) error {
+// devcontainer.json and serves the page until ctx ends (fleet's commands end
+// it on SIGTERM, which is how fleet stops the page before it restages the
+// binary). It blocks; callers (the `fleet landing-page` subcommand) run it as
+// the foreground of the injected process.
+func Run(ctx context.Context, cfg Config) error {
 	if cfg.Port == 0 {
 		cfg.Port = DefaultPort
 	}
@@ -92,9 +95,15 @@ func Run(cfg Config) error {
 	if err != nil {
 		return err
 	}
+	httpSrv := &http.Server{Handler: router.Handler(), ReadHeaderTimeout: 30 * time.Second}
+	stop := context.AfterFunc(ctx, func() { _ = httpSrv.Close() })
+	defer stop()
 	// fleetd waits for this line before it opens the browser on the page.
 	fmt.Fprintf(os.Stderr, "fleet landing-page: listening on %s\n", ln.Addr())
-	return router.RunListener(ln)
+	if err := httpSrv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // server holds the request-handling state for the landing page.

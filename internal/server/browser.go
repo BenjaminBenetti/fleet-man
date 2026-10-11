@@ -355,16 +355,24 @@ echo START_FAILED; cat %[2]s; exit 1
 }
 
 // stopBrowserServer signals the server pidPath names to exit and waits
-// briefly for it to die, so a following start is not racing it for the port.
+// briefly for it to die (killing it when it does not), so a following start
+// is not racing it for the port.
 func stopBrowserServer(b backend.Backend, workspaceDir, pidPath string) error {
 	script := fmt.Sprintf(`
 pid="$(cat %[1]s 2>/dev/null)"
 if [ -n "$pid" ]; then
   kill "$pid" 2>/dev/null || true
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.1
   done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+  fi
 fi
 rm -f %[1]s`, backend.ShellQuote(pidPath))
 	if out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", script}).CombinedOutput(); err != nil {

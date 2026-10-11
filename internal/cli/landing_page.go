@@ -24,7 +24,7 @@ func newLandingPageCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return landingpage.Run(landingpage.Config{
+			return landingpage.Run(cmd.Context(), landingpage.Config{
 				Addr:         addr,
 				Port:         port,
 				WorkspaceDir: workspace,
