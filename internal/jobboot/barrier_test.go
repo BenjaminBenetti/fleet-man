@@ -2,7 +2,9 @@ package jobboot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -173,6 +175,41 @@ func TestFeedEndsItsBarriersBeforeReturning(t *testing.T) {
 	<-feedDone
 	if !ended.Load() {
 		t.Fatal("Feed returned while its barrier still ran")
+	}
+}
+
+// A barrier the reader reads once Feed has begun to return (its ctx ended)
+// is never run: what it would do (freeze or stop a source) would outlive
+// the feed, and the caller's clean-up.
+func TestABarrierAfterTheFeedEndedNeverRuns(t *testing.T) {
+	fleetd, job := net.Pipe()
+	t.Cleanup(func() { _ = fleetd.Close(); _ = job.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls atomic.Int32
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Feed(ctx, fleetd, FeedOptions{Barrier: func(context.Context, Barrier) error {
+			calls.Add(1)
+			return nil
+		}})
+	}()
+	if _, _, err := ReadFrame(job); err != nil {
+		t.Fatal(err)
+	}
+	hello, _ := json.Marshal(Hello{Proto: ProtoVersion})
+	if err := WriteFrame(job, FrameHello, hello); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	<-done
+	b, _ := json.Marshal(Barrier{Seq: 1, Name: "final"})
+	if err := WriteFrame(job, FrameBarrier, b); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("a barrier read after the feed ended ran %d times", n)
 	}
 }
 

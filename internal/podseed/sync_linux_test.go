@@ -7,7 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -154,6 +158,58 @@ func TestGitDirsAreReadRefsFirst(t *testing.T) {
 	}
 	if !isGitDir("/x/repo.git", []string{"HEAD", "objects", "refs", "config"}) || isGitDir("/x/src", []string{"HEAD"}) {
 		t.Error("isGitDir")
+	}
+}
+
+// A live copy reads what names a git repository's objects (HEAD, the index,
+// packed-refs, refs, logs) before it reads objects/, whichever worker would
+// copy them: a ref read after the objects were listed could name an object
+// written in between, which the copy would not hold.
+func TestALiveCopyReadsGitRefsBeforeItsObjects(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	meta := []string{"ws/r/.git/HEAD", "ws/r/.git/index", "ws/r/.git/packed-refs", "ws/r/.git/refs/heads/main", "ws/r/.git/logs/HEAD",
+		"ws/r/.git/modules/sub/HEAD", "ws/r/.git/modules/sub/refs/heads/main"}
+	files := map[string]string{"ws/r/.git/objects/ab/cdef": "object", "ws/r/.git/hooks/pre-commit": "hook",
+		"ws/r/.git/modules/sub/objects/12/3456": "object"}
+	for _, p := range meta {
+		files[p] = "names objects"
+	}
+	writeTree(t, src, files)
+	var stats copyStats
+	s, err := newSyncer(src, dst, true, 4, &stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var events []string
+	record := func(e string) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}
+	s.onList = func(rel string) { record("list " + rel) }
+	s.onRead = func(rel string) {
+		if !strings.Contains(rel, "/objects/") {
+			// A worker slow to get to it.
+			time.Sleep(30 * time.Millisecond)
+		}
+		record("read " + rel)
+	}
+	syncPass(t, s, "ws")
+	for _, p := range meta {
+		objects := "list ws/r/.git/objects"
+		if strings.Contains(p, "/modules/sub/") {
+			objects = "list ws/r/.git/modules/sub/objects"
+		}
+		read, listed := slices.Index(events, "read "+p), slices.Index(events, objects)
+		if read < 0 || listed < 0 || read > listed {
+			t.Errorf("%s was read at %d, objects/ listed at %d: %v", p, read, listed, events)
+		}
+	}
+	for p, body := range files {
+		if got, _ := os.ReadFile(filepath.Join(dst, p)); string(got) != body {
+			t.Errorf("%s = %q", p, got)
+		}
 	}
 }
 

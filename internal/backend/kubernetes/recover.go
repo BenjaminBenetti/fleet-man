@@ -235,7 +235,8 @@ func (s Scope) applyStatefulSet(ctx context.Context, body []byte, replicas *int3
 // final copy (clone_consistency stop-source); the source is otherwise not
 // touched, and the destination's other objects stay with its failed record,
 // to be retried or destroyed by key. A journal the cluster no longer matches
-// is a *StaleJournalError and nothing is deleted.
+// is a *StaleJournalError and nothing is deleted, but a source it stopped is
+// started all the same: the source is not the clone's to leave stopped.
 func (p *Pool) UndoClone(ctx context.Context, j Journal) (Teardown, error) {
 	if j.Op != OpClone {
 		return Teardown{}, fmt.Errorf("not a clone journal (%s)", j.Op)
@@ -256,6 +257,9 @@ func undoClone(ctx context.Context, s Scope, j Journal) (Teardown, error) {
 		return Teardown{}, err
 	}
 	if !check.Current {
+		if err := s.restartSource(ctx, j); err != nil {
+			return Teardown{}, err
+		}
 		return Teardown{}, &StaleJournalError{Why: check.Why}
 	}
 	t, err := s.DeleteJournalObjects(ctx, j, check, func(o JournalObject) bool {
@@ -311,8 +315,14 @@ func (s Scope) restartSource(ctx context.Context, j Journal) error {
 // mid-way. A journal the cluster no longer matches (its job finished, as for
 // one a backup restored) is a *StaleJournalError and nothing is deleted;
 // what it names is no more known garbage than any other unaccounted object.
+// Either way a clone's source the clone stopped is started again.
 func (s Scope) DeleteGarbage(ctx context.Context, j Journal) (Teardown, error) {
 	if err := s.gate(ctx); err != nil {
+		return Teardown{}, err
+	}
+	// A clone's source outlives the clone: one it stopped for its final
+	// copy is started again, whatever became of the clone.
+	if err := s.restartSource(ctx, j); err != nil {
 		return Teardown{}, err
 	}
 	check, err := s.CheckJournal(ctx, j)

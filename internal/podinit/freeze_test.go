@@ -159,3 +159,50 @@ func TestTheAgentsTimerIsReportedToo(t *testing.T) {
 		t.Fatalf("thaw after the agent's timer: %+v, %v", th, err)
 	}
 }
+
+// A renewal moves the deadline of the freeze in force and never freezes
+// again: one a watchdog ended (or that something thawed) is ErrThawed, and
+// the watchdog's thaw is still reported to the thaw that comes after.
+func TestARenewalNeverFreezesAgain(t *testing.T) {
+	l, ffs, marker := freezeLayout(t, false)
+	if _, err := l.Renew(marker, time.Now().Add(time.Minute)); !errors.Is(err, ErrThawed) {
+		t.Fatalf("a renewal with no freeze: %v", err)
+	}
+	now := time.Now()
+	if _, err := l.Freeze(marker, now, now.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	res, err := l.Renew(marker, now.Add(60*time.Second))
+	if err != nil || !res.Deadline.Equal(now.Add(60*time.Second)) || res.FrozenAt.IsZero() {
+		t.Fatalf("renewal %+v, %v", res, err)
+	}
+	if m, _ := readMarker(marker); !m.Deadline.Equal(now.Add(60 * time.Second)) {
+		t.Fatalf("the record keeps deadline %v", m.Deadline)
+	}
+	// Past the old deadline the freeze holds; past the new one the
+	// watchdog thaws it, and a late renewal leaves it thawed.
+	if note := l.WatchFreeze(marker, now.Add(40*time.Second)); note != "" {
+		t.Fatalf("thawed before the renewed deadline: %s", note)
+	}
+	if note := l.WatchFreeze(marker, now.Add(70*time.Second)); note == "" {
+		t.Fatal("not thawed past the renewed deadline")
+	}
+	if _, err := l.Renew(marker, now.Add(100*time.Second)); !errors.Is(err, ErrThawed) {
+		t.Fatalf("a renewal after the watchdog's thaw: %v", err)
+	}
+	if got := ffs.files[ffs.user+"/cgroup.freeze"]; got != "0" {
+		t.Fatalf("a late renewal froze again: cgroup.freeze = %q", got)
+	}
+	if th, err := l.Thaw(marker, ""); err != nil || th.ByWatchdog != "pod-init" {
+		t.Fatalf("the thaw after: %+v, %v", th, err)
+	}
+
+	// Recorded, but no longer frozen (thawed by hand): no renewal either.
+	if _, err := l.Freeze(marker, now, now.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	ffs.files[ffs.user+"/cgroup.freeze"] = "0"
+	if _, err := l.Renew(marker, now.Add(60*time.Second)); !errors.Is(err, ErrThawed) {
+		t.Fatalf("a renewal of a thawed cgroup: %v", err)
+	}
+}

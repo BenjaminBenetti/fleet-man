@@ -22,10 +22,44 @@ import (
 // session's: one agent may freeze and a later one (after a takeover) thaw, so
 // its timer lives here, beside the record pod-init's watchdog reads.
 
-// podFreeze is the pod's freeze in force, if this agent made it.
+// podFreeze is the pod's freeze in force, if this agent made it. gen counts
+// the freezes, renewals and thaws: a timer that fires once a newer one was
+// made (a renewal that raced it) thaws nothing.
 var podFreeze struct {
 	mu    sync.Mutex
 	timer *time.Timer
+	gen   uint64
+}
+
+// armFreezeTimer (podFreeze.mu held) replaces the freeze's timer with one
+// that thaws the user cgroup at deadline, unless a newer freeze, renewal or
+// thaw came first.
+func armFreezeTimer(l *podinit.Layout, marker string, deadline time.Time, log *Logger) {
+	stopFreezeTimer()
+	gen := podFreeze.gen
+	podFreeze.timer = time.AfterFunc(time.Until(deadline), func() {
+		podFreeze.mu.Lock()
+		defer podFreeze.mu.Unlock()
+		if podFreeze.gen != gen {
+			return
+		}
+		podFreeze.timer = nil
+		if th, err := l.Thaw(marker, "agent"); err != nil {
+			log.Error("the freeze's watchdog could not thaw the user cgroup", "err", err.Error())
+		} else if th.WasFrozen {
+			log.Warn("the freeze outlasted its deadline; the watchdog thawed the user cgroup", "deadline", deadline.Format(time.RFC3339Nano))
+		}
+	})
+}
+
+// stopFreezeTimer (podFreeze.mu held) stops the freeze's timer, and any
+// that already fired, by starting a new generation.
+func stopFreezeTimer() {
+	podFreeze.gen++
+	if podFreeze.timer != nil {
+		podFreeze.timer.Stop()
+		podFreeze.timer = nil
+	}
 }
 
 // layout is the pod's cgroup layout, or podwire.CodeUnsupported for a pod
@@ -72,23 +106,26 @@ func (a *agent) rpcFreeze(_ context.Context, raw json.RawMessage) (any, error) {
 	}
 	podFreeze.mu.Lock()
 	defer podFreeze.mu.Unlock()
-	if podFreeze.timer != nil {
-		podFreeze.timer.Stop()
-		podFreeze.timer = nil
-	}
 	now := time.Now()
+	if args.Renew {
+		// Only the freeze in force moves on: one the watchdog ended stays
+		// thawed, and its holder hears so.
+		res, err := l.Renew(a.opts.FreezeMarker, now.Add(args.Watchdog()))
+		if errors.Is(err, podinit.ErrThawed) {
+			return nil, &podwire.RemoteError{Code: podwire.CodeThawed, Message: err.Error()}
+		}
+		if err != nil {
+			return nil, err
+		}
+		armFreezeTimer(l, a.opts.FreezeMarker, res.Deadline, a.log)
+		return podwire.FreezeInfo{FrozenAt: res.FrozenAt, Deadline: res.Deadline}, nil
+	}
+	stopFreezeTimer()
 	res, err := l.Freeze(a.opts.FreezeMarker, now, now.Add(args.Watchdog()))
 	if err != nil {
 		return nil, err
 	}
-	marker, log := a.opts.FreezeMarker, a.log
-	podFreeze.timer = time.AfterFunc(time.Until(res.Deadline), func() {
-		if th, err := l.Thaw(marker, "agent"); err != nil {
-			log.Error("the freeze's watchdog could not thaw the user cgroup", "err", err.Error())
-		} else if th.WasFrozen {
-			log.Warn("the freeze outlasted its deadline; the watchdog thawed the user cgroup", "deadline", res.Deadline.Format(time.RFC3339Nano))
-		}
-	})
+	armFreezeTimer(l, a.opts.FreezeMarker, res.Deadline, a.log)
 	info := podwire.FreezeInfo{FrozenAt: res.FrozenAt, Deadline: res.Deadline, SettleMS: res.Settle.Milliseconds()}
 	took, err := syncDisk(a.opts.SyncPath)
 	info.SyncMS = took.Milliseconds()
@@ -105,10 +142,7 @@ func (a *agent) rpcThaw(context.Context, json.RawMessage) (any, error) {
 	}
 	podFreeze.mu.Lock()
 	defer podFreeze.mu.Unlock()
-	if podFreeze.timer != nil {
-		podFreeze.timer.Stop()
-		podFreeze.timer = nil
-	}
+	stopFreezeTimer()
 	res, err := l.Thaw(a.opts.FreezeMarker, "")
 	if err != nil {
 		return nil, err

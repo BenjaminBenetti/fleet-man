@@ -54,6 +54,39 @@ type syncer struct {
 	// changed counts what the current pass wrote or deleted.
 	changed atomic.Int64
 	tmpSeq  atomic.Int64
+
+	// onList and onRead, when set, see each dir a pass lists and each file
+	// it copies (by path relative to dst) as it does: tests of the order.
+	onList, onRead func(rel string)
+}
+
+// gitPart is where in a git repository's own dir an entry is, for the order
+// a live copy reads it in.
+type gitPart uint8
+
+const (
+	gitNone gitPart = iota
+	// gitOther is the rest of the repository's dir (hooks, info, lfs,
+	// modules): copied as any file is.
+	gitOther
+	// gitMeta is what names objects (HEAD, the index, packed-refs, refs/,
+	// logs/, worktrees/): a live copy reads it as the walk reaches it,
+	// before objects/.
+	gitMeta
+	// gitObjects is objects/, read last.
+	gitObjects
+)
+
+// gitChild is the part of an entry name (a dir when dir) of a repository's
+// own dir.
+func gitChild(name string, dir bool) gitPart {
+	switch {
+	case name == "objects":
+		return gitObjects
+	case !dir || name == "refs" || name == "logs" || name == "worktrees":
+		return gitMeta
+	}
+	return gitOther
 }
 
 // newSyncer copies the tree at src onto dst.
@@ -123,12 +156,12 @@ func (s *syncer) syncTop(ctx context.Context, top string, jobs chan<- fileJob) e
 	if st.Mode&unix.S_IFMT != unix.S_IFDIR {
 		return fmt.Errorf("the source disk's %s is not a directory", top)
 	}
-	return s.syncDir(ctx, src, dst, top, &st, false, jobs)
+	return s.syncDir(ctx, src, dst, top, &st, gitNone, jobs)
 }
 
 // syncDir makes dst the dir src (stat st) is, rel its path relative to the
-// tree's root; inGit is set below a git repository's own dir.
-func (s *syncer) syncDir(ctx context.Context, src, dst, rel string, st *unix.Stat_t, inGit bool, jobs chan<- fileJob) error {
+// tree's root; git is where it is in a git repository's own dir.
+func (s *syncer) syncDir(ctx context.Context, src, dst, rel string, st *unix.Stat_t, git gitPart, jobs chan<- fileJob) error {
 	if err := ctx.Err(); err != nil {
 		return context.Cause(ctx)
 	}
@@ -155,6 +188,9 @@ func (s *syncer) syncDir(ctx context.Context, src, dst, rel string, st *unix.Sta
 		return nil // another filesystem mounted in the source: never descended
 	}
 
+	if s.onList != nil {
+		s.onList(rel)
+	}
 	names, err := readDirNames(src)
 	if err != nil {
 		if s.live && errors.Is(err, unix.ENOENT) {
@@ -166,8 +202,9 @@ func (s *syncer) syncDir(ctx context.Context, src, dst, rel string, st *unix.Sta
 		}
 		return fmt.Errorf("read %s: %w", src, err)
 	}
-	gitRoot := !inGit && isGitDir(src, names)
-	git := inGit || gitRoot
+	// A repository's own dir, here or nested in another's (a submodule's
+	// under .git/modules).
+	gitRoot := (git == gitNone || git == gitOther) && isGitDir(src, names)
 	names = orderEntries(src, names, gitRoot)
 	keep := map[string]bool{}
 	for _, name := range names {
@@ -176,7 +213,7 @@ func (s *syncer) syncDir(ctx context.Context, src, dst, rel string, st *unix.Sta
 			keep[name] = true
 			continue
 		}
-		if s.live && git && skipLiveGit(name) {
+		if s.live && (gitRoot || git != gitNone) && skipLiveGit(name) {
 			continue // a lock or temp file a running git holds: not the repo's
 		}
 		csrc, cdst := filepath.Join(src, name), filepath.Join(dst, name)
@@ -188,7 +225,11 @@ func (s *syncer) syncDir(ctx context.Context, src, dst, rel string, st *unix.Sta
 			return fmt.Errorf("stat %s: %w", csrc, err)
 		}
 		keep[name] = true
-		if err := s.syncEntry(ctx, csrc, cdst, crel, &cst, git, jobs); err != nil {
+		part := git
+		if gitRoot {
+			part = gitChild(name, cst.Mode&unix.S_IFMT == unix.S_IFDIR)
+		}
+		if err := s.syncEntry(ctx, csrc, cdst, crel, &cst, part, jobs); err != nil {
 			return err
 		}
 	}
@@ -210,8 +251,9 @@ func (s *syncer) syncDir(ctx context.Context, src, dst, rel string, st *unix.Sta
 	return nil
 }
 
-// syncEntry makes dst the entry src (stat st) is.
-func (s *syncer) syncEntry(ctx context.Context, src, dst, rel string, st *unix.Stat_t, inGit bool, jobs chan<- fileJob) error {
+// syncEntry makes dst the entry src (stat st) is, git where it is in a git
+// repository's own dir.
+func (s *syncer) syncEntry(ctx context.Context, src, dst, rel string, st *unix.Stat_t, git gitPart, jobs chan<- fileJob) error {
 	typ := st.Mode & unix.S_IFMT
 	var dstSt unix.Stat_t
 	dstErr := unix.Lstat(dst, &dstSt)
@@ -227,13 +269,19 @@ func (s *syncer) syncEntry(ctx context.Context, src, dst, rel string, st *unix.S
 	}
 	switch typ {
 	case unix.S_IFDIR:
-		return s.syncDir(ctx, src, dst, rel, st, inGit, jobs)
+		return s.syncDir(ctx, src, dst, rel, st, git, jobs)
 	case unix.S_IFREG:
 		if st.Nlink > 1 {
 			return s.syncLinked(src, dst, rel, st, exists, &dstSt)
 		}
 		if exists && s.same(rel, st, &dstSt) {
 			return nil
+		}
+		if s.live && git == gitMeta {
+			// Copied here, not by a worker that may read it after the walk
+			// has read objects/: every ref and index entry the copy holds
+			// then names an object it holds too.
+			return s.replaceFile(src, dst, st)
 		}
 		select {
 		case jobs <- fileJob{src: src, dst: dst, st: *st}:
@@ -346,6 +394,10 @@ func (s *syncer) sameLink(src, dst string, st, dstSt *unix.Stat_t) bool {
 // it, then renamed over it, so dst is never half written. A file the source
 // lost meanwhile is skipped on a live copy.
 func (s *syncer) replaceFile(src, dst string, st *unix.Stat_t) error {
+	rel, _ := filepath.Rel(s.dst, dst)
+	if s.onRead != nil {
+		s.onRead(rel)
+	}
 	tmp := filepath.Join(filepath.Dir(dst), syncTempPrefix+strconv.FormatInt(s.tmpSeq.Add(1), 36))
 	_ = os.Remove(tmp)
 	if err := s.copyFile(src, tmp, st); err != nil {
@@ -369,7 +421,6 @@ func (s *syncer) replaceFile(src, dst string, st *unix.Stat_t) error {
 	}
 	s.mu.Unlock()
 	s.changed.Add(1)
-	rel, _ := filepath.Rel(s.dst, dst)
 	// The change time the copy was made at, unless the file changed while it
 	// was read: then the next pass copies it again.
 	var after unix.Stat_t
@@ -448,9 +499,10 @@ func isGitDir(dir string, names []string) bool {
 // orderEntries orders a dir's entries for a copy that must stay consistent
 // with a running git. git writes an object before any ref or index entry that
 // names it, and never rewrites one, so a git dir is read refs, HEAD and the
-// index first and objects/ last: every ref the copy holds then names objects
-// it holds too. In a pack dir the pack goes before its index, which is what
-// makes git see a pack at all.
+// index first (a live copy reads them as the walk reaches them, gitMeta) and
+// objects/ last: every ref the copy holds then names objects it holds too. In
+// a pack dir the pack goes before its index, which is what makes git see a
+// pack at all.
 func orderEntries(dir string, names []string, git bool) []string {
 	out := slices.Clone(names)
 	switch {

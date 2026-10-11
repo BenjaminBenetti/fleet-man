@@ -63,9 +63,18 @@ func Feed(ctx context.Context, conn io.ReadWriter, opts FeedOptions) (Result, er
 	// Barriers run beside the read loop, and end (their ctx cancelled) before
 	// Feed returns: what one does must never outlive the feed that started
 	// it (a freeze racing the caller's clean-up).
+	// The reader may still read a barrier once Feed has begun to return
+	// (its ctx ended first): that one is refused, never run.
 	bctx, bcancel := context.WithCancel(ctx)
-	var barriers sync.WaitGroup
+	var (
+		barriers sync.WaitGroup
+		bmu      sync.Mutex
+		bclosed  bool
+	)
 	defer func() {
+		bmu.Lock()
+		bclosed = true
+		bmu.Unlock()
 		bcancel()
 		barriers.Wait()
 	}()
@@ -161,7 +170,13 @@ func Feed(ctx context.Context, conn io.ReadWriter, opts FeedOptions) (Result, er
 					if err := json.Unmarshal(payload, &b); err != nil {
 						return outcome{err: fmt.Errorf("jobboot: bad barrier: %w", err)}
 					}
+					bmu.Lock()
+					if bclosed {
+						bmu.Unlock()
+						return outcome{err: errors.New("jobboot: a barrier after the feed ended")}
+					}
 					barriers.Add(1)
+					bmu.Unlock()
 					go runBarrier(b)
 				case FramePing:
 				default:

@@ -123,6 +123,42 @@ func (l *Layout) Freeze(marker string, now time.Time, deadline time.Time) (Freez
 	}
 }
 
+// ErrThawed is a renewal of a freeze no longer in force: a watchdog or a
+// thaw ended it, and the user processes have run since.
+var ErrThawed = errors.New("the freeze is no longer in force (its watchdog thawed it)")
+
+// Renew moves the deadline of the freeze in force to deadline. It never
+// freezes: a freeze a watchdog or a thaw ended (no record, a record a
+// watchdog marked, or a cgroup no longer asked to be frozen) is ErrThawed,
+// so its holder learns what it held ran on. It returns the freeze as it now
+// stands.
+func (l *Layout) Renew(marker string, deadline time.Time) (FreezeResult, error) {
+	if err := l.usable(); err != nil {
+		return FreezeResult{}, err
+	}
+	m, err := readMarker(marker)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return FreezeResult{}, ErrThawed
+	case err != nil:
+		return FreezeResult{}, err
+	case m.ThawedBy != "":
+		return FreezeResult{}, ErrThawed
+	}
+	frozen, err := l.freezing()
+	if err != nil {
+		return FreezeResult{}, fmt.Errorf("read %s's freeze: %w", UserCgroup, err)
+	}
+	if !frozen {
+		return FreezeResult{}, ErrThawed
+	}
+	m.Deadline = deadline
+	if err := writeMarker(marker, m); err != nil {
+		return FreezeResult{}, fmt.Errorf("record the freeze: %w", err)
+	}
+	return FreezeResult{FrozenAt: m.FrozenAt, Deadline: deadline}, nil
+}
+
 // frozen reports whether every process of the user cgroup has stopped
 // (cgroup.events "frozen 1").
 func (l *Layout) frozen() (bool, error) {

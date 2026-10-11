@@ -343,6 +343,48 @@ func TestUndoCloneStartsAStoppedSource(t *testing.T) {
 	}
 }
 
+// A source an interrupted clone stopped is started again whatever became of
+// the clone: its journal stale (its disk deleted, say, as a fallback to a
+// copy does, before the daemon died), or no record holding it any more (the
+// clone destroyed before the reconciler undid it).
+func TestAStoppedSourceIsStartedWhateverBecameOfTheClone(t *testing.T) {
+	const srcSTS, srcKey = "fi-a-src-bbbbbbbb", "bbbbbbbb"
+	for _, how := range []string{"stale journal", "no record"} {
+		t.Run(how, func(t *testing.T) {
+			h := newJobHarness(t)
+			srcMeta := instMeta(srcSTS, "u-src", "", names.RoleInstance)
+			srcMeta.Labels[names.LabelKey] = srcKey
+			zero, one := int32(0), int32(1)
+			// The clone's disk (the journal's anchor) is gone.
+			h.seed(&appsv1.StatefulSet{ObjectMeta: srcMeta, Spec: appsv1.StatefulSetSpec{Replicas: &zero}})
+			j := Journal{V: JournalVersion, Op: OpClone, Fleet: "alpha", Instance: "one", Cluster: testCluster, Key: rbKey, Gen: 1, Step: "final",
+				Objects: []JournalObject{{Kind: KindPVC, Name: rbSTS, UID: "u-pvc", Created: true, Anchor: true}},
+				Source:  &JournalSource{StatefulSet: srcSTS, Key: srcKey, UID: "u-src", Stopped: true, PrevReplicas: &one}}
+			var err error
+			if how == "stale journal" {
+				_, err = h.pool.UndoClone(context.Background(), j)
+			} else {
+				s, serr := h.pool.Scope(testCluster)
+				if serr != nil {
+					t.Fatal(serr)
+				}
+				_, err = s.DeleteGarbage(context.Background(), j)
+			}
+			var stale *StaleJournalError
+			if !errors.As(err, &stale) {
+				t.Fatalf("err = %v, want the stale journal", err)
+			}
+			got, err := h.cs.AppsV1().StatefulSets(jobNS).Get(context.Background(), srcSTS, metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if *got.Spec.Replicas != 1 {
+				t.Fatalf("the source was left at %d replicas", *got.Spec.Replicas)
+			}
+		})
+	}
+}
+
 // Known garbage is deleted only as the journal knows it, and only while
 // the journal is current: one the cluster no longer matches (an object made
 // again since, the job's mark gone) deletes nothing.

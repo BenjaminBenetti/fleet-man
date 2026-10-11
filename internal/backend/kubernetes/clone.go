@@ -85,6 +85,12 @@ var (
 	cloneHoldMax     = 2 * time.Minute
 )
 
+// freezeBounds are a freeze's bounds as it began (cloneFreeze,
+// cloneFreezeRenew and cloneHoldMax): its renewals go by them.
+type freezeBounds struct {
+	watchdog, renew, max time.Duration
+}
+
 // copierResources are a copier's requests: it runs beside the running
 // source, on its node, and asks for little.
 func copierResources() *corev1.ResourceRequirements {
@@ -135,7 +141,7 @@ func (b *Backend) CloneContext(ctx context.Context, sourceContainerID string, re
 		return nil, err
 	}
 	flog.Info("kube clone: instance running", "fleet", id.fleet, "instance", id.name, "src", sourceContainerID, "tier", c.plan.Tier, "hold", c.plan.Hold,
-		"best_effort", c.bestEffort != "", "container", res.ContainerID, "ms", time.Since(c.start).Milliseconds())
+		"best_effort", c.bestEffortWhy() != "", "container", res.ContainerID, "ms", time.Since(c.start).Milliseconds())
 	return res, nil
 }
 
@@ -168,6 +174,10 @@ type cloning struct {
 	stopped    bool
 	restarting chan error
 	bestEffort string
+	// slot is the source's hold slot (sourceHolds) while the clone holds
+	// the source still; bounds are its freeze's.
+	slot   chan struct{}
+	bounds freezeBounds
 	// transient are the clone's own objects that go once it is done (its
 	// snapshot, its copier Job), by kind.
 	transient []JournalObject
@@ -210,7 +220,7 @@ func (c *cloning) run(ctx context.Context) (*backend.UpResult, error) {
 		c.warn(ctx, fmt.Sprintf("the clone's source did not start again after the clone: %v", err))
 	}
 	c.deleteTransient()
-	res.Warnings = c.warningLines()
+	res.Warnings = c.cloneWarnings()
 	return res, nil
 }
 
@@ -246,6 +256,13 @@ func (c *cloning) loadSource(ctx context.Context) error {
 	if c.src.namespace != "" && c.src.namespace != c.ns {
 		return kubeerr.New(kubeerr.Unsupported, "the source is in namespace %s, its connection's is %s now", c.src.namespace, c.ns)
 	}
+	// A source another clone holds still is read once it is let go: one
+	// stopped for another clone's final copy is no stopped source.
+	slot, err := c.takeSlot(ctx, fleet.StepBackendClone)
+	if err != nil {
+		return err
+	}
+	<-slot
 	set, err := c.cs.AppsV1().StatefulSets(c.ns).Get(ctx, c.src.sts, metav1.GetOptions{})
 	if err != nil {
 		return classify(fmt.Errorf("reading the source's StatefulSet %s: %w", c.src.sts, err))
@@ -352,7 +369,7 @@ func (c *cloning) provision(ctx context.Context) (*backend.UpResult, error) {
 		if err := c.step(ctx, stepCloneCopy, fleet.StepBackendClone, "holding the source still"); err != nil {
 			return nil, err
 		}
-		if err := c.hold(ctx); err != nil {
+		if err := c.hold(ctx, fleet.StepBackendClone); err != nil {
 			return nil, err
 		}
 		source = pvcSource(c.srcDisk.Name)
@@ -489,7 +506,7 @@ func (c *cloning) snapshot(ctx context.Context) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	if err := c.hold(ctx); err != nil {
+	if err := c.hold(ctx, fleet.StepBackendClone); err != nil {
 		return "", "", err
 	}
 	if !c.isHeld() && c.running {
@@ -700,7 +717,7 @@ func (c *cloning) barrier(ctx context.Context, b jobboot.Barrier) error {
 	switch b.Name {
 	case podseed.BarrierFinal:
 		backend.ReportStep(ctx, fleet.StepSeed, "final delta: holding the source still")
-		return c.hold(ctx)
+		return c.hold(ctx, fleet.StepSeed)
 	case podseed.BarrierCopied:
 		flog.Info("kube clone: copied", "fleet", c.id.fleet, "instance", c.id.name, "detail", b.Detail)
 		c.letGo()
@@ -711,18 +728,34 @@ func (c *cloning) barrier(ctx context.Context, b jobboot.Barrier) error {
 
 // hold holds the running source still as the plan says: its user processes
 // frozen (a pod that cannot be is copied live, and the clone is
-// best-effort), or the source stopped. A stopped source needs nothing.
-func (c *cloning) hold(ctx context.Context) error {
-	if !c.running {
+// best-effort), or the source stopped. A stopped source needs nothing, and a
+// source the clone holds already (a barrier sent again on a newer
+// connection) is held once. js is the job's step, for a wait on another
+// clone's hold of the source.
+func (c *cloning) hold(ctx context.Context, js fleet.JobStep) error {
+	if !c.running || c.isHeld() {
 		return nil
 	}
+	slot, err := c.takeSlot(ctx, js)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.slot = slot
+	c.mu.Unlock()
 	switch c.plan.Hold {
 	case HoldFreeze:
 		c.freeze(ctx)
 	case HoldStopSource:
-		if err := c.stopSource(ctx); err != nil {
-			return err
-		}
+		err = c.stopSource(ctx)
+	}
+	if !c.isHeld() {
+		// Nothing held (a pod that cannot be frozen, a stop that never
+		// began): another clone may hold the source.
+		c.releaseSlot()
+	}
+	if err != nil {
+		return err
 	}
 	if pause, ok := parseTimeout(os.Getenv(EnvCloneHoldPause)); ok && c.isHeld() {
 		flog.Info("kube clone: holding the source ("+EnvCloneHoldPause+")", "fleet", c.id.fleet, "src", c.src.sts, "pause", pause.String())
@@ -733,10 +766,50 @@ func (c *cloning) hold(ctx context.Context) error {
 	return nil
 }
 
+// isHeld reports whether the clone holds the source still now: frozen, or
+// stopped and not yet being started again.
 func (c *cloning) isHeld() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.frozen || c.stopped
+	return c.frozen || (c.stopped && c.restarting == nil)
+}
+
+// sourceHolds are the slots of the sources this daemon's clones hold still,
+// one hold at a time per source (cluster|StatefulSet → a one-place
+// channel): one clone's thaw or restart of a source never ends another
+// clone's hold of it, and no clone reads a source another one stopped for
+// its final copy as a stopped source.
+var sourceHolds sync.Map
+
+// takeSlot waits until no other clone holds the source still, and takes the
+// source's slot; js is the step a wait is reported under.
+func (c *cloning) takeSlot(ctx context.Context, js fleet.JobStep) (chan struct{}, error) {
+	v, _ := sourceHolds.LoadOrStore(c.id.cluster+"|"+c.src.sts, make(chan struct{}, 1))
+	slot := v.(chan struct{})
+	select {
+	case slot <- struct{}{}:
+		return slot, nil
+	default:
+	}
+	backend.ReportStep(ctx, js, "waiting for another clone of the source to let it go")
+	select {
+	case slot <- struct{}{}:
+		return slot, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("cancelled: %w", context.Cause(ctx))
+	}
+}
+
+// releaseSlot gives up the source's slot the clone took for a hold that
+// never came to be.
+func (c *cloning) releaseSlot() {
+	c.mu.Lock()
+	slot := c.slot
+	c.slot = nil
+	c.mu.Unlock()
+	if slot != nil {
+		<-slot
+	}
 }
 
 // sourceSession is the running source's agent session.
@@ -748,24 +821,27 @@ func (c *cloning) sourceSession(ctx context.Context) (*AgentSession, error) {
 }
 
 // freeze freezes the source's user processes; where it cannot, the clone
-// goes on live and is best-effort. The freeze's watchdog thaws the source
-// cloneFreeze after fleetd last renewed it, which fleetd does while the hold
-// lasts, for at most cloneHoldMax: a fleetd that dies leaves the source
-// frozen no longer than the watchdog.
+// goes on live: a copier's is best-effort (its final delta runs live), a
+// snapshot's is not (the snapshot of a live disk is of one point in time,
+// as a crash leaves it; snapshot flushes the disk first). The freeze's
+// watchdog thaws the source cloneFreeze after fleetd last renewed it, which
+// fleetd does while the hold lasts, for at most cloneHoldMax: a fleetd that
+// dies leaves the source frozen no longer than the watchdog.
 func (c *cloning) freeze(ctx context.Context) {
 	c.holdMu.Lock()
 	defer c.holdMu.Unlock()
+	bounds := freezeBounds{watchdog: cloneFreeze, renew: cloneFreezeRenew, max: cloneHoldMax}
 	sess, err := c.sourceSession(ctx)
 	if err == nil {
 		var info podwire.FreezeInfo
-		err = sess.Client().Call(ctx, podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: cloneFreeze.Milliseconds()}, &info)
+		err = sess.Client().Call(ctx, podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: bounds.watchdog.Milliseconds()}, &info)
 		if err == nil {
 			stop := make(chan struct{})
 			c.mu.Lock()
-			c.frozen, c.renewStop = true, stop
+			c.frozen, c.renewStop, c.bounds = true, stop, bounds
 			c.mu.Unlock()
 			flog.Info("kube clone: froze the source", "fleet", c.id.fleet, "src", c.src.sts, "settle_ms", info.SettleMS, "sync_ms", info.SyncMS)
-			go c.renewFreeze(stop, time.Now())
+			go c.renewFreeze(stop, time.Now(), bounds)
 			return
 		}
 	}
@@ -776,13 +852,20 @@ func (c *cloning) freeze(ctx context.Context) {
 	case err != nil:
 		why = "freezing it failed: " + err.Error()
 	}
+	if c.plan.Tier != TierCopy {
+		flog.Info("kube clone: the source runs on for its snapshot ("+why+")", "fleet", c.id.fleet, "src", c.src.sts)
+		return
+	}
 	c.markBestEffort("the source ran on while it was copied (" + why + "); files written meanwhile may differ (set clone_consistency to stop-source to stop it instead)")
 }
 
-// renewFreeze renews the source's freeze every cloneFreezeRenew until stop,
-// and lets the source go once it has been frozen cloneHoldMax.
-func (c *cloning) renewFreeze(stop <-chan struct{}, since time.Time) {
-	t := time.NewTicker(cloneFreezeRenew)
+// renewFreeze renews the source's freeze every b.renew until stop (the
+// freeze it renews is let go), and lets the source go once it has been
+// frozen b.max. A renewal never freezes the source again: a freeze its
+// watchdog ended meanwhile (fleetd's renewals were late) makes the clone
+// best-effort.
+func (c *cloning) renewFreeze(stop chan struct{}, since time.Time, b freezeBounds) {
+	t := time.NewTicker(b.renew)
 	defer t.Stop()
 	for {
 		select {
@@ -790,27 +873,35 @@ func (c *cloning) renewFreeze(stop <-chan struct{}, since time.Time) {
 			return
 		case <-t.C:
 		}
-		if time.Since(since) >= cloneHoldMax {
-			c.markBestEffort(fmt.Sprintf("the copy outlasted the longest fleet holds a source frozen (%s), so the source ran on before it ended", cloneHoldMax))
+		c.holdMu.Lock()
+		c.mu.Lock()
+		current := c.frozen && c.renewStop == stop
+		c.mu.Unlock()
+		if !current {
+			c.holdMu.Unlock()
+			return
+		}
+		if time.Since(since) >= b.max {
+			c.holdMu.Unlock()
+			c.markBestEffort(fmt.Sprintf("the copy outlasted the longest fleet holds a source frozen (%s), so the source ran on before it ended", b.max))
 			c.letGo()
 			return
 		}
-		c.holdMu.Lock()
-		c.mu.Lock()
-		frozen := c.frozen
-		c.mu.Unlock()
-		if frozen {
-			ctx, cancel := context.WithTimeout(c.p.ctx, cloneFreezeRenew)
-			sess, err := c.sourceSession(ctx)
-			if err == nil {
-				err = sess.Client().Call(ctx, podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: cloneFreeze.Milliseconds()}, nil)
-			}
-			cancel()
-			if err != nil {
-				flog.Warn("kube clone: renewing the source's freeze; its watchdog thaws it", "fleet", c.id.fleet, "src", c.src.sts, "err", err)
-			}
+		ctx, cancel := context.WithTimeout(c.p.ctx, b.renew)
+		sess, err := c.sourceSession(ctx)
+		if err == nil {
+			err = sess.Client().Call(ctx, podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: b.watchdog.Milliseconds(), Renew: true}, nil)
 		}
+		cancel()
 		c.holdMu.Unlock()
+		switch {
+		case podwire.IsCode(err, podwire.CodeThawed):
+			// The thaw that lets the source go clears the freeze's record.
+			c.markBestEffort(fmt.Sprintf("the source's freeze ended (its %s watchdog) before fleet renewed it, so the source ran on before the copy ended", b.watchdog))
+			return
+		case err != nil:
+			flog.Warn("kube clone: renewing the source's freeze; its watchdog thaws it", "fleet", c.id.fleet, "src", c.src.sts, "err", err)
+		}
 	}
 }
 
@@ -864,8 +955,9 @@ func (c *cloning) sourceHandle() *Backend {
 }
 
 // letGo ends the hold on the source: a frozen one is thawed (and the clone
-// best-effort when the watchdog thawed it first), a stopped one started
-// again, which the clone waits for before it ends (waitRestart).
+// best-effort when something thawed it first), a stopped one started again,
+// which the clone waits for before it ends (waitRestart). The source's slot
+// goes once it is let go: after the thaw, or once it runs again.
 func (c *cloning) letGo() {
 	c.holdMu.Lock()
 	defer c.holdMu.Unlock()
@@ -879,8 +971,14 @@ func (c *cloning) letGo() {
 	if stopped {
 		c.restarting = make(chan error, 1)
 	}
-	restarting := c.restarting
+	restarting, slot, bounds := c.restarting, c.slot, c.bounds
+	c.slot = nil
 	c.mu.Unlock()
+	release := func() {
+		if slot != nil {
+			<-slot
+		}
+	}
 	if frozen {
 		ctx, cancel := context.WithTimeout(c.p.ctx, 15*time.Second)
 		defer cancel()
@@ -894,7 +992,9 @@ func (c *cloning) letGo() {
 			flog.Warn("kube clone: thawing the source; its watchdog thaws it", "fleet", c.id.fleet, "src", c.src.sts, "err", err)
 			c.markBestEffort("the source's thaw could not be confirmed, so the copy may have outlasted its freeze")
 		case th.ByWatchdog:
-			c.markBestEffort(fmt.Sprintf("the source's freeze ended (its %s watchdog) before the copy did, so the source ran on before it ended", cloneFreeze))
+			c.markBestEffort(fmt.Sprintf("the source's freeze ended (its %s watchdog) before the copy did, so the source ran on before it ended", bounds.watchdog))
+		case !th.WasFrozen:
+			c.markBestEffort("the source was no longer frozen when the copy ended (it was thawed or restarted meanwhile), so it ran on before the copy ended")
 		default:
 			flog.Info("kube clone: thawed the source", "fleet", c.id.fleet, "src", c.src.sts)
 		}
@@ -905,9 +1005,12 @@ func (c *cloning) letGo() {
 			if err == nil {
 				_ = c.jj.Update(func(j *Journal) { j.Source.Stopped = false })
 			}
+			release()
 			restarting <- err
 		}()
+		return
 	}
+	release()
 }
 
 // waitRestart waits for a source the clone stopped to be running again.
@@ -923,8 +1026,9 @@ func (c *cloning) waitRestart() error {
 	return err
 }
 
-// markBestEffort marks the clone best-effort, with why, once: its banner
-// says so.
+// markBestEffort marks the clone best-effort, with why, once: the job's log
+// says so at once, its banner at the end (cloneWarnings). It may run beside
+// the clone (the freeze's renewals).
 func (c *cloning) markBestEffort(why string) {
 	c.mu.Lock()
 	first := c.bestEffort == ""
@@ -934,8 +1038,28 @@ func (c *cloning) markBestEffort(why string) {
 	ctx := c.jobCtx
 	c.mu.Unlock()
 	if first {
-		c.warn(ctx, "best-effort clone: "+why)
+		backend.ReportWarning(ctx, bestEffortPrefix+why)
 	}
+}
+
+// bestEffortPrefix opens a best-effort clone's banner line.
+const bestEffortPrefix = "best-effort clone: "
+
+// bestEffortWhy is why the clone is best-effort, "" when it is not.
+func (c *cloning) bestEffortWhy() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bestEffort
+}
+
+// cloneWarnings are the clone's banner lines: that it is best-effort first,
+// when it is, then the create's warnings.
+func (c *cloning) cloneWarnings() []string {
+	lines := c.warningLines()
+	if why := c.bestEffortWhy(); why != "" {
+		lines = append([]string{bestEffortPrefix + why}, lines...)
+	}
+	return lines
 }
 
 // --- the clone's transient objects ---

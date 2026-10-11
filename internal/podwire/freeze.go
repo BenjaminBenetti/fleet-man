@@ -23,6 +23,10 @@ const (
 // layout).
 const CodeUnsupported = "unsupported"
 
+// CodeThawed is a renewal of a freeze that is no longer in force: its
+// watchdog (or a thaw) ended it, so what it held still has run on since.
+const CodeThawed = "thawed"
+
 // Bounds of a freeze. The watchdog thaws a freeze nobody thawed by its
 // deadline: the agent's own timer, and pod-init, PID 1, which outlives the
 // agent and fleetd and thaws a little later from the freeze's record.
@@ -36,6 +40,11 @@ type FreezeArgs struct {
 	// WatchdogMS is how long the freeze may last before the pod thaws itself;
 	// 0 is DefaultFreezeWatchdog, and it is capped at MaxFreezeWatchdog.
 	WatchdogMS int64 `json:"watchdog_ms,omitempty"`
+	// Renew moves the deadline of the freeze in force and never freezes
+	// anew: a freeze its watchdog ended meanwhile answers CodeThawed, so the
+	// holder learns the user processes ran on (a renewal that froze them
+	// again would hide it).
+	Renew bool `json:"renew,omitempty"`
 }
 
 // Watchdog is the freeze's bound, defaulted and capped.

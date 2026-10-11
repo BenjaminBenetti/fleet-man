@@ -105,6 +105,53 @@ func TestTheAgentsWatchdogThawsAForgottenFreeze(t *testing.T) {
 	}
 }
 
+// A renewal extends the freeze in force (the timer moves with it) and never
+// freezes anew: after the watchdog's thaw it answers thawed, the cgroup
+// stays thawed, and the thaw after still reports the watchdog.
+func TestARenewalAfterTheWatchdogsThawSaysSo(t *testing.T) {
+	o, user, _ := freezeOptions(t)
+	s := startAgent(t, o)
+	ctx := context.Background()
+	if err := s.c.Call(ctx, podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: 300}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Renewed in time: the first timer thaws nothing.
+	time.Sleep(150 * time.Millisecond)
+	var fi podwire.FreezeInfo
+	if err := s.c.Call(ctx, podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: 300, Renew: true}, &fi); err != nil {
+		t.Fatalf("a renewal in time: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got, _ := os.ReadFile(filepath.Join(user, "cgroup.freeze")); string(got) != "1" {
+		t.Fatalf("the renewed freeze was thawed at the old deadline: cgroup.freeze = %q", got)
+	}
+	// Then too late.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got, _ := os.ReadFile(filepath.Join(user, "cgroup.freeze")); string(got) == "0" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the watchdog never thawed the renewed freeze")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	err := s.c.Call(ctx, podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: 300, Renew: true}, nil)
+	if !podwire.IsCode(err, podwire.CodeThawed) {
+		t.Fatalf("a renewal after the watchdog's thaw: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(user, "cgroup.freeze")); string(got) != "0" {
+		t.Fatalf("a late renewal froze again: cgroup.freeze = %q", got)
+	}
+	var th podwire.ThawInfo
+	if err := s.c.Call(ctx, podwire.MethodThaw, nil, &th); err != nil {
+		t.Fatal(err)
+	}
+	if !th.ByWatchdog {
+		t.Fatalf("the thaw after a late renewal: %+v", th)
+	}
+}
+
 func TestAFreezeWithoutALayoutIsUnsupported(t *testing.T) {
 	d := newTestDirs(t)
 	o := d.options()

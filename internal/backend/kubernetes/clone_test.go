@@ -152,7 +152,7 @@ func TestCloneHoldsAStoppedSourceForNothing(t *testing.T) {
 	sts, rec := cloneSourceObjects(t, nil)
 	c := cloneRig(t, sts, rec)
 	c.plan = ClonePlan{Tier: TierCopy, Hold: HoldFreeze}
-	if err := c.hold(context.Background()); err != nil || c.isHeld() {
+	if err := c.hold(context.Background(), fleet.StepSeed); err != nil || c.isHeld() {
 		t.Fatalf("hold of a stopped source: %v, held %v", err, c.isHeld())
 	}
 	c.letGo()
@@ -179,5 +179,40 @@ func TestCloneFactsReadTheSourceDisksStorage(t *testing.T) {
 	plan, err := selectCloneTier(f)
 	if err != nil || plan.Tier != TierCopy || plan.Hold != HoldNone {
 		t.Fatalf("plan %+v, %v", plan, err)
+	}
+}
+
+// A running source that cannot be frozen makes a copier's clone
+// best-effort (its final delta runs live), but not a snapshot's: a snapshot
+// of a live disk is of one point in time, as a crash leaves it.
+func TestAnUnfreezableSourceIsBestEffortOnlyForACopy(t *testing.T) {
+	for _, tc := range []struct {
+		tier CloneTier
+		want bool
+	}{{TierCopy, true}, {TierSnapshot, false}} {
+		t.Run(string(tc.tier), func(t *testing.T) {
+			sts, rec := cloneSourceObjects(t, nil)
+			c := cloneRig(t, sts, rec)
+			if err := c.loadSource(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			c.jobCtx = context.Background()
+			c.running, c.plan = true, ClonePlan{Tier: tc.tier, Hold: HoldFreeze}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			// The rig's source has no pod: its agent cannot freeze it.
+			if err := c.hold(ctx, fleet.StepSeed); err != nil || c.isHeld() {
+				t.Fatalf("hold: %v, held %v", err, c.isHeld())
+			}
+			if got := c.bestEffortWhy() != ""; got != tc.want {
+				t.Fatalf("best-effort %v (%q), want %v", got, c.bestEffortWhy(), tc.want)
+			}
+			// Nothing held: the source's slot is free for another clone.
+			slot, err := c.takeSlot(context.Background(), fleet.StepSeed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-slot
+		})
 	}
 }
