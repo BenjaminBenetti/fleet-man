@@ -93,17 +93,6 @@ func dialPort(t *testing.T, p *Pool, target PodTarget, port int) io.ReadWriteClo
 	return conn
 }
 
-func waitFor(t *testing.T, what string, ok func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !ok() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 func TestPoolPortForwardSharesOneConnectionPerPod(t *testing.T) {
 	r := newPFRig(t, PoolOptions{})
 	r.serveLocal(80, counter(0))
