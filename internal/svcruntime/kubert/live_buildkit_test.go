@@ -141,8 +141,8 @@ func TestLiveBuildkitTLS(t *testing.T) {
 				t.Fatalf("a second build is not cached (%d):\n%s\nthe first:\n%s", code, out, first)
 			}
 			install("old", issueAt(time.Now().Add(-6*24*time.Hour)))
-			if out, code := buildctl("old", "debug workers"); code != 0 {
-				t.Fatalf("a 6-day-old certificate: %s", out)
+			if out, code := buildctl("old", build); code != 0 || !strings.Contains(out, "CACHED") {
+				t.Fatalf("a build with a 6-day-old certificate (%d):\n%s", code, out)
 			}
 			install("expired", issueAt(time.Now().Add(-7*24*time.Hour-time.Hour)))
 			refused(t, "an expired certificate", "expired")
