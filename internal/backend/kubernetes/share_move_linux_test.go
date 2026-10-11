@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
@@ -93,7 +95,39 @@ func newMoveRig(t *testing.T, oldMode topology.Mode) *moveRig {
 	}
 	execSpec, _ := json.Marshal(map[string]any{"remote_user": "vscode"})
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: names.SpecSecret(r.sts, 1), Namespace: jobNS}, Data: map[string][]byte{podspec.ExecFile: execSpec}}
-	h.seed([]runtime.Object{share, set, secret}...)
+	// The seed that bound the share: ended, its pod kept until its Job's
+	// TTL, which holds the claim (pvc-protection) until a move deletes it.
+	seedPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: r.sts + "-seed-g1-x", Namespace: jobNS, UID: "seed-pod", Labels: labels},
+		Spec:   corev1.PodSpec{NodeName: "node-a", Volumes: []corev1.Volume{{Name: "claim-0", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: r.claim}}}}},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
+	h.seed([]runtime.Object{share, set, secret, seedPod}...)
+	// The API server keeps a claim an ended pod still names until that pod
+	// is gone (pvc-protection): asked to delete the share while the seed's
+	// pod is there, it goes only once the pod has.
+	var held sync.Mutex
+	asked := false
+	seedThere := func() bool {
+		_, err := h.cs.Tracker().Get(corev1.SchemeGroupVersion.WithResource("pods"), jobNS, seedPod.Name)
+		return err == nil
+	}
+	h.cs.PrependReactor("delete", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.(k8stesting.DeleteAction).GetName() != r.claim || !seedThere() {
+			return false, nil, nil
+		}
+		held.Lock()
+		asked = true
+		held.Unlock()
+		return true, nil, nil
+	})
+	h.cs.PrependReactor("get", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		held.Lock()
+		defer held.Unlock()
+		if a.(k8stesting.GetAction).GetName() == r.claim && asked && !seedThere() {
+			asked = false
+			_ = h.cs.Tracker().Delete(corev1.SchemeGroupVersion.WithResource("persistentvolumeclaims"), jobNS, r.claim)
+		}
+		return false, nil, nil
+	})
 	if err := SaveInstanceRecord(InstanceRecord{Cluster: testCluster, Namespace: jobNS, Key: rbKey, Fleet: "alpha", Instance: "web", StatefulSet: r.sts, Gen: 1,
 		Share: &ShareRecord{Mode: string(oldMode), Claim: r.claim, Roots: []podshare.SpokeRoot{{Name: ".claude"}, {Name: ".codex"}}}}); err != nil {
 		t.Fatal(err)
@@ -305,6 +339,7 @@ func TestShareMoveGate(t *testing.T) {
 
 	// Past the point of no return: the old share is gone.
 	r.seed(copyPVC())
+	_ = r.cs.CoreV1().Pods(jobNS).Delete(ctx, r.sts+"-seed-g1-x", metav1.DeleteOptions{})
 	if err := r.cs.CoreV1().PersistentVolumeClaims(jobNS).Delete(ctx, r.claim, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}

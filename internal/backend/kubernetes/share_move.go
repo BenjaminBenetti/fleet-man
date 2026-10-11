@@ -725,10 +725,40 @@ func (s *moveScope) deleteClaim(ctx context.Context, pvc *corev1.PersistentVolum
 		if gone(err) || (err == nil && got.UID != pvc.UID) {
 			return nil
 		}
+		s.releaseClaim(ctx, pvc.Name)
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("PVC %s was not gone after %s", pvc.Name, shareGoneWait)
 		case <-time.After(shareMoveInterval):
+		}
+	}
+}
+
+// releaseClaim deletes the ended pods of the fleet's Jobs that mount claim
+// (the seed that bound the share, a tool Job, a copy Job): the API server
+// keeps a claim any pod on a node names (pvc-protection), ended or not,
+// and a finished Job's pods stay until its TTL.
+func (s *moveScope) releaseClaim(ctx context.Context, claim string) {
+	l, err := s.cs.CoreV1().Pods(s.ns).List(ctx, metav1.ListOptions{LabelSelector: names.Selector(s.ident.Owner(), s.clusterID)})
+	if err != nil {
+		return
+	}
+	var ended []objectMeta
+	for i := range l.Items {
+		pod := &l.Items[i]
+		if pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed || pod.DeletionTimestamp != nil {
+			continue
+		}
+		for _, v := range pod.Spec.Volumes {
+			if c := v.PersistentVolumeClaim; c != nil && c.ClaimName == claim {
+				ended = append(ended, metaOf(KindPod, pod))
+				break
+			}
+		}
+	}
+	if len(ended) > 0 {
+		if _, err := s.scope().deleteAll(ctx, ended); err != nil {
+			flog.Warn("kube share: deleting ended pods that hold a claim", "cluster", s.clusterID, "claim", claim, "err", err)
 		}
 	}
 }
