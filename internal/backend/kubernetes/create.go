@@ -78,6 +78,13 @@ const (
 // one's pod down, which run after the job's own context may have ended.
 const finishTimeout = 30 * time.Second
 
+// cleanupContext bounds a create's clean-up (finishTimeout), which outlives
+// its job's context but not the pool: the daemon's bounded shutdown ends it
+// with the pool, past the checkpoint (Pool.Shutdown).
+func (c *creation) cleanupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(c.p.ctx, finishTimeout)
+}
+
 // UpContext creates the instance on its cluster (backend.UpContexter): see
 // create.go. ctx is the create job's: cancelling it (a destroy, the daemon
 // shutting down) stops the create at its next wait. Its provisioning log and
@@ -117,8 +124,11 @@ type creation struct {
 
 	jj *JobJournal
 	// started: the StatefulSet was applied, so a failure scales it down.
-	started  bool
-	warnings []string
+	started bool
+	// checkpointed: the daemon's shutdown cut the create, which leaves its
+	// journal for the next start (checkpoint).
+	checkpointed bool
+	warnings     []string
 	// nodeImage is the id the node gave a node-loaded image, learned from
 	// the seed Job's pod (the first to run it).
 	nodeImage string
@@ -145,11 +155,35 @@ func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
 
 	res, err := c.provision(ctx, cfg)
 	if err != nil {
-		c.stopFailed()
-		return nil, err
+		return nil, c.failed(ctx, err)
 	}
 	res.Warnings = c.warningLines()
 	return res, nil
+}
+
+// failed ends a create that failed with err after its journal began: its
+// started pod is scaled down, and its journal finished (finish). One the
+// daemon's shutdown cut is left at a checkpoint instead.
+func (c *creation) failed(ctx context.Context, err error) error {
+	if backend.ShutdownCut(ctx) {
+		return c.checkpoint()
+	}
+	c.stopFailed()
+	return err
+}
+
+// checkpoint leaves a create the daemon's shutdown cut where it stopped: its
+// journal stays, naming its step and every object it wrote, and its record
+// stays creating, so the next start's reconciler fails it
+// kubernetes:interrupted at that step, exactly as after a daemon kill; the
+// shutdown spends none of its budget unwinding it. Its started pod is still
+// scaled down while the pool lasts, so the failed instance costs no compute.
+func (c *creation) checkpoint() error {
+	c.checkpointed = true
+	c.stopFailed()
+	step := c.jj.Journal().Step
+	flog.Info("kube create: the daemon is shutting down; the job is left for the next start", "fleet", c.id.fleet, "instance", c.id.name, "cluster", c.id.cluster, "key", c.id.key, "step", step)
+	return kubeerr.Wrap(kubeerr.Interrupted, fmt.Errorf("the daemon shut down during the create (at step %s): %w", step, backend.ErrCheckpointed))
 }
 
 // provision is the create after its journal began.
@@ -697,9 +731,13 @@ func (c *creation) warningLines() []string {
 
 // finish ends the job's journal, whatever the outcome: a failed create's
 // record is failed by the create job, its objects stay labelled by the key
-// for a destroy. Only a daemon that dies mid-create leaves a journal behind.
+// for a destroy. Only a daemon that dies or shuts down mid-create leaves a
+// journal behind (checkpoint).
 func (c *creation) finish() {
-	ctx, cancel := context.WithTimeout(context.Background(), finishTimeout)
+	if c.checkpointed {
+		return
+	}
+	ctx, cancel := c.cleanupContext()
 	defer cancel()
 	if s, err := c.scope(); err == nil {
 		if err := s.ClearMark(ctx, c.jj.Journal()); err != nil {
@@ -717,7 +755,7 @@ func (c *creation) stopFailed() {
 	if !c.started {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), finishTimeout)
+	ctx, cancel := c.cleanupContext()
 	defer cancel()
 	if err := c.p.Scale(ctx, c.id.cluster, c.id.sts, 0); err != nil && !gone(err) {
 		flog.Warn("kube create: scaling the failed instance down", "cluster", c.id.cluster, "sts", c.id.sts, "err", err)

@@ -2,6 +2,7 @@ package create
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -131,6 +132,12 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 	// the plain Up for the rest.
 	result, err := backend.UpContext(ctx, instanceBackend, backend.UpRequest{WorkspaceDir: wsDir, Mounts: resolvedMounts.Mounts})
 	if err != nil {
+		if errors.Is(err, backend.ErrCheckpointed) {
+			// The daemon is shutting down, and the backend left the run at
+			// a checkpoint (its journal) that the next start settles the
+			// record from: the record stays as it is until then.
+			return err
+		}
 		// A ctx-aware backend stopped by the cancellation reports why.
 		err = cancelledOr(ctx, err)
 		setFailed(fleetName, instanceName, err)

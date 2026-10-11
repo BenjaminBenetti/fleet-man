@@ -209,3 +209,86 @@ func TestLockHoldersFindsTheDaemonOnly(t *testing.T) {
 		t.Fatalf("holders = %v, %v; want exactly the daemon", pids, err)
 	}
 }
+
+func TestShutdownGrace(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply *fleetgrpc.ShutdownReply
+		want  time.Duration
+	}{
+		{"no reply", nil, shutdownGrace},
+		{"an older daemon reports no limit", &fleetgrpc.ShutdownReply{Accepted: true}, shutdownGrace},
+		{"the hard limit plus 2s", &fleetgrpc.ShutdownReply{Accepted: true, HardLimitMs: 20000}, 22 * time.Second},
+		{"capped", &fleetgrpc.ShutdownReply{Accepted: true, HardLimitMs: int64(time.Hour / time.Millisecond)}, maxShutdownGrace},
+		{"nonsense", &fleetgrpc.ShutdownReply{Accepted: true, HardLimitMs: -5}, shutdownGrace},
+	} {
+		if got := ShutdownGrace(tc.reply); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// shutdownServer answers Shutdown with a hard limit.
+type shutdownServer struct {
+	fleetgrpc.UnimplementedFleetServiceServer
+	hardLimitMs int64
+}
+
+func (s *shutdownServer) Shutdown(context.Context, *fleetgrpc.ShutdownRequest) (*fleetgrpc.ShutdownReply, error) {
+	return &fleetgrpc.ShutdownReply{Accepted: true, HardLimitMs: s.hardLimitMs}, nil
+}
+
+// TestStopServerWaitsOutTheReportedHardLimit is the restart over a daemon
+// whose shutdown takes longer than the fixed grace (a shared-state flush):
+// one that reported its hard limit is given that long plus 2s and exits on
+// its own; one that reported none still gets only the fixed grace.
+func TestStopServerWaitsOutTheReportedHardLimit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		hardLimitMs int64
+		wantKilled  bool
+	}{
+		"reports its hard limit": {hardLimitMs: 1000, wantKilled: false},
+		"reports none":           {hardLimitMs: 0, wantKilled: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			daemonHome(t)
+			shortenKillWait(t)
+			orig := shutdownGrace
+			shutdownGrace = 300 * time.Millisecond
+			t.Cleanup(func() { shutdownGrace = orig })
+			// The daemon's shutdown takes 1.5s: past the fixed grace, within
+			// the reported limit plus 2s.
+			ended := startLockHolder(t, envHolderExitAfter+"=1500ms")
+			lis, err := net.Listen("unix", fleetpaths.SocketPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := grpc.NewServer()
+			fleetgrpc.RegisterFleetServiceServer(srv, &shutdownServer{hardLimitMs: tc.hardLimitMs})
+			go func() { _ = srv.Serve(lis) }()
+			t.Cleanup(srv.Stop)
+			conn, err := grpc.NewClient(localEP().Target(), localEP().DialOptions()...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			killed, err := stopServer(ctx, localEP(), fleetgrpc.NewFleetServiceClient(conn), "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (killed != "") != tc.wantKilled {
+				t.Fatalf("killed = %q, want killed %v", killed, tc.wantKilled)
+			}
+			if serverLockHeld() {
+				t.Fatal("the lifetime lock is still held")
+			}
+			state := <-ended
+			if state.Success() == tc.wantKilled {
+				t.Fatalf("the daemon ended with %v", state)
+			}
+		})
+	}
+}

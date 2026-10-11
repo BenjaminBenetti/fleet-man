@@ -36,8 +36,20 @@ type podExecer interface {
 	OpenPodExec(ctx context.Context, cmd kubernetes.PodCommand) (backend.ExecStream, error)
 }
 
-// PodExec implements the local-only PodExec RPC.
+// podExecerFor is the handle of inst that runs its pod commands; a var so
+// tests stand in for the pool.
+var podExecerFor = func(inst *fleet.Instance) (podExecer, bool) {
+	e, ok := backendutil.NewForInstance(inst, false).(podExecer)
+	return e, ok
+}
+
+// PodExec implements the local-only PodExec RPC. The daemon's shutdown stops
+// accepting new ones first (shutdown.go) and ends the open ones with the
+// rest of its streams.
 func (s *service) PodExec(stream fleetgrpc.FleetService_PodExecServer) error {
+	if err := s.shuttingDown(); err != nil {
+		return err
+	}
 	first, err := stream.Recv()
 	if err != nil {
 		return err
@@ -56,7 +68,7 @@ func (s *service) PodExec(stream fleetgrpc.FleetService_PodExecServer) error {
 	if err != nil {
 		return err
 	}
-	execer, ok := backendutil.NewForInstance(inst, false).(podExecer)
+	execer, ok := podExecerFor(inst)
 	if !ok {
 		return status.Error(codes.FailedPrecondition, "the instance's backend cannot run a pod command")
 	}

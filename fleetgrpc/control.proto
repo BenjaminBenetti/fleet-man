@@ -51,6 +51,12 @@ message ShutdownRequest {
 message ShutdownReply {
   bool accepted = 1;
   int32 draining_jobs = 2;
+  // hard_limit_ms is how long the daemon's own shutdown may take, cleanup
+  // included, before it exits whatever it was still doing (its hard limit). A
+  // restarting client waits that long plus 2s for the process to go before it
+  // kills it, so a shutdown still flushing is never killed; 0 (an older
+  // daemon) means it reports none, and the client keeps its fixed 8s.
+  int64 hard_limit_ms = 3;
 }
 
 // FleetTUIConnectedRequest signals that a TUI client has just opened (sent once

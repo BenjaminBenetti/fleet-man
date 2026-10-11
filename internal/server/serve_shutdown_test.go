@@ -4,11 +4,13 @@ import (
 	"context"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 	"google.golang.org/grpc"
@@ -38,6 +40,9 @@ func startServeSeeded(t *testing.T, seed func()) (fleetgrpc.FleetServiceClient, 
 	t.Setenv("HOME", home)
 	// The relay would point this test process's SSH_AUTH_SOCK at itself.
 	t.Setenv(agentsock.EnvOverride, "off")
+	// The shutdown must not end the process-wide pool the tests after this
+	// one use: it ends a stand-in (servePool in a Kubernetes build).
+	stubServeShutdownPool(t)
 	if seed != nil {
 		if err := os.MkdirAll(fleetpaths.Dir(), 0o700); err != nil {
 			t.Fatal(err)
@@ -199,5 +204,78 @@ func TestServeShutdownHardLimit(t *testing.T) {
 	case <-served:
 	case <-time.After(10 * time.Second):
 		t.Fatal("Serve did not return once the stuck handler was released")
+	}
+}
+
+// stubShareFlush makes flush the shared-state flush for the rest of the test.
+func stubShareFlush(t *testing.T, flush func(ctx context.Context) error) {
+	t.Helper()
+	orig := shareFlush
+	shareFlush = flush
+	t.Cleanup(func() { shareFlush = orig })
+}
+
+// stubHardExit makes the hard limit's exit observable instead of fatal.
+func stubHardExit(t *testing.T) <-chan int {
+	t.Helper()
+	exited := make(chan int, 1)
+	orig := exitProcess
+	exitProcess = func(code int) { exited <- code }
+	t.Cleanup(func() { exitProcess = orig })
+	return exited
+}
+
+// TestServeShutdownWaitsForASlowSharedStateFlush is the restart over a
+// shared-state flush that takes its whole 5s: the daemon reports its hard
+// limit, the flush completes, and the daemon is gone well within the time the
+// restarting client gives it (ShutdownGrace), so the client never kills it
+// mid-flush; the hard limit never fires.
+func TestServeShutdownWaitsForASlowSharedStateFlush(t *testing.T) {
+	exited := stubHardExit(t)
+	var flushed atomic.Bool
+	gotDeadline := make(chan time.Duration, 1)
+	stubShareFlush(t, func(ctx context.Context) error {
+		dl, _ := ctx.Deadline()
+		gotDeadline <- time.Until(dl)
+		// Heeds nothing: the flush takes its whole allowance.
+		time.Sleep(shareFlushLimit)
+		flushed.Store(true)
+		return nil
+	})
+	client, served := startServe(t)
+
+	sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	reply, err := client.Shutdown(sctx, &fleetgrpc.ShutdownRequest{Drain: true})
+	if err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if reply.GetHardLimitMs() != shutdownHardLimit.Milliseconds() {
+		t.Fatalf("hard_limit_ms = %d, want %d", reply.GetHardLimitMs(), shutdownHardLimit.Milliseconds())
+	}
+	grace := fleetclient.ShutdownGrace(reply)
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(grace):
+		t.Fatalf("the daemon was still up after %v: the restarting client would have killed it", grace)
+	}
+	took := time.Since(start)
+	if !flushed.Load() {
+		t.Fatalf("the daemon exited after %v without waiting for the flush", took)
+	}
+	if d := <-gotDeadline; d > shareFlushLimit || d < shareFlushLimit-time.Second {
+		t.Errorf("the flush had %v, want its %v", d, shareFlushLimit)
+	}
+	if took < shareFlushLimit {
+		t.Errorf("shutdown took %v with a %v flush", took, shareFlushLimit)
+	}
+	select {
+	case <-exited:
+		t.Fatal("the shutdown hit its hard limit")
+	default:
 	}
 }

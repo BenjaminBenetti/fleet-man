@@ -3,6 +3,7 @@ package create
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -287,5 +288,42 @@ func TestRunReportsACancelledUpContext(t *testing.T) {
 	}
 	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusFailed || inst.Error != err.Error() {
 		t.Fatalf("record = %s %q, want failed with %q", inst.Status, inst.Error, err.Error())
+	}
+}
+
+// checkpointingUpBackend is a ctx-aware backend that stops at a checkpoint
+// when the daemon shuts down mid-UpContext, as the Kubernetes backend does.
+type checkpointingUpBackend struct {
+	fakeJobBackend
+	cancel context.CancelCauseFunc
+}
+
+func (c *checkpointingUpBackend) UpContext(context.Context, backend.UpRequest) (*backend.UpResult, error) {
+	c.cancel(backend.ErrDaemonShutdown)
+	return nil, fmt.Errorf("kubernetes:interrupted: the daemon shut down during the create (at step seed): %w", backend.ErrCheckpointed)
+}
+
+// TestRunLeavesACheckpointedRecord: a run the backend checkpointed at the
+// daemon's shutdown leaves its record as it is (still creating), for the next
+// start to fail from the run's journal; the run reports the checkpoint.
+func TestRunLeavesACheckpointedRecord(t *testing.T) {
+	seedInstance(t, &fleet.Instance{Name: "i1", Status: fleet.StatusCreating, Backend: fleet.BackendDevcontainer})
+	tmpl := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpl, ".devcontainer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpl, ".devcontainer", "devcontainer.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	stubInstanceBackend(t, &checkpointingUpBackend{cancel: cancel})
+
+	err := RunContext(ctx, "alpha", "i1", "file://"+tmpl, "", false, fleet.BackendDevcontainer)
+	if !errors.Is(err, backend.ErrCheckpointed) {
+		t.Fatalf("err = %v, want the checkpoint", err)
+	}
+	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusCreating || inst.Error != "" {
+		t.Fatalf("record = %s %q, want it left creating", inst.Status, inst.Error)
 	}
 }

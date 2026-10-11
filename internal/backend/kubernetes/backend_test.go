@@ -826,3 +826,115 @@ func TestStartWarmsTheGateway(t *testing.T) {
 		}
 	}
 }
+
+// A create the daemon's shutdown cuts stops at a checkpoint: its journal and
+// the objects' op mark stay for the next start's reconciler, which fails the
+// record at the step the journal names; the started pod is still scaled
+// down. A create cut by anything else (a destroy) unwinds as before: pod
+// scaled down, mark cleared, journal finished. Once the pool is gone, a
+// checkpoint's clean-up is too.
+func TestCreateCutByTheShutdownLeavesItsJournal(t *testing.T) {
+	sts := handleSTS()
+	one := int32(1)
+	for _, tc := range []struct {
+		name       string
+		cause      error
+		closed     bool
+		checkpoint bool
+	}{
+		{"daemon shutdown", backend.ErrDaemonShutdown, false, true},
+		{"destroy", errors.New("instance destroyed"), false, false},
+		{"daemon shutdown past the pool", backend.ErrDaemonShutdown, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := handleMeta(sts)
+			r := newHandleRig(t, &appsv1.StatefulSet{ObjectMeta: meta, Spec: appsv1.StatefulSetSpec{Replicas: &one}})
+			jj, err := BeginJournal(Journal{Op: OpCreate, Fleet: "alpha", Instance: "web", Cluster: handleCluster, Namespace: handleNS, Key: handleKey, Gen: 1, Step: stepApply})
+			if err != nil {
+				t.Fatal(err)
+			}
+			must := func(err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			must(jj.Intend(JournalObject{Kind: KindStatefulSet, Name: sts, Gen: 1, Created: true}))
+			must(jj.Applied(KindStatefulSet, sts, string(meta.UID)))
+			must(jj.Step(stepStart))
+			c := &creation{
+				p: r.pool, id: bound{cluster: handleCluster, key: handleKey, fleet: "alpha", name: "web", sts: sts},
+				cs: r.cs, ns: handleNS, owner: handleOwner, jj: jj, started: true,
+			}
+			if tc.closed {
+				r.pool.Close()
+			}
+			ctx, cancel := context.WithCancelCause(context.Background())
+			cancel(tc.cause)
+			stepErr := fmt.Errorf("cancelled: %w", context.Cause(ctx))
+			before := len(r.cs.Actions())
+			err = c.failed(ctx, stepErr)
+			c.finish()
+
+			var replicas, marks int
+			for _, a := range r.cs.Actions()[before:] {
+				p, ok := a.(k8stesting.PatchActionImpl)
+				if !ok || p.GetResource().Resource != "statefulsets" {
+					continue
+				}
+				switch body := string(p.GetPatch()); {
+				case strings.Contains(body, `"replicas":0`):
+					replicas++
+				case strings.Contains(body, names.AnnotationOp):
+					marks++
+				}
+			}
+			if tc.checkpoint {
+				if !errors.Is(err, backend.ErrCheckpointed) {
+					t.Fatalf("err = %v, want the checkpoint", err)
+				}
+				if code, _ := kubeerr.Of(err); code != kubeerr.Interrupted || !strings.Contains(err.Error(), "at step start") {
+					t.Fatalf("err = %v, want kubernetes:interrupted naming the step", err)
+				}
+				if _, statErr := os.Stat(JournalPath(handleKey)); statErr != nil {
+					t.Fatalf("the journal is gone: %v", statErr)
+				}
+				if marks != 0 {
+					t.Fatalf("%d mark clearings at a checkpoint", marks)
+				}
+			} else {
+				if err != stepErr {
+					t.Fatalf("err = %v, want the step's own", err)
+				}
+				if _, statErr := os.Stat(JournalPath(handleKey)); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("the journal outlived the create: %v", statErr)
+				}
+				if marks != 1 {
+					t.Fatalf("%d mark clearings, want 1", marks)
+				}
+			}
+			if want := map[bool]int{false: 1, true: 0}[tc.closed]; replicas != want {
+				t.Fatalf("%d scale-downs, want %d", replicas, want)
+			}
+		})
+	}
+}
+
+// A daemon served again in the same process gets a live pool: the shut-down
+// one is replaced, a live one kept.
+func TestRenewDefaultPool(t *testing.T) {
+	p := DefaultPool()
+	RenewDefaultPool()
+	if DefaultPool() != p {
+		t.Fatal("a live pool was replaced")
+	}
+	p.Close()
+	RenewDefaultPool()
+	next := DefaultPool()
+	if next == p || next.isClosed() {
+		t.Fatal("the shut-down pool was kept")
+	}
+	if !p.isClosed() {
+		t.Fatal("the old pool came back to life")
+	}
+}
