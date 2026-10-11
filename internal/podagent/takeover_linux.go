@@ -275,6 +275,10 @@ func (a *agent) serveRelease(l *pidLock) {
 				return
 			}
 			a.log.Info("a new pod agent took over")
+			// The sockets go before the lock does: the new agent binds them.
+			if a.ctl != nil {
+				a.ctl.close()
+			}
 			l.release()
 			_ = json.NewEncoder(conn).Encode(releaseReply{OK: true, PID: os.Getpid()})
 			a.end()

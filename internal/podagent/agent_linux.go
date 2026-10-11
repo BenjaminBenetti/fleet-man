@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"runtime"
 	"sync"
@@ -32,6 +33,10 @@ type agent struct {
 	proto  int
 	rpc    map[string]Method
 	ctlW   *podwire.FrameWriter
+	// ctl is the main agent's work in the control directory: the in-pod
+	// sockets and files fleetd's DesiredState asks for (nil on the bulk
+	// session).
+	ctl *controlDir
 
 	lastRecv atomic.Int64
 	streams  sync.WaitGroup
@@ -72,6 +77,12 @@ func Serve(ctx context.Context, conn io.ReadWriteCloser, opts Options) error {
 	}
 	a.log.attach(a.ctlW)
 	a.rpc = a.methods()
+	if o.Role == podwire.RoleMain {
+		if err := prepareControlDir(o.ControlDir); err != nil {
+			a.log.Warn("could not make the control directory root's alone", "dir", o.ControlDir, "err", err.Error())
+		}
+		a.ctl = newControlDir(o.ControlDir, a.log, a.dialSock)
+	}
 	if o.Role == podwire.RoleMain && !o.NoTakeover {
 		lock, err := a.takeOver()
 		if err != nil {
@@ -83,13 +94,36 @@ func Serve(ctx context.Context, conn io.ReadWriteCloser, opts Options) error {
 	a.touch()
 	go a.readControl(ctl, r)
 	go a.heartbeat()
+	if a.ctl != nil {
+		go a.ctl.run(a.ctx.Done(), o.ControlCheck)
+	}
 	mux := &podwire.Mux{Handlers: a.handlers(), Refused: func(tag podwire.Tag, reason string) {
 		a.log.Warn("refused a stream from fleetd", "kind", tag.String(), "reason", reason)
 	}}
 	_ = mux.Serve(sess)
 	a.end()
+	// Before the pid file's lock goes: the next agent binds the sockets.
+	if a.ctl != nil {
+		a.ctl.close()
+	}
 	a.waitStreams(execas.AbortGrace + 2*time.Second)
 	return nil
+}
+
+// dialSock opens a relay stream to fleetd for an in-pod connection.
+func (a *agent) dialSock(tag podwire.Tag, open podwire.SockOpen) (net.Conn, error) {
+	return podwire.DialSock(a.sess, tag, open)
+}
+
+// applyDesired makes the control directory match ds and acks it.
+func (a *agent) applyDesired(ds podwire.DesiredState) {
+	ack := podwire.DesiredAck{Gen: ds.Gen}
+	if a.ctl == nil {
+		ack.Error = fmt.Sprintf("the %s agent keeps no control directory", a.opts.Role)
+	} else {
+		ack.Error = a.ctl.apply(ds)
+	}
+	_ = a.ctlW.WriteJSON(podwire.FrameData, podwire.ControlMessage{Type: podwire.MsgDesiredAck, DesiredAck: &ack})
 }
 
 // RefusedError is fleetd refusing this agent.
@@ -180,7 +214,8 @@ func (a *agent) handshake() (*yamux.Stream, *podwire.FrameReader, error) {
 	}
 }
 
-// readControl reads fleetd's control frames: heartbeats and Close.
+// readControl reads fleetd's control frames: heartbeats, DesiredStates and
+// Close.
 func (a *agent) readControl(ctl *yamux.Stream, r *podwire.FrameReader) {
 	defer ctl.Close()
 	for {
@@ -191,9 +226,15 @@ func (a *agent) readControl(ctl *yamux.Stream, r *podwire.FrameReader) {
 		}
 		a.touch()
 		var m podwire.ControlMessage
-		if f.Type == podwire.FrameData && podwire.DecodeFrame(f, &m) == nil && m.Type == podwire.MsgClose {
+		if f.Type != podwire.FrameData || podwire.DecodeFrame(f, &m) != nil {
+			continue
+		}
+		switch {
+		case m.Type == podwire.MsgClose:
 			a.end()
 			return
+		case m.Type == podwire.MsgDesired && m.Desired != nil:
+			a.applyDesired(*m.Desired)
 		}
 	}
 }

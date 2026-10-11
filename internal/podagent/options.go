@@ -96,6 +96,9 @@ type Options struct {
 	TakeoverAsk, TakeoverKill time.Duration
 	// NoTakeover skips the pid file: for agents a test runs side by side.
 	NoTakeover bool
+	// ControlCheck is how often the main agent checks that its in-pod
+	// sockets' files are still its own (2s by default).
+	ControlCheck time.Duration
 
 	// InitOOMScore is the oom_score_adj file whose value the agent takes for
 	// itself, and so for everything it starts: PID 1's in a pod. "" keeps
@@ -174,6 +177,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.TakeoverKill <= 0 {
 		o.TakeoverKill = 2 * time.Second
+	}
+	if o.ControlCheck <= 0 {
+		o.ControlCheck = 2 * time.Second
 	}
 	if o.Stderr == nil {
 		o.Stderr = os.Stderr
