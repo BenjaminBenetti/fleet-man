@@ -74,6 +74,12 @@ const (
 	// location (the daemon host, each cluster).
 	KubeCredentialsPerLocation KubeCredentialScope = "location"
 	// KubeCredentialsPerFleet: one login shared across locations.
+	// Experimental: Claude Code and Codex rotate their refresh tokens, and
+	// any copy that gets a 401 refreshes whatever expiry it was shown (Codex
+	// reads its expiry from the signed access token), so two locations can
+	// refresh the same token at once. The loser is signed out (Claude Code
+	// clears its copy), and where the server revokes the whole token family
+	// on reuse, every location is.
 	KubeCredentialsPerFleet KubeCredentialScope = "fleet"
 )
 
