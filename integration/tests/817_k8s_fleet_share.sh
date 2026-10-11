@@ -10,6 +10,10 @@ itest_backend_is kubernetes || pass "kubernetes only: a fleet's share on a clust
 
 setup_agent_test
 seed_fleet_settings "${FIXTURE_REPO_NAME}" true false /home/node false false '["/opt/data"]'
+# The share in the default class: single-node mode, also on a cluster whose
+# ReadWriteMany class Auto would pick (multi-node mode is 819's).
+default_class=$(itest_k8s_kubectl get storageclass -o go-template='{{range .items}}{{if eq (index .metadata.annotations "storageclass.kubernetes.io/is-default-class") "true"}}{{.metadata.name}}{{end}}{{end}}')
+[ -z "${default_class}" ] || "${FLEET_BIN}" cluster set itest shared_storage_class="${default_class}" >/dev/null
 alpha="${FIXTURE_REPO_NAME}/alpha"
 beta="${FIXTURE_REPO_NAME}/beta"
 gamma="${FIXTURE_REPO_NAME}/gamma"

@@ -202,7 +202,13 @@ on one that does not. `tests/818_k8s_share_single_node.sh` (a fleet's pods
 placed by its share) needs two schedulable nodes and a WaitForFirstConsumer
 default class, as a kind cluster with two workers has (`kind create cluster
 --config` in the QA container, then `FLEET_ITEST_CLUSTER=kind-<name>`); on one
-node it passes saying it did not run.
+node it passes saying it did not run. `tests/819_k8s_share_multi_node.sh`
+(multi-node mode: Auto's tested ReadWriteMany class, siblings on two nodes)
+needs two schedulable nodes and a StorageClass of csi-driver-nfs
+(`nfs.csi.k8s.io`): the same kind cluster with an NFS server and the driver
+installed (its manifests, and `deploy/example/nfs-provisioner` for the server,
+on a tmpfs volume: an overlay folder cannot be exported); elsewhere it passes
+saying it did not run.
 
 ## Prerequisites
 

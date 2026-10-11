@@ -12,8 +12,12 @@ schedulable=$(itest_k8s_kubectl get nodes -o go-template='{{range .items}}{{$ok 
 [ "${schedulable}" -ge 2 ] || pass "not run: needs two schedulable nodes (the cluster has ${schedulable})"
 binding=$(itest_k8s_kubectl get storageclass -o go-template='{{range .items}}{{if eq (index .metadata.annotations "storageclass.kubernetes.io/is-default-class") "true"}}{{.volumeBindingMode}}{{end}}{{end}}')
 [ "${binding}" = "WaitForFirstConsumer" ] || pass "not run: the default StorageClass binds ${binding:-nothing}, not WaitForFirstConsumer"
+default_class=$(itest_k8s_kubectl get storageclass -o go-template='{{range .items}}{{if eq (index .metadata.annotations "storageclass.kubernetes.io/is-default-class") "true"}}{{.metadata.name}}{{end}}{{end}}')
 
 setup_agent_test
+# The share in the (node-local) default class: single-node mode, also on a
+# cluster whose ReadWriteMany class Auto would pick (multi-node mode is 819's).
+"${FLEET_BIN}" cluster set itest shared_storage_class="${default_class}" >/dev/null
 other="itest-other"
 cat > "${HOME}/.fleet/state.json" <<STATE
 {
