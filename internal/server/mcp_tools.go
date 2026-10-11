@@ -155,6 +155,20 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 		Description: "Read an automation trigger's recorded event logs: the payloads of its recent firings (webhook body, bash command stdout, or schedule fire-time), captured on the daemon so you can debug what fired it, each followed by `# outcome:` lines saying what became of it for each agent (the instance it got, or why not: queued, refused, dropped, not created, failed, reaped). Returns {logs, count} with the firings concatenated, oldest first.",
 	}, s.mcpTriggerLogs)
 
+	// --- custom mounts ---
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_mount_list",
+		Description: "List a fleet's custom mounts: each path every instance of the fleet gets, and the daemon-host folder it binds (host_folder; none: its .mnt folder under ~/.fleet/workspaces/<fleet>). Returns {mounts}.",
+	}, s.mcpMountList)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_mount_set",
+		Description: "Add a custom mount to a fleet, or change the host folder of one it has: host_folder binds an absolute daemon-host folder as it is (a bigger disk, say; synced both ways on a Kubernetes cluster) instead of the .mnt folder. Instances take it at their next create or rebuild. Returns the fleet's mounts and any warning (a host folder missing on the daemon host).",
+	}, s.mcpMountSet)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_mount_delete",
+		Description: "Remove a custom mount from a fleet (its host folder's content is left alone). Instances lose it at their next create or rebuild. Returns the fleet's mounts.",
+	}, s.mcpMountDelete)
+
 	// --- Kubernetes cluster connections ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_cluster_list",
