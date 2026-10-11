@@ -4,6 +4,12 @@
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
+NS=""
+itest_cleanup() {
+  if [ -n "${NS}" ]; then
+    _be_kubectl delete namespace "${NS}" --wait=false >/dev/null 2>&1 || true
+  fi
+}
 itest_begin
 
 itest_backend_is kubernetes || pass "kubernetes only: a cluster's shared Buildkit permission"

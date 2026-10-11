@@ -178,11 +178,13 @@ func (r *Runtime) InstalledCredential(fleetName, instanceName string, svc fleet.
 // refreshBuildkit issues the server a new certificate when its one nears its
 // end (the CA too, near its own), and gives it to the server: the daily
 // upkeep, which a server running a year without a create or a TUI connect
-// would otherwise outlive.
+// would otherwise outlive. Like EnsureService it makes nothing for a fleet
+// that left the connection after the upkeep read the state: a CA rotated
+// with its teardown would be made again, and its server with it.
 func (r *Runtime) refreshBuildkit(ctx context.Context, c *conn, m fleetMeta) error {
 	unlock := r.lock(m.Fleet)
 	defer unlock()
-	if c.buildkitRefusal(ctx) != nil {
+	if r.leftCluster(m.Fleet, "refresh buildkit") || c.buildkitRefusal(ctx) != nil {
 		return nil
 	}
 	if _, changed, err := ensureCA(c.cluster, m, now()); err != nil || !changed {

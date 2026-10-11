@@ -1,8 +1,10 @@
 package buildkit
 
 import (
-	"encoding/base64"
+	"bytes"
 	"fmt"
+	"io"
+	"path"
 	"regexp"
 	"strings"
 
@@ -169,40 +171,102 @@ func buildxPresent(probeOutput string) bool {
 	return strings.Contains(probeOutput, probeMarkerPresent)
 }
 
+// credentialInstaller is the slice of backend.Backend InstallCredential
+// needs: quiet commands, and the backend's file transfer (CopyFile), so no
+// byte of the credential is in a command's argv or in fleet.log.
+type credentialInstaller interface {
+	ExecCommandQuiet(workspaceDir string, command []string) *backend.Cmd
+	CopyFile(workspaceDir string, src io.Reader, remotePath string, mode int) error
+}
+
+// The credential's files in CredentialDir, in the order they are moved into
+// place, with their modes: the CA and the client certificate
+// world-readable, the key the user's alone.
+var credentialFiles = []struct {
+	name string
+	mode int
+	data func(fleet.ServiceCredential) []byte
+}{
+	{"ca.pem", 0o644, func(c fleet.ServiceCredential) []byte { return c.CA }},
+	{"key.pem", 0o600, func(c fleet.ServiceCredential) []byte { return c.Key }},
+	{"cert.pem", 0o644, func(c fleet.ServiceCredential) []byte { return c.Cert }},
+}
+
+// credentialStage prefixes a credential file copied in beside its place,
+// before the three are moved in.
+const credentialStage = ".fleet-new-"
+
+// credentialDirMarker starts the line credentialDirScript prints the
+// folder's absolute path on.
+const credentialDirMarker = "FLEET_CREDENTIAL_DIR="
+
+// credentialDirScript makes CredentialDir the user's alone and prints its
+// absolute path (CopyFile takes no $HOME).
+var credentialDirScript = fmt.Sprintf(`set -e; umask 077; d="%s"; mkdir -p "$d"; chmod 700 "$d"; printf '%s%%s\n' "$d"`, CredentialDir, credentialDirMarker)
+
 // InstallCredential puts cred in the instance's CredentialDir, where a
 // builder made for a server that authenticates instances reads it: the CA
 // and the client certificate world-readable, the key the user's alone, the
-// directory too. It is one command whatever the transport (the files are a
-// few KB, carried in it), and the three files are written beside their
-// places before any of them is moved in, so a failed write leaves the last
-// credential whole. Unlike the builder it does not need docker in the
-// instance: a docker installed later finds its credential there.
-func InstallCredential(b instanceExecer, workspaceDir string, cred fleet.ServiceCredential) error {
-	script, err := credentialScript(cred)
+// directory too. The files go through the backend's CopyFile, never in a
+// command (an argv is in the process list, and a logged command in
+// fleet.log), and all three are copied in beside their places before any of
+// them is moved in, so a failed copy leaves the last credential whole.
+// Unlike the builder it does not need docker in the instance: a docker
+// installed later finds its credential there.
+func InstallCredential(b credentialInstaller, workspaceDir string, cred fleet.ServiceCredential) error {
+	if len(cred.CA) == 0 || len(cred.Cert) == 0 || len(cred.Key) == 0 {
+		return fmt.Errorf("an incomplete buildkit credential (CA %d, certificate %d, key %d bytes)", len(cred.CA), len(cred.Cert), len(cred.Key))
+	}
+	out, err := b.ExecCommandQuiet(workspaceDir, []string{"sh", "-c", credentialDirScript}).CombinedOutputWithTimeout(backend.CopyTimeout)
+	if err != nil {
+		return fmt.Errorf("make the buildkit credential folder: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	dir, err := credentialDir(string(out))
 	if err != nil {
 		return err
 	}
-	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", script}).CombinedOutputWithTimeout(backend.CopyTimeout)
-	if err != nil {
+	for _, f := range credentialFiles {
+		if err := b.CopyFile(workspaceDir, bytes.NewReader(f.data(cred)), path.Join(dir, credentialStage+f.name), f.mode); err != nil {
+			if out, rerr := b.ExecCommandQuiet(workspaceDir, []string{"sh", "-c", credentialMoveScript(dir, false)}).CombinedOutput(); rerr != nil {
+				err = fmt.Errorf("%w; removing the copies: %v (%s)", err, rerr, strings.TrimSpace(string(out)))
+			}
+			return fmt.Errorf("copy the buildkit credential's %s into the instance: %w", f.name, err)
+		}
+	}
+	if out, err := b.ExecCommandQuiet(workspaceDir, []string{"sh", "-c", credentialMoveScript(dir, true)}).CombinedOutputWithTimeout(backend.CopyTimeout); err != nil {
 		return fmt.Errorf("install the buildkit credential: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-// credentialScript writes cred's three files into CredentialDir (see
-// InstallCredential). Base64 has no single quote, so each payload is safe
-// single-quoted; `printf %s` is a builtin, so no payload is an argv entry of
-// its own.
-func credentialScript(cred fleet.ServiceCredential) (string, error) {
-	if len(cred.CA) == 0 || len(cred.Cert) == 0 || len(cred.Key) == 0 {
-		return "", fmt.Errorf("an incomplete buildkit credential (CA %d, certificate %d, key %d bytes)", len(cred.CA), len(cred.Cert), len(cred.Key))
+// credentialDir is the absolute folder credentialDirScript printed, cleaned
+// (a HOME of "/" or with a trailing slash prints a doubled one).
+func credentialDir(out string) (string, error) {
+	for _, l := range strings.Split(out, "\n") {
+		if d, ok := strings.CutPrefix(strings.TrimSpace(l), credentialDirMarker); ok && path.IsAbs(d) {
+			return path.Clean(d), nil
+		}
 	}
-	enc := base64.StdEncoding.EncodeToString
-	return fmt.Sprintf(`set -e; umask 077; d="%s"; mkdir -p "$d"; chmod 700 "$d"; t="$d/.fleet-credential.$$"; trap 'rm -rf "$t"' EXIT; mkdir "$t"; `+
-		`printf %%s '%s' | base64 -d > "$t/ca.pem"; printf %%s '%s' | base64 -d > "$t/cert.pem"; printf %%s '%s' | base64 -d > "$t/key.pem"; `+
-		`chmod 644 "$t/ca.pem" "$t/cert.pem"; chmod 600 "$t/key.pem"; `+
-		`mv -f "$t/ca.pem" "$d/ca.pem"; mv -f "$t/key.pem" "$d/key.pem"; mv -f "$t/cert.pem" "$d/cert.pem"`,
-		CredentialDir, enc(cred.CA), enc(cred.Cert), enc(cred.Key)), nil
+	return "", fmt.Errorf("the instance named no absolute buildkit credential folder (%s)", strings.TrimSpace(out))
+}
+
+// credentialMoveScript moves the copies InstallCredential made in dir into
+// place (install), or removes them (a copy failed).
+func credentialMoveScript(dir string, install bool) string {
+	var s strings.Builder
+	fmt.Fprintf(&s, "d=%s; ", shellquote.Single(dir))
+	if !install {
+		s.WriteString("rm -f")
+		for _, f := range credentialFiles {
+			fmt.Fprintf(&s, ` "$d/%s%s"`, credentialStage, f.name)
+		}
+		return s.String()
+	}
+	s.WriteString("set -e")
+	for _, f := range credentialFiles {
+		fmt.Fprintf(&s, `; mv -f "$d/%s%s" "$d/%s"`, credentialStage, f.name, f.name)
+	}
+	return s.String()
 }
 
 // RemoveCredential deletes the client certificate and key in the instance's

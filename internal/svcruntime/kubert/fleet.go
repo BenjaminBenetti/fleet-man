@@ -123,7 +123,7 @@ func (c *conn) ensureService(ctx context.Context, m fleetMeta, svc fleet.SharedS
 		if _, err := c.apply(ctx, buildkitSecret(m, owner, ca)); err != nil {
 			return err
 		}
-		in.Rootful, in.TLSHash = c.buildkitRootful(ctx), ca.tlsHash()
+		in.Rootful, in.TLSHash = c.buildkitRootful(ctx, m), ca.tlsHash()
 	}
 	dep, err := cacheDeployment(m, svc, owner, in)
 	if err != nil {

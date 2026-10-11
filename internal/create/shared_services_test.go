@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -41,9 +42,10 @@ func (channelBackend) RemoveControlFile(string) error                     { retu
 // each configure step's probe finds what it looks for and its write succeeds.
 type execBackend struct {
 	mountBackend
-	mu   sync.Mutex
-	runs int
-	cmds []string
+	mu     sync.Mutex
+	runs   int
+	cmds   []string
+	copies []string
 }
 
 func (b *execBackend) ExecCommand(_ string, command []string) *backend.Cmd {
@@ -52,6 +54,24 @@ func (b *execBackend) ExecCommand(_ string, command []string) *backend.Cmd {
 	b.cmds = append(b.cmds, strings.Join(command, " "))
 	b.mu.Unlock()
 	return backend.NewCmd(exec.Command("echo", "PRESENT"), nil)
+}
+
+// ExecCommandQuiet counts with ExecCommand, and names the user's buildkit
+// credential folder (what a credential install asks first).
+func (b *execBackend) ExecCommandQuiet(_ string, command []string) *backend.Cmd {
+	b.mu.Lock()
+	b.runs++
+	b.cmds = append(b.cmds, strings.Join(command, " "))
+	b.mu.Unlock()
+	return backend.NewCmd(exec.Command("echo", "FLEET_CREDENTIAL_DIR=/home/u/.fleet/buildkit"), nil)
+}
+
+// CopyFile records the path of each file copied in.
+func (b *execBackend) CopyFile(_ string, _ io.Reader, remotePath string, _ int) error {
+	b.mu.Lock()
+	b.copies = append(b.copies, remotePath)
+	b.mu.Unlock()
+	return nil
 }
 
 func (b *execBackend) execs() int {
@@ -407,8 +427,8 @@ func TestConfigureBuildkitGivesAClusterInstanceItsCredential(t *testing.T) {
 	if err := configureBuildkit(rec, b, "alpha", "i1", "/ws"); err != nil {
 		t.Fatal(err)
 	}
-	if b.execs() != 3 {
-		t.Fatalf("instance commands = %d, want the credential, the probe and the write", b.execs())
+	if b.execs() != 4 || len(b.copies) != 3 {
+		t.Fatalf("instance commands = %d and copies %v, want the credential's folder, its three files copied and moved in, the probe and the write", b.execs(), b.copies)
 	}
 	want := []svcruntimetest.Call{
 		{Method: "IssueCredential", Fleet: "alpha", Service: fleet.ServiceBuildkit, Instance: "i1"},

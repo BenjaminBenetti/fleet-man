@@ -241,6 +241,17 @@ func TestEnsureBuildkit(t *testing.T) {
 	if c := buildkitDeployment(t, f, m).Spec.Containers[0]; c.Image != DefaultBuildkitImage {
 		t.Fatalf("a local cluster (privileged auto): image %s", c.Image)
 	}
+	// No preflight has read the connection yet (the daemon just started):
+	// the server keeps the shape it has rather than a guess.
+	connectionFacts = func(context.Context, string) (kubernetes.Facts, error) {
+		return kubernetes.Facts{}, errors.New("not checked yet")
+	}
+	if err := rt.EnsureService("alpha", fleet.ServiceBuildkit); err != nil {
+		t.Fatal(err)
+	}
+	if c := buildkitDeployment(t, f, m).Spec.Containers[0]; c.Image != DefaultBuildkitImage || !*c.SecurityContext.Privileged {
+		t.Fatalf("facts unknown: the rootful server became image %s", c.Image)
+	}
 }
 
 // TestBuildkitRefused: a connection whose Allow shared Buildkit is off, or
@@ -385,6 +396,20 @@ func TestMaintainRenewsTheServersCertificate(t *testing.T) {
 	if got := buildkitDeployment(t, f, m).Annotations[annotationBuildkitTLS]; got == before {
 		t.Fatal("a server certificate near its end was not renewed")
 	}
+
+	// The fleet leaves the connection after the upkeep read the state: its
+	// rotated CA and its server are not made again.
+	fleetUsesCluster = func(string, string) bool { return false }
+	if err := rt.ReleaseFleet("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Maintain(context.Background(), "alpha", []fleet.SharedService{fleet.ServiceBuildkit}); err != nil {
+		t.Fatal(err)
+	}
+	if ca, _ := loadCA(testCluster, m.Hash); ca != nil {
+		t.Fatal("the upkeep made a CA again for a fleet that left the connection")
+	}
+	sameList(t, "objects of a fleet that left", f.objects(t), want(m, "pvc/buildkit"))
 }
 
 // TestEnsureCAKeepsAGoodServerCertificateWhenTheClockGoesBack: a clock set

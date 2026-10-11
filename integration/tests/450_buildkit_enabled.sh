@@ -51,6 +51,10 @@ if itest_backend_is kubernetes; then
   key=$(itest_k8s_key "${inst}")
   issued=$(grep "issued an instance's client certificate" "${HOME}/.fleet/fleet.log" || true)
   assert_contains "${issued}" "cn=${key}" "fleetd logs the certificate it issued with the instance's key as its CN"
+  # The key went in as a file, never in a logged command (plain or base64).
+  if grep -qE "BEGIN PRIVATE KEY|LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t" "${HOME}/.fleet/fleet.log"; then
+    fail "fleet.log holds the instance's buildkit private key"
+  fi
 else
   bk_container="fleet-${FIXTURE_REPO_NAME}-buildkit"
   host_bk_dir="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/.buildkit"

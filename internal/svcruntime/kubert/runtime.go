@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
@@ -172,10 +174,11 @@ type conn struct {
 	rec     fleet.KubeCluster
 	daemon  string
 
-	// The connection's last preflight's findings, once read (capabilities).
-	factsRead bool
-	caps      *fleetgrpc.KubeCapabilities
-	local     bool
+	// The connection's last preflight's findings, once read (capabilities);
+	// factsKnown says there were some to read.
+	factsRead, factsKnown bool
+	caps                  *fleetgrpc.KubeCapabilities
+	local                 bool
 }
 
 // factsWait bounds a wait for the connection's first preflight, when none
@@ -190,6 +193,7 @@ func (c *conn) capabilities(ctx context.Context) (*fleetgrpc.KubeCapabilities, b
 		fctx, cancel := context.WithTimeout(ctx, factsWait)
 		defer cancel()
 		if f, err := connectionFacts(fctx, c.cluster); err == nil {
+			c.factsKnown = true
 			c.caps = f.Capabilities
 			c.local = f.Local.Local() || f.Capabilities.GetLocalCluster()
 		}
@@ -197,12 +201,28 @@ func (c *conn) capabilities(ctx context.Context) (*fleetgrpc.KubeCapabilities, b
 	return c.caps, c.local
 }
 
-// buildkitRootful reports whether the fleets' shared Buildkit runs rootful on
+// buildkitRootful reports whether the fleet's shared Buildkit runs rootful on
 // the connection: where it allows privileged pods (auto on a local cluster).
-// Elsewhere it runs rootless.
-func (c *conn) buildkitRootful(ctx context.Context) bool {
+// Elsewhere it runs rootless. While no preflight has said whether the
+// connection is local (the daemon just started), a server already there
+// keeps the shape it has: a guess would replace its pod, and the other shape
+// writes the same cache volume as another user.
+func (c *conn) buildkitRootful(ctx context.Context, m fleetMeta) bool {
 	_, local := c.capabilities(ctx)
-	return c.rec.AllowsPrivileged(local)
+	if c.factsKnown || c.rec.AllowPrivileged != nil {
+		return c.rec.AllowsPrivileged(local)
+	}
+	dep, err := c.scope.Client.AppsV1().Deployments(m.Namespace).Get(ctx, m.name(names.SuffixBuildkit), metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	for _, ctr := range dep.Spec.Template.Spec.Containers {
+		if ctr.Name == string(fleet.ServiceBuildkit) {
+			sc := ctr.SecurityContext
+			return sc != nil && sc.Privileged != nil && *sc.Privileged
+		}
+	}
+	return false
 }
 
 // BuildkitRefusedError is a connection that does not run the fleets' shared

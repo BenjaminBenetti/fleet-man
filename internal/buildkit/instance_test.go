@@ -1,6 +1,10 @@
 package buildkit
 
 import (
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -219,66 +223,140 @@ func TestConfigureInstanceBuildxConfiguresWhenPresent(t *testing.T) {
 	}
 }
 
-// TestCredentialScriptGolden pins the credential install.
-func TestCredentialScriptGolden(t *testing.T) {
-	script, err := credentialScript(testCredential)
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkGolden(t, "credential.sh", script)
-	if _, err := credentialScript(fleet.ServiceCredential{CA: testCredential.CA}); err == nil {
-		t.Fatal("an incomplete credential was rendered")
-	}
+// localInstance is an instance on this host for InstallCredential: its
+// quiet commands run in sh with HOME its home, and CopyFile writes a file
+// atomically, as the backends do. It records every command and each copy's
+// path, and fails the copy of a file named failCopy.
+type localInstance struct {
+	home     string
+	failCopy string
+	commands []string
+	copies   []string
 }
 
-// TestCredentialScriptInstalls runs the install twice in a temporary home:
-// the files hold the credential, the key and its directory are the user's
-// alone, a second install replaces the first, and nothing is left beside
-// them.
-func TestCredentialScriptInstalls(t *testing.T) {
+func (l *localInstance) ExecCommandQuiet(_ string, command []string) *backend.Cmd {
+	l.commands = append(l.commands, strings.Join(command, " "))
+	cmd := exec.Command(command[0], command[1:]...)
+	cmd.Env = append(os.Environ(), "HOME="+l.home)
+	return backend.NewCmd(cmd, nil)
+}
+
+func (l *localInstance) CopyFile(_ string, src io.Reader, remotePath string, mode int) error {
+	l.copies = append(l.copies, remotePath)
+	if strings.HasSuffix(remotePath, "/"+credentialStage+l.failCopy) {
+		return errors.New("the copy broke off")
+	}
+	if !strings.HasPrefix(remotePath, l.home+"/") {
+		return fmt.Errorf("copy outside the instance's home: %s", remotePath)
+	}
+	data, err := io.ReadAll(src)
+	if err != nil {
+		return err
+	}
+	tmp := remotePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, os.FileMode(mode)); err != nil {
+		return err
+	}
+	return os.Rename(tmp, remotePath)
+}
+
+// TestCredentialScriptsGolden pins the commands of a credential install:
+// the folder made the user's alone, and the copies moved into place.
+func TestCredentialScriptsGolden(t *testing.T) {
+	checkGolden(t, "credential-dir.sh", credentialDirScript)
+	checkGolden(t, "credential-move.sh", credentialMoveScript("/home/vscode/.fleet/buildkit", true))
+}
+
+// TestInstallCredential installs a credential twice in a temporary home: the
+// files hold it, the key and its directory are the user's alone, a second
+// install replaces the first, nothing is left beside them, and no command
+// carries any of it. A copy that fails leaves the last credential whole; an
+// incomplete credential is refused before anything runs.
+func TestInstallCredential(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("needs sh")
 	}
 	home := t.TempDir()
-	install := func(cred fleet.ServiceCredential) {
-		t.Helper()
-		script, err := credentialScript(cred)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cmd := exec.Command("sh", "-c", script)
-		cmd.Env = append(os.Environ(), "HOME="+home)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("install: %v (%s)", err, out)
-		}
+	dir := filepath.Join(home, ".fleet", "buildkit")
+	inst := &localInstance{home: home}
+	if err := InstallCredential(inst, "/ws", testCredential); err != nil {
+		t.Fatal(err)
 	}
-	install(testCredential)
 	renewed := testCredential
 	renewed.Cert = []byte("-----BEGIN CERTIFICATE-----\nRENEWED\n-----END CERTIFICATE-----\n")
-	install(renewed)
-	dir := filepath.Join(home, ".fleet", "buildkit")
-	for name, want := range map[string]struct {
-		data []byte
-		mode os.FileMode
-	}{
-		"ca.pem":   {testCredential.CA, 0o644},
-		"cert.pem": {renewed.Cert, 0o644},
-		"key.pem":  {testCredential.Key, 0o600},
+	if err := InstallCredential(inst, "/ws", renewed); err != nil {
+		t.Fatal(err)
+	}
+	check := func(cert []byte) {
+		t.Helper()
+		for name, want := range map[string]struct {
+			data []byte
+			mode os.FileMode
+		}{
+			"ca.pem":   {testCredential.CA, 0o644},
+			"cert.pem": {cert, 0o644},
+			"key.pem":  {testCredential.Key, 0o600},
+		} {
+			p := filepath.Join(dir, name)
+			data, err := os.ReadFile(p)
+			if err != nil || string(data) != string(want.data) {
+				t.Fatalf("%s = %q (%v), want %q", name, data, err, want.data)
+			}
+			if st, _ := os.Stat(p); st.Mode().Perm() != want.mode {
+				t.Errorf("%s mode %v, want %v", name, st.Mode().Perm(), want.mode)
+			}
+		}
+		if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
+			t.Errorf("credential dir mode %v, want 0700", st.Mode().Perm())
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 3 {
+			t.Errorf("credential dir holds %d entries, want the three files", len(entries))
+		}
+	}
+	check(renewed.Cert)
+	if want := []string{dir + "/.fleet-new-ca.pem", dir + "/.fleet-new-key.pem", dir + "/.fleet-new-cert.pem"}; strings.Join(inst.copies[3:], " ") != strings.Join(want, " ") {
+		t.Fatalf("copies %v, want %v", inst.copies[3:], want)
+	}
+	for _, c := range inst.commands {
+		for _, secret := range [][]byte{testCredential.Key, testCredential.Cert, renewed.Cert} {
+			if strings.Contains(c, string(secret)) || strings.Contains(c, base64.StdEncoding.EncodeToString(secret)) {
+				t.Fatalf("a command carries the credential: %s", c)
+			}
+		}
+	}
+
+	broken := &localInstance{home: home, failCopy: "cert.pem"}
+	again := testCredential
+	again.Cert = []byte("-----BEGIN CERTIFICATE-----\nNEVER\n-----END CERTIFICATE-----\n")
+	if err := InstallCredential(broken, "/ws", again); err == nil || !strings.Contains(err.Error(), "cert.pem") {
+		t.Fatalf("a failed copy = %v", err)
+	}
+	check(renewed.Cert)
+
+	if err := InstallCredential(&localInstance{home: home}, "/ws", fleet.ServiceCredential{CA: testCredential.CA}); err == nil {
+		t.Fatal("an incomplete credential was installed")
+	}
+}
+
+// TestCredentialDir: only an absolute folder on the marker's line is taken,
+// cleaned.
+func TestCredentialDir(t *testing.T) {
+	for out, want := range map[string]string{
+		"FLEET_CREDENTIAL_DIR=/home/u/.fleet/buildkit\n":          "/home/u/.fleet/buildkit",
+		"a warning\nFLEET_CREDENTIAL_DIR=/root/.fleet/buildkit\n": "/root/.fleet/buildkit",
+		"FLEET_CREDENTIAL_DIR=/.fleet/buildkit\n":                 "/.fleet/buildkit",
+		"FLEET_CREDENTIAL_DIR=.fleet/buildkit\n":                  "",
+		"FLEET_CREDENTIAL_DIR=//.fleet/buildkit\n":                "/.fleet/buildkit",
+		"FLEET_CREDENTIAL_DIR=/home/u//.fleet/buildkit\n":         "/home/u/.fleet/buildkit",
+		"FLEET_CREDENTIAL_DIR=\n":                                 "",
+		"":                                                        "",
 	} {
-		p := filepath.Join(dir, name)
-		data, err := os.ReadFile(p)
-		if err != nil || string(data) != string(want.data) {
-			t.Fatalf("%s = %q (%v), want %q", name, data, err, want.data)
+		got, err := credentialDir(out)
+		if got != want || (err == nil) != (want != "") {
+			t.Errorf("credentialDir(%q) = %q, %v; want %q", out, got, err, want)
 		}
-		if st, _ := os.Stat(p); st.Mode().Perm() != want.mode {
-			t.Errorf("%s mode %v, want %v", name, st.Mode().Perm(), want.mode)
-		}
-	}
-	if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
-		t.Errorf("credential dir mode %v, want 0700", st.Mode().Perm())
-	}
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 3 {
-		t.Errorf("credential dir holds %d entries, want the three files", len(entries))
 	}
 }

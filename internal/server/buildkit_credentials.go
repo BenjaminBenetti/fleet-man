@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
@@ -111,9 +112,16 @@ func renewCredential(h credentialHolder, reachable bool) {
 	notBefore, notAfter, ok := h.issuer.InstalledCredential(h.fleet, h.inst.Name, fleet.ServiceBuildkit)
 	if (!ok || at.Sub(notBefore) >= credentialRenewAge) && reachable {
 		err := renewInstanceCred(h.rt, h.fleet, h.inst)
-		switch {
-		case errors.Is(err, svcruntime.ErrNoEndpoint):
+		refused := errors.Is(err, svcruntime.ErrNoEndpoint)
+		why := ""
+		if refused {
+			why = err.Error()
+		}
+		if refusalChanged(h, why) && refused {
 			flog.Info("buildkit credentials: the runtime does not serve the fleet's Buildkit; not renewed", "runtime", h.rt.Key(), "fleet", h.fleet, "instance", h.inst.Name, "reason", err)
+		}
+		switch {
+		case refused:
 			state.ReplaceWarnLine(h.fleet, h.inst.Name, credentialBannerPrefix, "")
 			return
 		case err != nil:
@@ -128,6 +136,25 @@ func renewCredential(h credentialHolder, reachable bool) {
 		line = credentialBanner(notAfter.Sub(at))
 	}
 	state.ReplaceWarnLine(h.fleet, h.inst.Name, credentialBannerPrefix, line)
+}
+
+// credentialRefusals is the refusal last logged for each instance
+// ("<runtime>/<fleet>/<instance>"): a runtime that keeps refusing a fleet's
+// Buildkit (a cluster that does not allow it) is logged once, not at every
+// check.
+var credentialRefusals sync.Map
+
+// refusalChanged records why h's runtime refused to renew its credential
+// ("": it did not) and reports whether that differs from the last refusal
+// recorded for it.
+func refusalChanged(h credentialHolder, why string) bool {
+	key := h.rt.Key() + "/" + h.fleet + "/" + h.inst.Name
+	if why == "" {
+		_, had := credentialRefusals.LoadAndDelete(key)
+		return had
+	}
+	prev, _ := credentialRefusals.Swap(key, why)
+	return prev != why
 }
 
 // credentialBanner is the banner line of a credential with left to its end

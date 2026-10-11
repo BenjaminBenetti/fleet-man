@@ -171,6 +171,29 @@ func TestRenewSharedServiceCredentials(t *testing.T) {
 	}
 }
 
+// TestRefusalChanged: a refusal is news once, until its reason changes or a
+// renewal goes through.
+func TestRefusalChanged(t *testing.T) {
+	h := credentialHolder{fleet: "alpha", inst: &fleet.Instance{Name: "k1"}, rt: svcruntimetest.New("kubernetes:c9")}
+	t.Cleanup(func() { credentialRefusals.Delete("kubernetes:c9/alpha/k1") })
+	for i, step := range []struct {
+		why  string
+		news bool
+	}{
+		{"", false},
+		{"not allowed", true},
+		{"not allowed", false},
+		{"admission denies it", true},
+		{"", true},
+		{"", false},
+		{"not allowed", true},
+	} {
+		if got := refusalChanged(h, step.why); got != step.news {
+			t.Fatalf("step %d (%q): changed = %v, want %v", i, step.why, got, step.news)
+		}
+	}
+}
+
 func TestCredentialBanner(t *testing.T) {
 	for left, want := range map[time.Duration]string{
 		7 * 24 * time.Hour:               "",
