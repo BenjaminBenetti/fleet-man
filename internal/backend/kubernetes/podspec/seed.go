@@ -3,6 +3,7 @@
 package podspec
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -11,9 +12,11 @@ import (
 )
 
 // SeedSpec is what of a generation's seed follows from its render: the
-// instance pod's directory mount targets, its hostname and the volumes to
-// copy up from the image. The caller adds the rest: Reset and PrevGen for a
-// rebuild, the share group's Remap, the Workspace.
+// instance pod's directory mount targets, its hostname, the volumes to copy
+// up from the image, and the fleet's named volumes it mounts (filled on the
+// share when missing or empty there). The caller adds the rest: Reset and
+// PrevGen for a rebuild, the share group's Remap, the Workspace, and where
+// the share is in the seed's pod (Share) when it has shared volumes.
 //
 // The mount targets are what the seed makes mountpoints for (root-extra/
 // for a top-level dir the image lacks, a dir without the image's content
@@ -39,17 +42,37 @@ func SeedSpec(res *Result, o *Objects) *podseed.SeedSpec {
 		}
 	}
 	sort.Strings(s.MountDirs)
-	seen := map[string]bool{}
+	seen, shared := map[string]bool{}, map[string]int{}
 	for _, m := range res.Pod.Mounts {
-		if m.Kind != MountVolume {
-			continue
+		switch m.Kind {
+		case MountVolume:
+			name, _, _ := strings.Cut(strings.TrimPrefix(m.SubPath, podseed.DirVolumes+"/"), "/")
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			s.Volumes = append(s.Volumes, podseed.Volume{Name: name, Target: m.Target, CopyUp: m.CopyUp})
+		case MountSharedVolume:
+			// A volume mounted by a subpath of it takes no copy-up (as on
+			// docker); one it is mounted whole too copies up from that
+			// mount's target.
+			id := sharedVolumeID(m.SubPath)
+			v := podseed.Volume{Name: id, Target: m.Target, CopyUp: m.CopyUp}
+			if i, ok := shared[id]; ok {
+				if v.CopyUp && !s.SharedVolumes[i].CopyUp {
+					s.SharedVolumes[i] = v
+				}
+				continue
+			}
+			shared[id] = len(s.SharedVolumes)
+			s.SharedVolumes = append(s.SharedVolumes, v)
 		}
-		name, _, _ := strings.Cut(strings.TrimPrefix(m.SubPath, podseed.DirVolumes+"/"), "/")
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		s.Volumes = append(s.Volumes, podseed.Volume{Name: name, Target: m.Target, CopyUp: m.CopyUp})
 	}
 	return s
+}
+
+// SharedVolumes reports whether the instance pod res describes mounts any of
+// the fleet's named volumes (its seed then needs the share).
+func SharedVolumes(res *Result) bool {
+	return slices.ContainsFunc(res.Pod.Mounts, func(m Mount) bool { return m.Kind == MountSharedVolume })
 }

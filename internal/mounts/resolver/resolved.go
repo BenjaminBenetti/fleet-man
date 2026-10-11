@@ -22,7 +22,8 @@ type Resolved struct {
 	// host under the fleet's mount root. That host tree is canonical; a
 	// backend that keeps the fleet's shared state elsewhere (a cluster's
 	// share volume) replays Layout there so every Mounts SubPath exists
-	// with the same kind and mode. Each Mounts entry's SubPath is a Dir
-	// entry here.
+	// with the same kind and mode. Each fleet-shared Mounts entry's SubPath
+	// is a Dir entry here (a custom mount's chosen host folder is not the
+	// fleet's: it is in no Layout).
 	Layout []LayoutEntry
 }

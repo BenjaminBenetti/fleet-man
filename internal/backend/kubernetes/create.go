@@ -160,6 +160,9 @@ type creation struct {
 	// verb is what the job is, for its messages ("" is "create"; a clone's
 	// is "clone").
 	verb string
+	// volumes releases the claim on the fleet's named volumes the seed
+	// fills (share_volumes.go) once the record names them; nil for none.
+	volumes func()
 	// share is where the instance's fleet mounts live (share.go); nil
 	// without any.
 	share *shareState
@@ -183,7 +186,9 @@ func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
 	if err := c.prepareShare(ctx); err != nil {
 		return nil, err
 	}
-	defer c.share.done()
+	// The share may be prepared only once the run is translated (admit).
+	defer func() { c.share.done() }()
+	defer c.releaseVolumes()
 	cfg, err := devcli.ReadMerged(ctx, devcli.ReadRequest{Tools: c.env.Tools, WorkspaceDir: c.req.WorkspaceDir})
 	if err != nil {
 		return nil, kubeerr.Wrap(kubeerr.ImageBuild, err)
@@ -334,7 +339,11 @@ func (c *creation) build(ctx context.Context, cfg *devcli.Config) (*built, error
 func (c *creation) admit(ctx context.Context, img *built, cfg *devcli.Config) (*podspec.Admitted, podspec.RenderInput, error) {
 	in := c.input(img.capture.Capture, img.capture.Image, cfg)
 	in.LookupGroup = c.groupsOf(ctx, img.capture.Image.ID).lookup(ctx)
-	r := c.renderInput(imageRefOf(img.del), c.seedJob(ctx, img.capture.Image.ID))
+	res, err := c.translate(ctx, in)
+	if err != nil {
+		return nil, podspec.RenderInput{}, err
+	}
+	r := c.renderInput(imageRefOf(img.del), c.seedJob(ctx, img.capture.Image.ID, podspec.SharedVolumes(res)))
 	adm, err := podspec.Admit(ctx, c.cs, in, r)
 	if err != nil {
 		return nil, r, classify(err)
@@ -381,7 +390,7 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 		Ports:       publishedPorts(adm.Result.Pod.Ports),
 		HostSockets: recordedHostSockets(adm.Result.Pod.HostSockets),
 		HostGateway: adm.Result.Pod.HostGateway, GatewaySkip: adm.Result.Pod.GatewaySkip,
-		Share: c.share.record(),
+		Share: c.share.record(&adm.Result.Pod),
 	}
 	rec.addImageDigest(del.Digest)
 	rec.addImageDigest(del.ImageID)
@@ -408,6 +417,8 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 	if err := SaveInstanceRecord(rec); err != nil {
 		return nil, err
 	}
+	// The record names the fleet's named volumes the seed filled now.
+	c.releaseVolumes()
 
 	pulls := newGatewayPulls(c.p, del.Strategy, c.id.cluster, c.id.sts)
 	failedCreate := c.failedCreate(o.StatefulSet.Name)
@@ -517,11 +528,29 @@ func (c *creation) preflight(ctx context.Context, cfg *devcli.Config) error {
 		return err
 	}
 	in := c.input(capture, kubeshim.ImageConfig{}, cfg)
-	r := c.renderInput(podspec.ImageRef{Ref: podspec.PreflightImage, ID: podspec.PreflightImage}, c.seedJob(ctx, ""))
+	res, err := c.translate(ctx, in)
+	if err != nil {
+		return err
+	}
+	r := c.renderInput(podspec.ImageRef{Ref: podspec.PreflightImage, ID: podspec.PreflightImage}, c.seedJob(ctx, "", podspec.SharedVolumes(res)))
 	if _, err := podspec.Admit(ctx, c.cs, in, r); err != nil {
 		return classify(err)
 	}
 	return nil
+}
+
+// translate translates the run in, and prepares the fleet's share when the
+// run keeps something on it besides the fleet's mounts (named volumes,
+// bound host folders and files), which only the translation tells.
+func (c *creation) translate(ctx context.Context, in podspec.Input) (*podspec.Result, error) {
+	res, err := podspec.Translate(in)
+	if err != nil {
+		return nil, classify(err)
+	}
+	if err := c.needShare(ctx, &res.Pod); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 // input is the translation's input for a captured run. Exec-class commands
@@ -537,6 +566,7 @@ func (c *creation) input(capture *kubeshim.Capture, image kubeshim.ImageConfig, 
 		HostAgentSockets: agentsock.HostAgentPaths(),
 		SSHAuthSock:      agentsock.ContainerSocketPath,
 		MultiNodeShare:   c.share != nil && c.share.mode == topology.MultiNode,
+		FleetDir:         state.FleetDir(),
 	}
 }
 
@@ -576,9 +606,10 @@ func (c *creation) renderInput(image podspec.ImageRef, seed *podspec.JobInput) p
 }
 
 // seedJob is the seed Job's input: bounded by the seed deadline for an
-// image of its size.
-func (c *creation) seedJob(ctx context.Context, imageID string) *podspec.JobInput {
-	return &podspec.JobInput{Name: names.SeedJob(c.id.sts, c.gen), ActiveDeadline: DefaultDeadlines().SeedDeadline(c.imageSize(ctx, imageID)), Claims: c.share.seedClaims()}
+// image of its size, the share mounted beside the disk when the seed binds
+// it or fills the fleet's named volumes there (sharedVolumes).
+func (c *creation) seedJob(ctx context.Context, imageID string, sharedVolumes bool) *podspec.JobInput {
+	return &podspec.JobInput{Name: names.SeedJob(c.id.sts, c.gen), ActiveDeadline: DefaultDeadlines().SeedDeadline(c.imageSize(ctx, imageID)), Claims: c.share.seedClaims(sharedVolumes)}
 }
 
 // imageSize is the image's size on the daemon host (0 when unknown).
@@ -773,6 +804,13 @@ func (c *creation) seedSpec(adm *podspec.Admitted, capture *devcli.CaptureResult
 	if c.prevGen > 0 {
 		spec.Reset, spec.PrevGen, spec.Workspace = true, c.prevGen, nil
 	}
+	if len(spec.SharedVolumes) > 0 {
+		// The fleet's named volumes are filled on the share (the copy
+		// tier's on the disk).
+		if spec.Share = c.share.seedPath(); spec.Share == "" {
+			spec.SharedVolumes = nil
+		}
+	}
 	return spec
 }
 
@@ -784,6 +822,7 @@ func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built, 
 	if c.prevGen > 0 {
 		workspace = nil
 	}
+	c.claimSharedVolumes(ctx, spec)
 	job := adm.Objects.Seed
 	want := job.Job.Spec.Template.Spec
 	digests := []string{del.Digest, del.ImageID}
@@ -824,6 +863,33 @@ func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built, 
 		return nil, fmt.Errorf("the seed's manifest: %w", err)
 	}
 	return &m, nil
+}
+
+// claimSharedVolumes claims the fleet's named volumes spec's seed fills on
+// the share until the record names them, so a destroy of their last other
+// instance meanwhile leaves them; one such a destroy left unused is filled
+// fresh. The copy tier's are the instance's own.
+func (c *creation) claimSharedVolumes(ctx context.Context, spec *podseed.SeedSpec) {
+	s := c.share
+	if s == nil || s.mode == topology.Copy || len(spec.SharedVolumes) == 0 || c.volumes != nil {
+		return
+	}
+	ids := make([]string, len(spec.SharedVolumes))
+	for i, v := range spec.SharedVolumes {
+		ids[i] = v.Name
+	}
+	fresh, release := claimVolumes(ctx, c.cs, c.ns, c.id.cluster, s.claim, ids)
+	for i := range spec.SharedVolumes {
+		spec.SharedVolumes[i].Fresh = fresh[spec.SharedVolumes[i].Name]
+	}
+	c.volumes = release
+}
+
+// releaseVolumes lets go of the claim claimSharedVolumes took.
+func (c *creation) releaseVolumes() {
+	if c.volumes != nil {
+		c.volumes()
+	}
 }
 
 // seedProgress words a seed's progress for the job's step line.

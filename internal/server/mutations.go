@@ -136,6 +136,19 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 		return nil, status.Errorf(codes.InvalidArgument, "invalid custom mount: %v", err)
 	}
 	settings.CustomMounts = normalizedMounts
+	// A custom mount's host folder is a daemon-host path every caller that
+	// may change the settings sets alike, local or remote (as a cluster's
+	// kubeconfig paths). It is checked against fleet's own state only: a
+	// folder holding ~/.fleet (or inside it) would be bound, and on a
+	// cluster synced, over the daemon's own files.
+	folders, err := fleet.NormalizeCustomMountHostFolders(settings.CustomMounts, settings.CustomMountHostFolders)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid custom mount: %v", err)
+	}
+	if err := checkHostFolders(folders); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid custom mount: %v", err)
+	}
+	settings.CustomMountHostFolders = folders
 	// Same trust boundary for layout presets: reject empty/duplicate names and
 	// pane-less presets here so a malformed list never reaches state.json.
 	normalizedPresets, err := fleet.NormalizeLayoutPresets(settings.LayoutPresets)
@@ -182,6 +195,7 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 	}
 	flog.Info("fleet settings updated", "fleet", req.GetFleet())
 	warnings := s.agentLoginWarnings(saved, req.GetFleet(), prevAgents, settings.Agents)
+	warnings = append(warnings, hostFolderWarnings(settings.CustomMountHostFolders)...)
 	// The agents' login state, and what their queues wait for, may have
 	// changed: the scheduler looks again now rather than at its next tick.
 	s.wakeScheduler()

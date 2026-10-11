@@ -14,6 +14,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/owner"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/topology"
+	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
 	"github.com/BenjaminBenetti/fleet-man/internal/sharesync"
 )
 
@@ -159,11 +160,16 @@ func (p *Pool) copySpoke(ctx context.Context, clusterID, key string) (string, er
 
 // ServeShareSpoke runs the spoke of the share the instance with key mounts
 // in that instance's pod, attached to hub as info, until its connection or
-// ctx ends (Pool.OpenSpoke, Pool.ServeSpoke).
-func (p *Pool) ServeShareSpoke(ctx context.Context, clusterID, key string, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func(lease uint64)) error {
+// ctx ends (Pool.OpenSpoke, Pool.ServeSpoke). roots, when given, are the
+// folders it keeps in place of the instance's own: those of every instance
+// that mounts the share, so the one pod that runs its spoke keeps them all.
+func (p *Pool) ServeShareSpoke(ctx context.Context, clusterID, key string, roots []podshare.SpokeRoot, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func(lease uint64)) error {
 	target, share, err := InstanceShare(clusterID, key)
 	if err != nil {
 		return err
+	}
+	if len(roots) > 0 {
+		share.Roots = roots
 	}
 	link, err := p.OpenSpoke(ctx, target, key, share)
 	if err != nil {

@@ -186,19 +186,20 @@ func InstanceFromProto(pi *fleetgrpc.Instance) *fleet.Instance {
 // travel only when set; PreferFleetLaunch preserves its tri-state.
 func FleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 	ps := &fleetgrpc.FleetSettings{
-		ClaudeCodeMount:  s.ClaudeCodeMount,
-		CodexMount:       s.CodexMount,
-		GhMount:          s.GhMount,
-		AuggieMount:      s.AuggieMount,
-		BuildkitServer:   s.BuildkitServer,
-		CustomMounts:     s.CustomMounts,
-		DebCacheServer:   s.DebCacheServer,
-		ImageCacheServer: s.ImageCacheServer,
-		FleetMcp:         s.FleetMCP,
-		LayoutPresets:    LayoutPresetsToProto(s.LayoutPresets),
-		Agents:           AgentsToProto(s.Agents),
-		Triggers:         TriggersToProto(s.Triggers),
-		CoderParameters:  CoderParametersToProto(s.CoderParameters),
+		ClaudeCodeMount:        s.ClaudeCodeMount,
+		CodexMount:             s.CodexMount,
+		GhMount:                s.GhMount,
+		AuggieMount:            s.AuggieMount,
+		BuildkitServer:         s.BuildkitServer,
+		CustomMounts:           s.CustomMounts,
+		CustomMountHostFolders: s.CustomMountHostFolders,
+		DebCacheServer:         s.DebCacheServer,
+		ImageCacheServer:       s.ImageCacheServer,
+		FleetMcp:               s.FleetMCP,
+		LayoutPresets:          LayoutPresetsToProto(s.LayoutPresets),
+		Agents:                 AgentsToProto(s.Agents),
+		Triggers:               TriggersToProto(s.Triggers),
+		CoderParameters:        CoderParametersToProto(s.CoderParameters),
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = strptr(s.HomeDir)
@@ -230,6 +231,9 @@ func FleetSettingsFromProto(ps *fleetgrpc.FleetSettings) fleet.FleetSettings {
 	s.AuggieMount = ps.GetAuggieMount()
 	s.BuildkitServer = ps.GetBuildkitServer()
 	s.CustomMounts = ps.GetCustomMounts()
+	if folders := ps.GetCustomMountHostFolders(); len(folders) > 0 {
+		s.CustomMountHostFolders = folders
+	}
 	s.DebCacheServer = ps.GetDebCacheServer()
 	s.ImageCacheServer = ps.GetImageCacheServer()
 	s.FleetMCP = ps.GetFleetMcp()

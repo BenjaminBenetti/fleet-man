@@ -15,6 +15,12 @@
         "-"
       ],
       "user": "root",
+      "links": [
+        {
+          "path": "/home/vscode/.gitconfig-host",
+          "target": "/fleet-mounts/hostbind/d88f0348/gitconfig"
+        }
+      ],
       "remote_user": "vscode"
     },
     "security": {},
@@ -37,13 +43,16 @@
       {
         "kind": "host-dir",
         "target": "/home/vscode/.aws",
-        "source": "/home/dev/host/hostbind/aws"
+        "source": "/home/dev/host/hostbind/aws",
+        "subPath": ".hostbind/9d13e96f",
+        "mode": 448
       },
       {
         "kind": "host-file",
         "target": "/home/vscode/.gitconfig-host",
         "readOnly": true,
-        "source": "/home/dev/host/hostbind/gitconfig"
+        "source": "/home/dev/host/hostbind/gitconfig",
+        "subPath": ".hostbind/d88f0348"
       }
     ],
     "nodeSelector": {

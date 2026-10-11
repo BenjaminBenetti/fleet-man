@@ -207,7 +207,8 @@ const (
 	MountVolume MountKind = "volume"
 	// MountSharedVolume is any other named volume, which on docker every
 	// container naming it shares: it lives on the fleet's share, SubPath
-	// being its folder there.
+	// being its folder there (podshare.VolumeSubPath, and the
+	// volume-subpath below it), never synced to the daemon host.
 	MountSharedVolume MountKind = "shared-volume"
 	// MountTmpfs is a memory-backed directory (--tmpfs, --shm-size).
 	MountTmpfs MountKind = "tmpfs"
@@ -223,8 +224,12 @@ const (
 	// sockets (/tmp/.X11-unix): each one is relayed as for MountHostSocket.
 	MountHostSocketDir MountKind = "host-socket-dir"
 	// MountHostDir and MountHostFile are binds of a daemon-host directory or
-	// file (~/.aws, ~/.gitconfig): its content is kept in step with Source by
-	// the fleet's sync (both ways, or host to pod for a read-only bind).
+	// file (~/.aws, ~/.gitconfig), and a custom mount's chosen host folder:
+	// a copy on the fleet's share (SubPath: hostbind.Name of Source) is
+	// kept in step with Source by the fleet's sync, both ways, or host to
+	// pod for a read-only bind. A folder's copy mounts at Target; a file's
+	// copy is a folder holding just it, mounted at hostbind.FileDir, with
+	// Target a link to the file there (PID1.Links).
 	MountHostDir  MountKind = "host-dir"
 	MountHostFile MountKind = "host-file"
 	// MountDockerSocket is a bind of the docker engine's socket: the target
@@ -257,6 +262,9 @@ type Mount struct {
 	Anonymous bool `json:"anonymous,omitempty"`
 	// SizeLimit caps a tmpfs, as a Kubernetes quantity.
 	SizeLimit string `json:"sizeLimit,omitempty"`
+	// Mode is a bound host folder's permission bits, which its copy on the
+	// share takes (0 for every other kind).
+	Mode uint32 `json:"mode,omitempty"`
 }
 
 // Port is one published port: a listener on the daemon host at HostIP and

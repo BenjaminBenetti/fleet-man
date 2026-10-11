@@ -1,0 +1,7 @@
+{
+  "name": "fleet-man named-volume fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "mounts": [
+    "source=fleet-itest-shared,target=/etc/skel,type=volume"
+  ]
+}

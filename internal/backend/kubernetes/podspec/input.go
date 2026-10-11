@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"os"
+	"path/filepath"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -43,6 +44,11 @@ type Input struct {
 	// SSHAuthSock is the agent socket devcontainer-exec-class processes get
 	// as SSH_AUTH_SOCK in the pod (exec.json); "" gives them none.
 	SSHAuthSock string
+	// FleetDir is fleet's own state on the daemon host (~/.fleet): a bind of
+	// a folder or file that is it, holds it or is in it is refused, as the
+	// fleet's sync would copy the daemon's own files into pods. "" checks
+	// nothing.
+	FleetDir string
 	// LookupGroup resolves a --group-add group name to its gid in the image;
 	// nil (or a name it does not know) refuses names, which a pod spec cannot
 	// carry.
@@ -99,6 +105,9 @@ type HostFS interface {
 	// Stat follows symlinks, as a bind mount does.
 	Stat(name string) (fs.FileInfo, error)
 	ReadDir(name string) ([]fs.DirEntry, error)
+	// EvalSymlinks is name with its links followed, as a bind mount
+	// follows them.
+	EvalSymlinks(name string) (string, error)
 }
 
 // osFS is the real filesystem.
@@ -106,3 +115,4 @@ type osFS struct{}
 
 func (osFS) Stat(name string) (fs.FileInfo, error)      { return os.Stat(name) }
 func (osFS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
+func (osFS) EvalSymlinks(name string) (string, error)   { return filepath.EvalSymlinks(name) }

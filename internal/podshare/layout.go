@@ -46,6 +46,26 @@ type Layout struct {
 	// to whoever creates them (a pod without root).
 	UID int `json:"uid"`
 	GID int `json:"gid"`
+	// Volumes are the named volumes the instance mounts, by their folder
+	// in VolumesDir (VolumeID's form). A missing one is made empty, root's
+	// with mode 0755 (whoever runs the replay without root), as docker
+	// makes a new volume with nothing to copy into it; one there keeps
+	// its owner, mode and content.
+	Volumes []string `json:"volumes,omitempty"`
+}
+
+// ValidVolumeID reports whether id names a named volume's folder: 8
+// lower-case hex digits.
+func ValidVolumeID(id string) bool {
+	if len(id) != 8 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if c := id[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // Validate checks l is a layout this fleet can replay safely.
@@ -66,6 +86,11 @@ func (l Layout) Validate() error {
 	}
 	if (l.UID < 0) != (l.GID < 0) {
 		return fmt.Errorf("layout owner %d:%d sets one id without the other", l.UID, l.GID)
+	}
+	for _, id := range l.Volumes {
+		if !ValidVolumeID(id) {
+			return fmt.Errorf("layout volume %q is not a volume's folder name", id)
+		}
 	}
 	return nil
 }
@@ -107,6 +132,8 @@ const (
 	parentMode fs.FileMode = 0o755
 	stateMode  fs.FileMode = 0o700
 	leaseMode  fs.FileMode = 0o600
+	// volumeMode is a named volume made empty, as docker makes one.
+	volumeMode fs.FileMode = 0o755
 )
 
 // Apply makes l's tree in dir (MountDir: the share's root, or the copy
@@ -167,6 +194,72 @@ func Apply(dir string, l Layout) error {
 			err = a.file(name, mode, l.UID, l.GID, e.Seed, false)
 		}
 		if err != nil {
+			return err
+		}
+	}
+	if len(l.Volumes) > 0 {
+		// The volumes' folder is root's, as RootsDir is: no pod user moves
+		// a volume away and puts a link in its place for the next mount.
+		if err := a.dir(VolumesDir, treeMode, treeUID, treeGID); err != nil {
+			return err
+		}
+		for _, id := range l.Volumes {
+			if err := a.volume(VolumeSubPath(id), treeUID, treeGID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// volume makes name a named volume's folder when missing (or a symlink,
+// which goes): empty, owned by uid:gid (-1 keeps the creator), volumeMode.
+// A folder there is the volume, its owner, mode and content its own.
+func (a applier) volume(name string, uid, gid int) error {
+	info, err := a.r.Lstat(name)
+	switch {
+	case err == nil && info.IsDir():
+		return nil
+	case err == nil && info.Mode()&fs.ModeSymlink != 0:
+		if err := a.r.Remove(name); err != nil {
+			return fmt.Errorf("removing the symlink at %s: %w", a.host(name), err)
+		}
+	case err == nil:
+		return fmt.Errorf("%s is a %s where a named volume belongs; remove it from the share", a.host(name), kind(info))
+	case !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("%s: %w", a.host(name), err)
+	}
+	if err := a.r.Mkdir(name, 0o700); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return nil // another pod's replay, or a seed, made it meanwhile
+		}
+		return fmt.Errorf("making %s: %w", a.host(name), err)
+	}
+	return a.own(name, volumeMode, uid, gid)
+}
+
+// makeRoots makes each of s's root folders that is missing from the tree in
+// dir (MountDir), as Apply makes a layout path's missing parents (the spec's
+// owner, parentMode): the spoke keeps every instance's folders on the share,
+// and one whose pod has not laid out its tree yet (or never will: its create
+// failed) has none there; its layout gives the folder its mode when it runs.
+// A root folder there, or a symlink in its place, is Apply's to deal with.
+func makeRoots(dir string, s SpokeSpec) error {
+	r, err := safefs.Open(dir, safefs.Options{})
+	if err != nil {
+		return fmt.Errorf("the fleet's share at %s: %w", dir, err)
+	}
+	defer r.Close()
+	a := applier{r: r, top: dir}
+	for _, root := range s.Roots {
+		name := root.Dir()
+		if info, err := r.Lstat(name); err == nil && info.IsDir() {
+			continue
+		}
+		if err := a.parents(name, s.UID, s.GID); err != nil {
+			return err
+		}
+		if err := a.dir(name, parentMode, s.UID, s.GID); err != nil {
 			return err
 		}
 	}

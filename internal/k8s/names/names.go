@@ -89,6 +89,12 @@ const (
 	// instance is stopped and removed once it runs again, so a daemon that
 	// restarts in between finishes the move.
 	AnnotationMovingOff = "fleet.dev/moving-off"
+	// AnnotationVolumesUnused, on a fleet's share, lists the fleet's named
+	// volumes there (their folder names, comma-separated) whose last
+	// instance was destroyed while no pod of the share ran: the share's
+	// upkeep removes them once one runs, and a create naming one first
+	// finds it fresh.
+	AnnotationVolumesUnused = "fleet.dev/volumes-unused"
 )
 
 // Role is LabelRole's value: what an object is for.

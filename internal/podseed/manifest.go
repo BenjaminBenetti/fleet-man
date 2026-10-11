@@ -37,6 +37,9 @@ type Manifest struct {
 	RootExtra []string `json:"root_extra,omitempty"`
 	// Volumes are the volumes this seed copied up (new ones only).
 	Volumes []string `json:"volumes,omitempty"`
+	// SharedVolumes are the fleet's named volumes this seed filled on the
+	// share (missing or empty ones only).
+	SharedVolumes []string `json:"shared_volumes,omitempty"`
 	// Files, Bytes and Hardlinks count what the root copy wrote.
 	Files     int64 `json:"files"`
 	Bytes     int64 `json:"bytes"`

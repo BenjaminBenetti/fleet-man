@@ -68,6 +68,7 @@ func NewRootCmd() *cobra.Command {
 		newTriggerCmd(),
 		newClusterCmd(),
 		newSyncCmd(),
+		newMountCmd(),
 		newMicCmd(),
 		newOutputCmd(),
 		newExecAsCmd(),

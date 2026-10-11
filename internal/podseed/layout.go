@@ -26,6 +26,9 @@ const (
 	DirMeta = "meta"
 	// DirSync is sharesync's copy-tier state.
 	DirSync = "sync"
+	// SharedVolumesDir is the folder of a fleet's share tree (internal/
+	// podshare) holding the fleet's named volumes: .vol/<id>.
+	SharedVolumesDir = ".vol"
 )
 
 // Files and dirs the layout defines below its top-level dirs.

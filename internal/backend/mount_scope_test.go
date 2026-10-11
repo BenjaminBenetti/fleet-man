@@ -9,6 +9,7 @@ func TestMountScopeString(t *testing.T) {
 	}{
 		{MountScopeHost, "host"},
 		{MountScopeFleetShared, "fleet-shared"},
+		{MountScopeHostFolder, "host-folder"},
 		{MountScope(200), "MountScope(200)"},
 	}
 	for _, tt := range tests {

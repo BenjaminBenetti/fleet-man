@@ -204,7 +204,9 @@ func (rb *rebuilding) run(ctx context.Context) (*backend.UpResult, error) {
 	if err := rb.prepare(ctx); err != nil {
 		return nil, rb.unchanged(err)
 	}
-	defer rb.share.done()
+	// The share may be prepared only once the run is translated (admit).
+	defer func() { rb.share.done() }()
+	defer rb.releaseVolumes()
 	if err := rb.load(ctx); err != nil {
 		return nil, rb.unchanged(err)
 	}

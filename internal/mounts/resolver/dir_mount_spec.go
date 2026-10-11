@@ -27,6 +27,13 @@ type dirMountSpec struct {
 	containerPath string
 	// custom marks a user-defined custom mount (FleetSettings.CustomMounts).
 	custom bool
+	// hostFolder is the daemon-host folder the user chose for a custom
+	// mount (FleetSettings.CustomMountHostFolders), bound as it is in place
+	// of hostSubdir; "" uses hostSubdir. hostFolderErr says why the chosen
+	// folder cannot be used (a hand-edited state.json), refused rather than
+	// silently swapped for the .mnt folder.
+	hostFolder    string
+	hostFolderErr error
 }
 
 // prepareError wraps a failure to prepare the spec's host directory. A
@@ -89,12 +96,21 @@ func dirMountSpecsFor(fleetSettings fleet.FleetSettings, containerHome string) [
 		if err != nil {
 			continue
 		}
-		specs = append(specs, dirMountSpec{
+		spec := dirMountSpec{
 			name:          "custom mount " + containerPath,
 			hostSubdir:    filepath.Join(customMountHostSubdir, strings.TrimPrefix(containerPath, "/")),
 			containerPath: containerPath,
 			custom:        true,
-		})
+		}
+		if folder, ok := hostFolderFor(fleetSettings.CustomMountHostFolders, containerPath); ok {
+			spec.hostFolder, spec.hostFolderErr = folder, nil
+			if norm, err := fleet.NormalizeCustomMountHostFolder(folder); err != nil {
+				spec.hostFolderErr = err
+			} else {
+				spec.hostFolder = norm
+			}
+		}
+		specs = append(specs, spec)
 	}
 
 	// Collapse duplicate container paths keeping the LAST spec. Two specs
@@ -105,6 +121,21 @@ func dirMountSpecsFor(fleetSettings fleet.FleetSettings, containerHome string) [
 	// makes a colliding custom mount win — the documented last-wins behavior —
 	// instead of crashing provisioning.
 	return dedupeSpecsByContainerPathKeepLast(specs)
+}
+
+// hostFolderFor is the host folder folders gives the custom mount at
+// containerPath, under any spelling of its path (ok false for none, or an
+// empty one).
+func hostFolderFor(folders map[string]string, containerPath string) (string, bool) {
+	if folder, ok := folders[containerPath]; ok && strings.TrimSpace(folder) != "" {
+		return folder, true
+	}
+	for raw, folder := range folders {
+		if norm, err := fleet.NormalizeCustomMount(raw); err == nil && norm == containerPath && strings.TrimSpace(folder) != "" {
+			return folder, true
+		}
+	}
+	return "", false
 }
 
 // dedupeSpecsByContainerPathKeepLast returns specs with at most one entry per

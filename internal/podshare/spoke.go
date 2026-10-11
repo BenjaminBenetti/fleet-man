@@ -42,6 +42,9 @@ type SpokeRoot struct {
 	Reserved []string `json:"reserved,omitempty"`
 	// Skip are folders below it the spoke leaves alone (another root's).
 	Skip []string `json:"skip,omitempty"`
+	// Only, when set, are the names directly in the folder the spoke syncs
+	// (a bound file's folder holds just it: internal/mounts/hostbind).
+	Only []string `json:"only,omitempty"`
 }
 
 // Dir is the root's folder relative to the tree's root.
@@ -64,6 +67,11 @@ func (s SpokeSpec) Validate() error {
 		for _, p := range append(slices.Clone(r.Reserved), r.Skip...) {
 			if !validPath(p) {
 				return fmt.Errorf("spoke folder %s: path %q is not a clean path below it", r.Name, p)
+			}
+		}
+		for _, name := range r.Only {
+			if !validPath(name) || strings.Contains(name, "/") {
+				return fmt.Errorf("spoke folder %s: %q is not a name in it", r.Name, name)
 			}
 		}
 	}

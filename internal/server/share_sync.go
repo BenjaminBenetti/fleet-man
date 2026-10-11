@@ -27,6 +27,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/mounts/hostbind"
 	"github.com/BenjaminBenetti/fleet-man/internal/mounts/syncpolicy"
 	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
 	"github.com/BenjaminBenetti/fleet-man/internal/safefs"
@@ -107,9 +108,10 @@ type shareSpokes interface {
 	// elect is the key of the instance whose pod runs the spoke of the share
 	// the instance key mounts ("" when no pod of it runs).
 	elect(ctx context.Context, cluster, fleetName, key string, share kubernetes.ShareRecord) (string, error)
-	// serve runs that spoke in key's pod, attached to hub as info, until it
-	// ends or ctx does; attached hears once it is attached.
-	serve(ctx context.Context, cluster, key string, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error
+	// serve runs that spoke in key's pod, keeping roots (the folders of
+	// every instance that mounts the share), attached to hub as info, until
+	// it ends or ctx does; attached hears once it is attached.
+	serve(ctx context.Context, cluster, key string, roots []podshare.SpokeRoot, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error
 	// usage is the fleet's share on cluster (ok false: none there).
 	usage(ctx context.Context, cluster, fleetName string) (fleet.ShareUsage, bool, error)
 	// retire deletes the fleet's share on cluster, or with keep labels it an
@@ -129,8 +131,8 @@ func (poolSpokes) elect(ctx context.Context, cluster, fleetName, key string, sha
 	return kubernetes.DefaultPool().ElectShareSpoke(ctx, cluster, fleetName, key, share)
 }
 
-func (poolSpokes) serve(ctx context.Context, cluster, key string, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error {
-	return kubernetes.DefaultPool().ServeShareSpoke(ctx, cluster, key, hub, info, func(uint64) { attached() })
+func (poolSpokes) serve(ctx context.Context, cluster, key string, roots []podshare.SpokeRoot, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error {
+	return kubernetes.DefaultPool().ServeShareSpoke(ctx, cluster, key, roots, hub, info, func(uint64) { attached() })
 }
 
 func (poolSpokes) usage(ctx context.Context, cluster, fleetName string) (fleet.ShareUsage, bool, error) {
@@ -203,10 +205,13 @@ type fleetSync struct {
 	roots []podshare.SpokeRoot
 	hub   *sharesync.Hub
 	host  *localSide
+	// binds are the host folders and files whose copies are the fleet's
+	// .hostbind roots, by root name.
+	binds map[string]hostBindWant
 	// folders are the host's root folders as opened: one removed and made
 	// again is a folder its manifest no longer describes, so the fleet's
 	// sync opens again (sharesync.ErrRootMoved).
-	folders map[string]os.FileInfo
+	folders map[string]hostFolder
 	stores  map[string]*localSide
 	spokes  map[string]*spokeRun
 	retries map[string]*spokeRetry
@@ -227,6 +232,22 @@ type fleetSync struct {
 	conflictsAt time.Time
 }
 
+// hostFolder is a root's folder on the daemon host, as its side opened it.
+type hostFolder struct {
+	dir  string
+	info os.FileInfo
+}
+
+// hostBindWant is a host folder or file the fleet's instances bind, whose
+// copy on their shares is a root of the fleet's sync.
+type hostBindWant struct {
+	path string
+	file bool
+	// readOnly: every instance mounts it read-only, so its root is one-way
+	// (only the daemon host's changes are taken).
+	readOnly bool
+}
+
 // localSide is a side on the daemon host: its tree and its scan loop.
 type localSide struct {
 	info sharesync.SideInfo
@@ -237,8 +258,10 @@ type localSide struct {
 
 // spokeRun is a share's spoke being served.
 type spokeRun struct {
-	key      string
-	info     sharesync.SideInfo
+	key  string
+	info sharesync.SideInfo
+	// roots are the folders it keeps (shareWant.roots as it started).
+	roots    []podshare.SpokeRoot
 	cancel   context.CancelFunc
 	done     chan struct{}
 	attached atomic.Bool
@@ -274,6 +297,10 @@ type shareWant struct {
 	info    sharesync.SideInfo
 	// keys are the instances that mount it, in name order.
 	keys []string
+	// roots are the folders its spoke keeps: every one of those instances'
+	// (one may bind a host folder the others do not, or mount a custom
+	// mount added since they were made), whichever pod runs the spoke.
+	roots []podshare.SpokeRoot
 	// active: one of them runs, or is coming up.
 	active bool
 }
@@ -287,6 +314,7 @@ type instWant struct {
 // fleetWant is what a fleet's sync is to be.
 type fleetWant struct {
 	roots    []podshare.SpokeRoot
+	binds    map[string]hostBindWant
 	clusters map[string]bool
 	shares   map[string]*shareWant
 	insts    []instWant
@@ -381,10 +409,11 @@ func (m *shareSync) wants(st *state.State) map[string]*fleetWant {
 			}
 			w := out[name]
 			if w == nil {
-				w = &fleetWant{clusters: map[string]bool{}, shares: map[string]*shareWant{}}
+				w = &fleetWant{binds: map[string]hostBindWant{}, clusters: map[string]bool{}, shares: map[string]*shareWant{}}
 				out[name] = w
 			}
 			w.roots = mergeRoots(w.roots, share.Roots)
+			mergeBinds(w.binds, share.HostBinds)
 			w.clusters[inst.KubeCluster] = true
 			info := spokeInfo(inst.KubeCluster, inst.KubeKey, share, logins[inst.KubeCluster])
 			sw := w.shares[info.ID]
@@ -393,6 +422,7 @@ func (m *shareSync) wants(st *state.State) map[string]*fleetWant {
 				w.shares[info.ID] = sw
 			}
 			sw.keys = append(sw.keys, inst.KubeKey)
+			sw.roots = mergeRoots(sw.roots, share.Roots)
 			sw.active = sw.active || shareActive(inst.Status) || urgent[info.ID]
 			w.insts = append(w.insts, instWant{name: inst.Name, cluster: inst.KubeCluster, key: inst.KubeKey, side: info.ID, running: inst.Status == fleet.StatusRunning})
 		}
@@ -431,6 +461,20 @@ func (m *shareSync) recordOf(id string) (fleet.KubeCluster, bool) {
 	return fleet.KubeCluster{}, false
 }
 
+// mergeBinds adds an instance's host binds to have, by root name: read-only
+// while every instance's mounts of it are, as on docker, where one
+// read-write bind of a host folder writes it whoever else binds it.
+func mergeBinds(have map[string]hostBindWant, binds []kubernetes.HostBind) {
+	for _, b := range binds {
+		if cur, ok := have[b.Name]; ok {
+			cur.readOnly = cur.readOnly && b.ReadOnly
+			have[b.Name] = cur
+			continue
+		}
+		have[b.Name] = hostBindWant{path: b.Path, file: b.File, readOnly: b.ReadOnly}
+	}
+}
+
 // mergeRoots adds roots to have, by name: their reserved and skipped paths
 // joined. The result is in name order.
 func mergeRoots(have, roots []podshare.SpokeRoot) []podshare.SpokeRoot {
@@ -438,8 +482,13 @@ func mergeRoots(have, roots []podshare.SpokeRoot) []podshare.SpokeRoot {
 	for _, r := range roots {
 		i := slices.IndexFunc(out, func(o podshare.SpokeRoot) bool { return o.Name == r.Name })
 		if i < 0 {
-			out = append(out, podshare.SpokeRoot{Name: r.Name, Reserved: slices.Clone(r.Reserved), Skip: slices.Clone(r.Skip)})
+			out = append(out, podshare.SpokeRoot{Name: r.Name, Reserved: slices.Clone(r.Reserved), Skip: slices.Clone(r.Skip), Only: slices.Clone(r.Only)})
 			continue
+		}
+		for _, n := range r.Only {
+			if !slices.Contains(out[i].Only, n) {
+				out[i].Only = append(out[i].Only, n)
+			}
 		}
 		for _, p := range r.Reserved {
 			if !slices.Contains(out[i].Reserved, p) {
@@ -455,6 +504,7 @@ func mergeRoots(have, roots []podshare.SpokeRoot) []podshare.SpokeRoot {
 	for i := range out {
 		slices.Sort(out[i].Reserved)
 		slices.Sort(out[i].Skip)
+		slices.Sort(out[i].Only)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -462,7 +512,7 @@ func mergeRoots(have, roots []podshare.SpokeRoot) []podshare.SpokeRoot {
 
 func sameRoots(a, b []podshare.SpokeRoot) bool {
 	return slices.EqualFunc(a, b, func(x, y podshare.SpokeRoot) bool {
-		return x.Name == y.Name && slices.Equal(x.Reserved, y.Reserved) && slices.Equal(x.Skip, y.Skip)
+		return x.Name == y.Name && slices.Equal(x.Reserved, y.Reserved) && slices.Equal(x.Skip, y.Skip) && slices.Equal(x.Only, y.Only)
 	})
 }
 
@@ -511,10 +561,10 @@ func (m *shareSync) converge(ctx context.Context, name string, w *fleetWant) {
 	m.mu.Lock()
 	fs := m.fleets[name]
 	m.mu.Unlock()
-	if fs != nil && (!sameRoots(fs.roots, w.roots) || fs.moved()) {
+	if fs != nil && (!sameRoots(fs.roots, w.roots) || !maps.Equal(fs.binds, w.binds) || fs.moved()) {
 		// New folders (a mount the fleet's settings added, taken up by a
-		// rebuild), or a host folder made again: open it all again; the
-		// hub's state and the manifests carry over.
+		// rebuild; a host bind now read-write), or a host folder made again:
+		// open it all again; the hub's state and the manifests carry over.
 		m.mu.Lock()
 		delete(m.fleets, name)
 		m.mu.Unlock()
@@ -523,7 +573,7 @@ func (m *shareSync) converge(ctx context.Context, name string, w *fleetWant) {
 	}
 	if fs == nil {
 		var err error
-		if fs, err = m.openFleet(name, w.roots); err != nil {
+		if fs, err = m.openFleet(name, w.roots, w.binds); err != nil {
 			m.log.Warn("share sync: opening the fleet's sync", "fleet", name, "err", err)
 			return
 		}
@@ -547,7 +597,7 @@ func rootNames(roots []podshare.SpokeRoot) []string {
 }
 
 // openFleet opens a fleet's hub and the daemon host's side.
-func (m *shareSync) openFleet(name string, roots []podshare.SpokeRoot) (*fleetSync, error) {
+func (m *shareSync) openFleet(name string, roots []podshare.SpokeRoot, binds map[string]hostBindWant) (*fleetSync, error) {
 	if err := fleet.ValidateFleetName(name); err != nil {
 		return nil, err
 	}
@@ -555,16 +605,23 @@ func (m *shareSync) openFleet(name string, roots []podshare.SpokeRoot) (*fleetSy
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	hub, err := sharesync.OpenHub(dir, syncpolicy.Defaults(), rootNames(roots), sharesync.HubOptions{Logger: m.log.With("fleet", name), MinFree: shareMinFree})
+	// A read-only host bind's copies follow the daemon host's folder alone.
+	writers := map[string]string{}
+	for name, b := range binds {
+		if b.readOnly {
+			writers[name] = shareHostSide
+		}
+	}
+	hub, err := sharesync.OpenHub(dir, syncpolicy.Defaults(), rootNames(roots), sharesync.HubOptions{Logger: m.log.With("fleet", name), MinFree: shareMinFree, Writers: writers})
 	if err != nil {
 		return nil, err
 	}
 	fs := &fleetSync{
-		name: name, dir: dir, roots: roots, hub: hub,
-		folders: map[string]os.FileInfo{}, stores: map[string]*localSide{}, spokes: map[string]*spokeRun{},
+		name: name, dir: dir, roots: roots, binds: binds, hub: hub,
+		folders: map[string]hostFolder{}, stores: map[string]*localSide{}, spokes: map[string]*spokeRun{},
 		retries: map[string]*spokeRetry{}, syncedAt: map[string]time.Time{}, inSync: map[string]bool{}, unflushed: loadUnflushed(dir),
 	}
-	host, folders, err := m.openHost(name, dir, roots, hub)
+	host, folders, err := m.openHost(name, dir, roots, binds, hub)
 	if err != nil {
 		hub.Close()
 		return nil, err
@@ -577,8 +634,9 @@ func (m *shareSync) openFleet(name string, roots []podshare.SpokeRoot) (*fleetSy
 // WorkspacesDir (made when missing, never through a symlink), the JSON
 // settings files the resolver left empty seeded '{}' first (an empty one is
 // a write under way to the sync, which would never take the share's copy
-// over it), attached to hub and running.
-func (m *shareSync) openHost(name, dir string, roots []podshare.SpokeRoot, hub *sharesync.Hub) (*localSide, map[string]os.FileInfo, error) {
+// over it), and each host bind's folder at its real path (hostRoot),
+// attached to hub and running.
+func (m *shareSync) openHost(name, dir string, roots []podshare.SpokeRoot, binds map[string]hostBindWant, hub *sharesync.Hub) (*localSide, map[string]hostFolder, error) {
 	base := filepath.Join(state.WorkspacesDir(), name)
 	if err := os.MkdirAll(base, 0o777); err != nil {
 		return nil, nil, err
@@ -589,9 +647,20 @@ func (m *shareSync) openHost(name, dir string, roots []podshare.SpokeRoot, hub *
 	}
 	defer top.Close()
 	table := syncpolicy.Defaults()
-	folders := map[string]os.FileInfo{}
+	folders := map[string]hostFolder{}
 	var trees []sharesync.TreeRoot
 	for _, r := range roots {
+		if hostbind.Is(r.Name) {
+			tr, folder, err := hostRoot(r, binds[r.Name])
+			if err != nil {
+				// Its copies wait on the hub; the fleet's other folders sync.
+				m.log.Warn("share sync: a bound host folder is not synced", "fleet", name, "root", r.Name, "err", err)
+				continue
+			}
+			folders[r.Name] = folder
+			trees = append(trees, tr)
+			continue
+		}
 		if err := top.MkdirAll(r.Name, 0o777); err != nil {
 			return nil, nil, fmt.Errorf("the fleet's folder %s: %w", r.Name, err)
 		}
@@ -599,15 +668,61 @@ func (m *shareSync) openHost(name, dir string, roots []podshare.SpokeRoot, hub *
 		if err != nil {
 			return nil, nil, err
 		}
-		folders[r.Name] = fi
+		folder := filepath.Join(base, filepath.FromSlash(r.Name))
+		folders[r.Name] = hostFolder{dir: folder, info: fi}
 		seedJSON(top, table, r)
-		trees = append(trees, sharesync.TreeRoot{Name: r.Name, Dir: filepath.Join(base, filepath.FromSlash(r.Name)), Reserved: r.Reserved, Skip: r.Skip})
+		trees = append(trees, sharesync.TreeRoot{Name: r.Name, Dir: folder, Reserved: r.Reserved, Skip: r.Skip})
 	}
 	side, err := m.openLocal(hub, sharesync.SideInfo{ID: shareHostSide, Location: shareHostSide}, trees, filepath.Join(dir, "host"), nil)
 	if err != nil {
 		return nil, nil, err
 	}
 	return side, folders, nil
+}
+
+// hostRoot is the daemon host's root of a host bind's copies: the bound
+// folder itself, or the folder a bound file is in, holding only it (Only).
+// A missing bound folder is made, as docker makes a missing -v source (a
+// custom mount's chosen folder is never missing: its create refused that);
+// one overlapping fleet's own ~/.fleet, as written or through a link, is
+// never synced (its create refused that too). A read-only bind's folder is never written (ReadOnly); a
+// read-write one must pass safefs's self-test on its own, so one the daemon
+// cannot write leaves only itself unsynced.
+func hostRoot(r podshare.SpokeRoot, b hostBindWant) (sharesync.TreeRoot, hostFolder, error) {
+	if b.path == "" || !filepath.IsAbs(b.path) {
+		return sharesync.TreeRoot{}, hostFolder{}, fmt.Errorf("no host path is recorded for it")
+	}
+	for _, own := range realPaths(state.FleetDir()) {
+		for _, p := range realPaths(b.path) {
+			if hostbind.Overlaps(p, own) {
+				return sharesync.TreeRoot{}, hostFolder{}, fmt.Errorf("%s overlaps fleet's own state (%s)", b.path, own)
+			}
+		}
+	}
+	dir := filepath.Clean(b.path)
+	tr := sharesync.TreeRoot{Name: r.Name, Skip: r.Skip}
+	if b.file {
+		dir = filepath.Dir(dir)
+		tr.Only = []string{filepath.Base(b.path)}
+	} else if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return sharesync.TreeRoot{}, hostFolder{}, err
+		}
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return sharesync.TreeRoot{}, hostFolder{}, err
+	}
+	if !info.IsDir() {
+		return sharesync.TreeRoot{}, hostFolder{}, fmt.Errorf("%s is not a folder", dir)
+	}
+	tr.Dir, tr.ReadOnly = dir, b.readOnly
+	if !b.readOnly {
+		if err := safefs.SelfTest(dir); err != nil {
+			return sharesync.TreeRoot{}, hostFolder{}, err
+		}
+	}
+	return tr, hostFolder{dir: dir, info: info}, nil
 }
 
 // seedJSON writes '{}' into each of root's reserved JSON settings files
@@ -631,12 +746,16 @@ func seedJSON(top *safefs.Root, table syncpolicy.Table, r podshare.SpokeRoot) {
 }
 
 // moved reports whether a host folder of the fleet's is no longer the one
-// its side opened.
+// its side opened (a bound folder is followed through a link to it, as it
+// was opened).
 func (fs *fleetSync) moved() bool {
-	base := filepath.Join(state.WorkspacesDir(), fs.name)
 	for name, was := range fs.folders {
-		now, err := os.Lstat(filepath.Join(base, filepath.FromSlash(name)))
-		if err != nil || !os.SameFile(was, now) {
+		stat := os.Lstat
+		if hostbind.Is(name) {
+			stat = os.Stat
+		}
+		now, err := stat(was.dir)
+		if err != nil || !os.SameFile(was.info, now) {
 			return true
 		}
 	}
@@ -771,10 +890,11 @@ func (m *shareSync) convergeSpokes(ctx context.Context, fs *fleetSync, w *fleetW
 		switch {
 		case run.ended():
 			m.ended(fs, id, run)
-		case sw == nil || !sw.active || sw.info != run.info || !slices.Contains(sw.keys, run.key):
+		case sw == nil || !sw.active || sw.info != run.info || !slices.Contains(sw.keys, run.key) || !sameRoots(sw.roots, run.roots):
 			// Its share is gone or idle, its instance no longer mounts it,
-			// or it is to be attached as another side (the connection's
-			// credential_scope changed).
+			// it is to be attached as another side (the connection's
+			// credential_scope changed), or the share's folders changed (an
+			// instance mounting one the others lack came or went).
 			run.cancel()
 		}
 	}
@@ -811,12 +931,12 @@ func (m *shareSync) convergeSpokes(ctx context.Context, fs *fleetSync, w *fleetW
 // startSpoke serves sw's spoke in key's pod.
 func (m *shareSync) startSpoke(fs *fleetSync, sw *shareWant, key string) {
 	ctx, cancel := context.WithCancel(m.ctx)
-	run := &spokeRun{key: key, info: sw.info, cancel: cancel, done: make(chan struct{})}
+	run := &spokeRun{key: key, info: sw.info, roots: sw.roots, cancel: cancel, done: make(chan struct{})}
 	fs.spokes[sw.info.ID] = run
 	hub, cluster := fs.hub, sw.cluster
 	go func() {
 		defer close(run.done)
-		err := m.spokes.serve(ctx, cluster, key, hub, run.info, func() {
+		err := m.spokes.serve(ctx, cluster, key, run.roots, hub, run.info, func() {
 			run.attached.Store(true)
 			m.notify()
 		})
@@ -935,9 +1055,20 @@ func (m *shareSync) changedCh() <-chan struct{} {
 
 // hotPath reports a path the Ready gate waits for: the logins, settings
 // and ~/.claude.json (the files a devcontainer's hooks and the agents read
-// first), not the transcripts and custom mounts that follow.
-func hotPath(table syncpolicy.Table) func(root, p string) bool {
+// first), and the bound host files among roots (~/.gitconfig, which hooks
+// read as soon), not the transcripts, custom mounts and bound folders that
+// follow.
+func hotPath(table syncpolicy.Table, roots []podshare.SpokeRoot) func(root, p string) bool {
+	files := map[string]bool{}
+	for _, r := range roots {
+		if hostbind.Is(r.Name) && len(r.Only) > 0 {
+			files[r.Name] = true
+		}
+	}
 	return func(root, p string) bool {
+		if files[root] {
+			return true
+		}
 		switch policy, _ := table.PolicyFor(path.Join(root, p)); policy {
 		case syncpolicy.Credential, syncpolicy.JSON3, syncpolicy.TOML3:
 			return true
@@ -992,7 +1123,7 @@ func (m *shareSync) ready(ctx context.Context, fleetName, instance string) error
 	if fs == nil {
 		return errors.New("the fleet's sync closed")
 	}
-	if err := fs.hub.FlushSide(ctx, id, hotPath(syncpolicy.Defaults())); err != nil {
+	if err := fs.hub.FlushSide(ctx, id, hotPath(syncpolicy.Defaults(), fs.roots)); err != nil {
 		return fmt.Errorf("the fleet's logins and settings are not all in the instance yet: %w", err)
 	}
 	flog.Info("share sync: the instance has the fleet's shared state", "fleet", fleetName, "instance", instance, "side", id, "ms", flog.MillisSince(start))

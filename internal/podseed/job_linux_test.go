@@ -283,6 +283,116 @@ func TestSeedJobEndToEnd(t *testing.T) {
 	}
 }
 
+// TestSeedJobFillsTheSharedVolumes: the fleet's named volumes the instance
+// mounts are filled on the share when missing or empty there (copied up from
+// the image, the home's part remapped, or made empty without copy-up), and
+// one holding anything is the fleet's, kept; a link in a volume's place is
+// never followed; a stale partial copy goes; a second seed (a sibling, a
+// rebuild) changes nothing.
+func TestSeedJobFillsTheSharedVolumes(t *testing.T) {
+	e := newJobEnv(t)
+	mustMkdir(t, filepath.Join(e.img.root, "home/vscode/.config"), 0o755)
+	if err := os.WriteFile(filepath.Join(e.img.root, "home/vscode/.config/app.conf"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if os.Geteuid() == 0 {
+		mustChown(t, filepath.Join(e.img.root, "home/vscode/.config/app.conf"), 1000, 1000)
+	}
+	share := filepath.Join(t.TempDir(), "share")
+	vol := filepath.Join(share, SharedVolumesDir)
+	mustMkdir(t, filepath.Join(vol, "kept0001"), 0o700)
+	if err := os.WriteFile(filepath.Join(vol, "kept0001", "data"), []byte("the fleet's"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustMkdir(t, filepath.Join(vol, "empty001"), 0o755)
+	emptyIno := lstat(t, filepath.Join(vol, "empty001")).Ino
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(vol, "link0001")); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(vol, ".gone0001.partial-123")
+	mustMkdir(t, stale, 0o755)
+	old := time.Now().Add(-7 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	spec := e.seedSpec(1)
+	spec.Seed.Share = share
+	spec.Seed.SharedVolumes = []Volume{
+		{Name: "docker01", Target: "/var/lib/docker", CopyUp: true},
+		{Name: "kept0001", Target: "/var/lib/docker", CopyUp: true},
+		{Name: "empty001", Target: "/home/vscode/.config", CopyUp: true},
+		{Name: "nocopy01", Target: "/var/lib/docker"},
+		{Name: "link0001", Target: "/var/lib/docker", CopyUp: true},
+	}
+	code, res, log := e.runJob(t, spec, true, nil)
+	if code != 0 || !res.OK {
+		t.Fatalf("exit %d, result %+v\n%s", code, res, log)
+	}
+	m, err := ParseManifest(res.Output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"docker01", "empty001", "nocopy01", "link0001"}; !reflect.DeepEqual(m.SharedVolumes, want) {
+		t.Errorf("shared volumes filled %v, want %v", m.SharedVolumes, want)
+	}
+	read := func(p string) string {
+		data, _ := os.ReadFile(filepath.Join(vol, p))
+		return string(data)
+	}
+	if read("docker01/image-content") != "under a volume target" || read("link0001/image-content") != "under a volume target" {
+		t.Error("a new shared volume was not copied up from the image")
+	}
+	if read("kept0001/data") != "the fleet's" || read("kept0001/image-content") != "" {
+		t.Error("a shared volume holding data was not kept as it was")
+	}
+	if read("empty001/app.conf") != "x" {
+		t.Error("an empty shared volume was not copied up")
+	}
+	if lstat(t, filepath.Join(vol, "empty001")).Ino != emptyIno {
+		t.Error("an empty shared volume was replaced, not filled where it is (a running sibling's mount would not see it)")
+	}
+	if entries, err := os.ReadDir(filepath.Join(vol, "nocopy01")); err != nil || len(entries) != 0 {
+		t.Errorf("a volume without copy-up: %v %v, want an empty folder", entries, err)
+	}
+	if fi, err := os.Lstat(filepath.Join(vol, "link0001")); err != nil || !fi.IsDir() {
+		t.Error("the link in a volume's place stayed")
+	}
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Error("the copy went through the link in a volume's place")
+	}
+	if _, err := os.Lstat(stale); !os.IsNotExist(err) {
+		t.Error("a stale partial copy was left")
+	}
+	if os.Geteuid() == 0 {
+		if st := lstat(t, filepath.Join(vol, "empty001/app.conf")); st.Uid != 4321 {
+			t.Errorf("a shared volume in the home: owner %d, want the remapped 4321", st.Uid)
+		}
+	}
+	for _, e := range []string{"docker01", "empty001", "nocopy01", "link0001"} {
+		if entries, _ := filepath.Glob(filepath.Join(vol, "."+e+".partial-*")); len(entries) != 0 {
+			t.Errorf("partial copies left: %v", entries)
+		}
+	}
+
+	// A sibling's seed (the same volumes, now all filled) changes nothing.
+	if err := os.WriteFile(filepath.Join(vol, "docker01", "image-content"), []byte("changed in a pod"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e2 := newJobEnv(t)
+	spec2 := e2.seedSpec(1)
+	spec2.Seed.Share, spec2.Seed.SharedVolumes = share, spec.Seed.SharedVolumes
+	if code, res, log := e2.runJob(t, spec2, true, nil); code != 0 || !res.OK {
+		t.Fatalf("second seed: exit %d, result %+v\n%s", code, res, log)
+	} else if m, _ := ParseManifest(res.Output); len(m.SharedVolumes) != 0 {
+		t.Errorf("a second seed filled %v again", m.SharedVolumes)
+	}
+	if read("docker01/image-content") != "changed in a pod" {
+		t.Error("a second seed replaced a volume's data")
+	}
+}
+
 func TestReseedRollbackAndCommitJobs(t *testing.T) {
 	e := newJobEnv(t)
 	if code, res, log := e.runJob(t, e.seedSpec(1), true, nil); code != 0 || !res.OK {

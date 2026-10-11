@@ -44,10 +44,12 @@ func isDialogTextKey(msg tea.KeyMsg) bool {
 func (fleetPage *fleetPage) blurDialogFields() {
 	fleetPage.dlg.fieldActive = false
 	fleetPage.editFleet.addingMount = false
+	fleetPage.editFleet.editingMountHost = false
 	fleetPage.textInput.Blur()
 	fleetPage.branchInput.Blur()
 	fleetPage.homedirInput.Blur()
 	fleetPage.customMountInput.Blur()
+	fleetPage.mountHostInput.Blur()
 	fleetPage.coderWsNameInput.Blur()
 	fleetPage.coderTemplateInput.Blur()
 	fleetPage.coderParamInput.Blur()

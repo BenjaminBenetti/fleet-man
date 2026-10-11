@@ -243,3 +243,67 @@ func TestRunLayoutMakesWhatIsMissing(t *testing.T) {
 		t.Fatalf("the termination message is %q", msg)
 	}
 }
+
+// TestApplyMakesTheNamedVolumes: each named volume the layout lists gets a
+// folder in VolumesDir when missing, empty and 0755 (docker's new volume);
+// one already there (a seed copied it up, the user filled it) keeps its
+// mode and content; a symlink in its place goes; something else there fails
+// the replay, naming it.
+func TestApplyMakesTheNamedVolumes(t *testing.T) {
+	dir := t.TempDir()
+	l := claudeLayout(-1, -1)
+	l.Volumes = []string{"0a1b2c3d", "deadbeef"}
+	kept := filepath.Join(dir, VolumesDir, "deadbeef")
+	if err := os.MkdirAll(kept, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kept, "data"), []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(dir, l); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if info := lstat(t, filepath.Join(dir, VolumesDir)); !info.IsDir() || info.Mode().Perm() != 0o755 {
+		t.Errorf("%s: %v, want a 0755 folder", VolumesDir, info.Mode())
+	}
+	made := filepath.Join(dir, VolumeSubPath("0a1b2c3d"))
+	if info := lstat(t, made); !info.IsDir() || info.Mode().Perm() != 0o755 {
+		t.Errorf("new volume: %v, want an empty 0755 folder", info.Mode())
+	}
+	if info := lstat(t, kept); info.Mode().Perm() != 0o700 {
+		t.Errorf("an existing volume's mode changed: %v", info.Mode())
+	}
+	if data, _ := os.ReadFile(filepath.Join(kept, "data")); string(data) != "mine" {
+		t.Errorf("an existing volume's content changed: %q", data)
+	}
+
+	if err := os.RemoveAll(made); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, made); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(dir, l); err != nil {
+		t.Fatalf("Apply over a symlinked volume: %v", err)
+	}
+	if info := lstat(t, made); !info.IsDir() {
+		t.Errorf("the symlink in a volume's place stayed: %v", info.Mode())
+	}
+
+	if err := os.RemoveAll(made); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(made, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(dir, l); err == nil || !strings.Contains(err.Error(), "named volume") {
+		t.Errorf("Apply over a file in a volume's place: %v, want it named", err)
+	}
+
+	bad := claudeLayout(-1, -1)
+	bad.Volumes = []string{"../x"}
+	if err := bad.Validate(); err == nil {
+		t.Error("a volume outside VolumesDir validated")
+	}
+}

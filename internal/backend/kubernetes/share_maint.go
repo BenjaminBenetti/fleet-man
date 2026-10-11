@@ -101,6 +101,9 @@ func (p *Pool) MaintainShare(ctx context.Context, clusterID, fleetName string) (
 	if err != nil || !ok {
 		return u, ok, err
 	}
+	if ident, err := owner.LoadIdentity(); err == nil {
+		p.sweepVolumes(ctx, clusterID, names.FleetHash(ident.DaemonID, clusterID, fleetName), u.Claim, "")
+	}
 	key := clusterID + "/" + u.Claim
 	switch {
 	case u.Percent() >= fleet.ShareFullPercent && u.Expandable:

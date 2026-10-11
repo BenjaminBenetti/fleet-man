@@ -24,6 +24,11 @@ const (
 	StateDir = "state"
 	// LeaseFile is the spoke's lease.
 	LeaseFile = "lease"
+	// VolumesDir holds the fleet's named volumes (a devcontainer's
+	// type=volume mounts other than its own ${devcontainerId} ones), one
+	// folder each, VolumeSubPath: never synced to the daemon host, as docker
+	// keeps a named volume on its own host alone.
+	VolumesDir = podseed.SharedVolumesDir
 
 	// InitDir is where the share-layout init container mounts the volume
 	// the tree is on, whole (no subPath the kubelet would make root-owned
@@ -44,6 +49,10 @@ const (
 // SubPath is the tree's path of the fleet folder at sub (a fleet mount's
 // SubPath: ".claude", "files", ".mnt/opt/data"): roots/<sub>.
 func SubPath(sub string) string { return path.Join(RootsDir, sub) }
+
+// VolumeSubPath is the tree's path of the named volume whose folder is id
+// (a hash of its name): .vol/<id>.
+func VolumeSubPath(id string) string { return path.Join(VolumesDir, id) }
 
 // LayoutPath is where the init container reads the layout.
 var LayoutPath = path.Join(podseed.SpecDir, LayoutFile)

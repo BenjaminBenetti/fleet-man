@@ -95,6 +95,14 @@ func (f fakeFS) Stat(name string) (fs.FileInfo, error) {
 	return fakeInfo{name: filepath.Base(name), mode: mode}, nil
 }
 
+// EvalSymlinks: a fakeFS has no links.
+func (f fakeFS) EvalSymlinks(name string) (string, error) {
+	if _, err := f.Stat(name); err != nil {
+		return "", err
+	}
+	return filepath.Clean(name), nil
+}
+
 func (f fakeFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	name = filepath.Clean(name)
 	if mode, ok := f[name]; !ok || !mode.IsDir() {

@@ -76,7 +76,7 @@ func testRenderInput(in Input) RenderInput {
 		},
 	}
 	for _, m := range in.FleetMounts {
-		if m.Scope == backend.MountScopeFleetShared {
+		if m.Scope == backend.MountScopeFleetShared || m.Scope == backend.MountScopeHostFolder {
 			r.Share = testShare(in, names.FleetObject(testFleet, r.FleetHash, names.SuffixShare))
 			break
 		}
@@ -89,6 +89,14 @@ func testRenderInput(in Input) RenderInput {
 		r.SELinuxMount = true
 	}
 	return r
+}
+
+// giveShare gives r the fleet's share when the run keeps anything on it
+// (named volumes, bound host folders and files), as a create does.
+func giveShare(r *RenderInput, in Input, res *Result) {
+	if r.Share == nil && NeedsShare(&res.Pod) {
+		r.Share = testShare(in, names.FleetObject(testFleet, r.FleetHash, names.SuffixShare))
+	}
 }
 
 // goldenRender is a render as a golden file shows it. Secret values are
@@ -147,6 +155,7 @@ func TestRenderGoldens(t *testing.T) {
 					t.Skipf("the fixture does not translate here (%v); TestFixtureGoldens has it", err)
 				}
 				r := testRenderInput(in)
+				giveShare(&r, in, res)
 				o, err := Render(res, r)
 				if err == nil {
 					checkObjects(t, res, r, o)
@@ -697,6 +706,7 @@ func TestRenderRefusesWhatItCannotProvide(t *testing.T) {
 		edit func(*Input, *RenderInput)
 		code string
 	}{
+		// What lives on the fleet's share, rendered without one.
 		"host dir":      {args: []string{"-v", "/home/dev/host/aws:/root/.aws"}, code: CodeUnsupportedMount},
 		"host file":     {args: []string{"-v", "/home/dev/host/gitconfig:/root/.gitconfig"}, code: CodeUnsupportedMount},
 		"shared volume": {args: []string{"-v", "cache:/cache"}, code: CodeUnsupportedMount},
@@ -763,7 +773,9 @@ func TestRenderOptionGoldens(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		return Render(res, testRenderInput(in))
+		r := testRenderInput(in)
+		giveShare(&r, in, res)
+		return Render(res, r)
 	}
 	base, err := render(baseInput(nil, nil, nil))
 	if err != nil {

@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -50,6 +51,112 @@ func NormalizeCustomMount(path string) (string, error) {
 		return "", fmt.Errorf("mount path must not be the container root '/'")
 	}
 	return cleaned, nil
+}
+
+// NormalizeCustomMountHostFolder validates a custom mount's host folder: a
+// path on the daemon host, absolute and cleaned, never the host's root, and
+// free of what docker's --mount option could not carry in its
+// comma-separated value (a comma, a double quote, a control character).
+// Whether it exists is the daemon host's to say when an instance is made.
+func NormalizeCustomMountHostFolder(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", fmt.Errorf("host folder is empty")
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		return "", fmt.Errorf("host folder %q must be absolute (start with '/')", trimmed)
+	}
+	if strings.ContainsAny(trimmed, ",\"") || strings.ContainsFunc(trimmed, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return "", fmt.Errorf("host folder %q must not contain a comma, a double quote or a control character", trimmed)
+	}
+	cleaned := filepath.Clean(trimmed)
+	if cleaned == "/" {
+		return "", fmt.Errorf("host folder must not be the root '/'")
+	}
+	return cleaned, nil
+}
+
+// NormalizeCustomMountHostFolders validates the host folders of a fleet's
+// custom mounts (mounts, already normalized) and returns them keyed by each
+// mount's normalized path. An entry with an empty folder means the mount
+// keeps its .mnt folder and is dropped, as is one for a path that is no
+// custom mount (the mount was removed); an empty result is nil. The first
+// invalid folder stops it.
+func NormalizeCustomMountHostFolders(mounts []string, folders map[string]string) (map[string]string, error) {
+	var out map[string]string
+	for raw, folder := range folders {
+		if strings.TrimSpace(folder) == "" {
+			continue
+		}
+		path, err := NormalizeCustomMount(raw)
+		if err != nil || !slices.Contains(mounts, path) {
+			continue
+		}
+		norm, err := NormalizeCustomMountHostFolder(folder)
+		if err != nil {
+			return nil, fmt.Errorf("custom mount %s: %w", path, err)
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[path] = norm
+	}
+	return out, nil
+}
+
+// SetCustomMount adds the custom mount at path to s (normalized, after the
+// others) or, when s has it, keeps it where it is, and gives it host
+// folder ("" keeps it on its .mnt folder). It returns the changed settings.
+func SetCustomMount(s FleetSettings, path, hostFolder string) (FleetSettings, error) {
+	norm, err := NormalizeCustomMount(path)
+	if err != nil {
+		return s, err
+	}
+	if !slices.Contains(s.CustomMounts, norm) {
+		s.CustomMounts = append(slices.Clone(s.CustomMounts), norm)
+	}
+	folders := maps.Clone(s.CustomMountHostFolders)
+	if hostFolder == "" {
+		delete(folders, norm)
+	} else {
+		folder, err := NormalizeCustomMountHostFolder(hostFolder)
+		if err != nil {
+			return s, fmt.Errorf("custom mount %s: %w", norm, err)
+		}
+		if folders == nil {
+			folders = map[string]string{}
+		}
+		folders[norm] = folder
+	}
+	if len(folders) == 0 {
+		folders = nil
+	}
+	s.CustomMountHostFolders = folders
+	return s, nil
+}
+
+// RemoveCustomMount drops the custom mount at path from s, with its host
+// folder. A path s does not mount is an error.
+func RemoveCustomMount(s FleetSettings, path string) (FleetSettings, error) {
+	norm, err := NormalizeCustomMount(path)
+	if err != nil {
+		return s, err
+	}
+	i := slices.Index(s.CustomMounts, norm)
+	if i < 0 {
+		return s, fmt.Errorf("no custom mount at %s", norm)
+	}
+	s.CustomMounts = slices.Delete(slices.Clone(s.CustomMounts), i, i+1)
+	if len(s.CustomMounts) == 0 {
+		s.CustomMounts = nil
+	}
+	folders := maps.Clone(s.CustomMountHostFolders)
+	delete(folders, norm)
+	if len(folders) == 0 {
+		folders = nil
+	}
+	s.CustomMountHostFolders = folders
+	return s, nil
 }
 
 // NormalizeCustomMounts validates every entry of in and returns the normalized,

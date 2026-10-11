@@ -41,7 +41,7 @@ func TestLayoutRoots(t *testing.T) {
 }
 
 func TestSpokeSpecValidate(t *testing.T) {
-	good := SpokeSpec{V: SpokeVersion, Roots: []SpokeRoot{{Name: ".claude"}, {Name: ".mnt", Reserved: []string{"opt/data"}}}, UID: 1000, GID: 1000}
+	good := SpokeSpec{V: SpokeVersion, Roots: []SpokeRoot{{Name: ".claude"}, {Name: ".mnt", Reserved: []string{"opt/data"}}, {Name: ".hostbind/0a1b2c3d", Only: []string{"gitconfig"}}}, UID: 1000, GID: 1000}
 	if err := good.Validate(); err != nil {
 		t.Fatalf("Validate(good) = %v", err)
 	}
@@ -53,6 +53,8 @@ func TestSpokeSpecValidate(t *testing.T) {
 		"bad reserved": {V: 1, Roots: []SpokeRoot{{Name: "a", Reserved: []string{"/etc"}}}},
 		"half owner":   {V: 1, Roots: good.Roots, UID: 1000, GID: -1},
 		"bad rescan":   {V: 1, Roots: good.Roots, Rescan: "soon"},
+		"only a path":  {V: 1, Roots: []SpokeRoot{{Name: ".hostbind/0a1b2c3d", Only: []string{"a/b"}}}},
+		"only escapes": {V: 1, Roots: []SpokeRoot{{Name: ".hostbind/0a1b2c3d", Only: []string{".."}}}},
 	} {
 		if err := s.Validate(); err == nil {
 			t.Errorf("%s: Validate took it", name)
@@ -147,6 +149,9 @@ func TestRunSpokeServesTheHub(t *testing.T) {
 	}
 	table := syncpolicy.Defaults()
 	spec := SpokeSpec{V: SpokeVersion, Roots: LayoutRoots(layout.Entries, table.Root), UID: -1, GID: -1, Pod: "pod-uid", NoWatch: true, Rescan: "1h"}
+	// Another instance's folder its pod has not laid out yet: the spoke
+	// keeps every instance's folders, so it makes the folder.
+	spec.Roots = append(spec.Roots, SpokeRoot{Name: ".hostbind/0a1b2c3d"})
 	sock := filepath.Join(base, "spoke.sock")
 	cfg, _ := json.Marshal(spokeChild{Sync: syncDir, Dir: share, Socket: sock, Spec: spec})
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
@@ -229,6 +234,7 @@ func TestRunSpokeServesTheHub(t *testing.T) {
 
 	big := strings.Repeat("x", 3*sharesync.InlineMax)
 	writeFile(t, filepath.Join(host, ".claude", "settings.json"), `{"theme":"dark"}`)
+	writeFile(t, filepath.Join(host, ".hostbind/0a1b2c3d/config"), "[default]\n")
 	writeFile(t, filepath.Join(share, "roots/.mnt/opt/data/big.bin"), big)
 	flush := func() {
 		t.Helper()
@@ -242,6 +248,9 @@ func TestRunSpokeServesTheHub(t *testing.T) {
 	flush()
 	if got := readFile(filepath.Join(share, "roots/.claude/settings.json")); got != `{"theme":"dark"}` {
 		t.Errorf("the spoke's tree has %q, want the host's settings", got)
+	}
+	if got := readFile(filepath.Join(share, "roots/.hostbind/0a1b2c3d/config")); got != "[default]\n" {
+		t.Errorf("a folder the share had not laid out holds %q, want the host's file", got)
 	}
 	if got := readFile(filepath.Join(host, ".mnt/opt/data/big.bin")); got != big {
 		t.Errorf("the host's copy of the pod's large file is %d bytes, want %d", len(got), len(big))

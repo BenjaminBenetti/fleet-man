@@ -42,6 +42,7 @@ integration/
 ├── fixture-buildx/             # the docker CLI + buildx and no daemon: builds go
 │                               # to the fleet's shared buildkit server
 ├── fixture-hostbind/           # a read-write dir and a read-only file host bind
+├── fixture-volume/             # a named volume over /etc/skel (copied up, shared)
 ├── poison-docker/docker        # docker stand-in that logs or refuses calls (itest_poison_docker)
 └── tests/
     ├── 010_up_and_ls.sh        # CLI — up + ls

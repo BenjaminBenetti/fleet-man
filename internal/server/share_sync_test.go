@@ -95,9 +95,12 @@ func (f *fakeSpokes) dir(side string) string {
 	return filepath.Join(f.base, strings.NewReplacer(":", "_", "/", "_").Replace(side))
 }
 
-func (f *fakeSpokes) serve(ctx context.Context, _, key string, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error {
+func (f *fakeSpokes) serve(ctx context.Context, _, key string, served []podshare.SpokeRoot, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error {
 	f.mu.Lock()
 	share := f.shares[key]
+	if len(served) > 0 {
+		share.Roots = served
+	}
 	stop := f.stops[key]
 	_, up := f.running[key]
 	f.served = append(f.served, key)
@@ -112,7 +115,7 @@ func (f *fakeSpokes) serve(ctx context.Context, _, key string, hub sharesync.Rem
 		if err := os.MkdirAll(folder, 0o755); err != nil {
 			return err
 		}
-		roots = append(roots, sharesync.TreeRoot{Name: r.Name, Dir: folder, Reserved: r.Reserved, Skip: r.Skip})
+		roots = append(roots, sharesync.TreeRoot{Name: r.Name, Dir: folder, Reserved: r.Reserved, Skip: r.Skip, Only: r.Only})
 	}
 	tree, err := sharesync.OpenTree(roots, sharesync.TreeOptions{
 		StateDir: dir + ".state", FullReason: "share full", MinFree: 0.05, Settle: -1, MergeSettle: -1,
@@ -256,8 +259,14 @@ func (r *syncRig) instanceOn(cluster, name, key, claim string, roots []podshare.
 	if claim == "" {
 		mode = "copy"
 	}
+	r.instanceWith(cluster, name, key, kubernetes.ShareRecord{Mode: mode, Claim: claim, Roots: roots, UID: -1, GID: -1}, status)
+}
+
+// instanceWith is instanceOn with its share's record as given.
+func (r *syncRig) instanceWith(cluster, name, key string, share kubernetes.ShareRecord, status fleet.InstanceStatus) {
+	r.t.Helper()
 	r.spokes.mu.Lock()
-	r.spokes.shares[key] = kubernetes.ShareRecord{Mode: mode, Claim: claim, Roots: roots, UID: -1, GID: -1}
+	r.spokes.shares[key] = share
 	r.spokes.mu.Unlock()
 	if err := state.Update(func(st *state.State) error {
 		f := st.Fleets[r.fleet]

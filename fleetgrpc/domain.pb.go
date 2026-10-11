@@ -485,9 +485,17 @@ type FleetSettings struct {
 	// fleet_mcp provides the fleet MCP server and the Fleet Admiral skill to the
 	// coding agents in this fleet's instances (issue #219). Plain bool like the
 	// *Mount flags: false == off, the default.
-	FleetMcp      bool `protobuf:"varint,18,opt,name=fleet_mcp,json=fleetMcp,proto3" json:"fleet_mcp,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	FleetMcp bool `protobuf:"varint,18,opt,name=fleet_mcp,json=fleetMcp,proto3" json:"fleet_mcp,omitempty"`
+	// custom_mount_host_folders gives a custom mount (keyed by its
+	// custom_mounts path) an absolute folder on the daemon host instead of its
+	// ~/.fleet/workspaces/<fleet>/.mnt/<path> folder. Docker binds it as it
+	// is, never making it nor changing its mode; a cluster keeps a copy on the
+	// fleet's share in step with it, both ways. A mount without an entry
+	// keeps its .mnt folder. Any caller that may set the fleet's settings sets
+	// it, local or remote, like a cluster's kubeconfig paths.
+	CustomMountHostFolders map[string]string `protobuf:"bytes,19,rep,name=custom_mount_host_folders,json=customMountHostFolders,proto3" json:"custom_mount_host_folders,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *FleetSettings) Reset() {
@@ -644,6 +652,13 @@ func (x *FleetSettings) GetFleetMcp() bool {
 		return x.FleetMcp
 	}
 	return false
+}
+
+func (x *FleetSettings) GetCustomMountHostFolders() map[string]string {
+	if x != nil {
+		return x.CustomMountHostFolders
+	}
+	return nil
 }
 
 // CoderParameter mirrors internal/fleet.CoderParameter — one Coder template
@@ -1292,7 +1307,7 @@ const file_domain_proto_rawDesc = "" +
 	"\a_branchB\x0f\n" +
 	"\r_kube_clusterB\v\n" +
 	"\t_kube_keyB\x0e\n" +
-	"\f_last_branchJ\x04\b\x0e\x10\x1fJ\x04\b \x10!\"\xff\x06\n" +
+	"\f_last_branchJ\x04\b\x0e\x10\x1fJ\x04\b \x10!\"\xbb\b\n" +
 	"\rFleetSettings\x12*\n" +
 	"\x11claude_code_mount\x18\x01 \x01(\bR\x0fclaudeCodeMount\x12\x1f\n" +
 	"\vcodex_mount\x18\x02 \x01(\bR\n" +
@@ -1313,7 +1328,11 @@ const file_domain_proto_rawDesc = "" +
 	"\fcoder_preset\x18\x0f \x01(\tH\x03R\vcoderPreset\x88\x01\x01\x125\n" +
 	"\x14coder_workspace_name\x18\x10 \x01(\tH\x04R\x12coderWorkspaceName\x88\x01\x01\x12D\n" +
 	"\x10coder_parameters\x18\x11 \x03(\v2\x19.fleetgrpc.CoderParameterR\x0fcoderParameters\x12\x1b\n" +
-	"\tfleet_mcp\x18\x12 \x01(\bR\bfleetMcpB\v\n" +
+	"\tfleet_mcp\x18\x12 \x01(\bR\bfleetMcp\x12o\n" +
+	"\x19custom_mount_host_folders\x18\x13 \x03(\v24.fleetgrpc.FleetSettings.CustomMountHostFoldersEntryR\x16customMountHostFolders\x1aI\n" +
+	"\x1bCustomMountHostFoldersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\v\n" +
 	"\t_home_dirB\x16\n" +
 	"\x14_prefer_fleet_launchB\x11\n" +
 	"\x0f_coder_templateB\x0f\n" +
@@ -1413,7 +1432,7 @@ func file_domain_proto_rawDescGZIP() []byte {
 }
 
 var file_domain_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_domain_proto_goTypes = []any{
 	(InstanceStatus)(0),           // 0: fleetgrpc.InstanceStatus
 	(BackendType)(0),              // 1: fleetgrpc.BackendType
@@ -1426,30 +1445,32 @@ var file_domain_proto_goTypes = []any{
 	(*Fleet)(nil),                 // 8: fleetgrpc.Fleet
 	(*GroupLayout)(nil),           // 9: fleetgrpc.GroupLayout
 	(*State)(nil),                 // 10: fleetgrpc.State
-	nil,                           // 11: fleetgrpc.State.FleetsEntry
-	nil,                           // 12: fleetgrpc.State.GroupLayoutsEntry
-	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
+	nil,                           // 11: fleetgrpc.FleetSettings.CustomMountHostFoldersEntry
+	nil,                           // 12: fleetgrpc.State.FleetsEntry
+	nil,                           // 13: fleetgrpc.State.GroupLayoutsEntry
+	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
 }
 var file_domain_proto_depIdxs = []int32{
-	13, // 0: fleetgrpc.Instance.created_at:type_name -> google.protobuf.Timestamp
+	14, // 0: fleetgrpc.Instance.created_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: fleetgrpc.Instance.status:type_name -> fleetgrpc.InstanceStatus
 	1,  // 2: fleetgrpc.Instance.backend:type_name -> fleetgrpc.BackendType
 	5,  // 3: fleetgrpc.FleetSettings.layout_presets:type_name -> fleetgrpc.LayoutPreset
 	6,  // 4: fleetgrpc.FleetSettings.agents:type_name -> fleetgrpc.Agent
 	7,  // 5: fleetgrpc.FleetSettings.triggers:type_name -> fleetgrpc.Trigger
 	4,  // 6: fleetgrpc.FleetSettings.coder_parameters:type_name -> fleetgrpc.CoderParameter
-	1,  // 7: fleetgrpc.Agent.backend:type_name -> fleetgrpc.BackendType
-	3,  // 8: fleetgrpc.Fleet.settings:type_name -> fleetgrpc.FleetSettings
-	2,  // 9: fleetgrpc.Fleet.instances:type_name -> fleetgrpc.Instance
-	11, // 10: fleetgrpc.State.fleets:type_name -> fleetgrpc.State.FleetsEntry
-	12, // 11: fleetgrpc.State.group_layouts:type_name -> fleetgrpc.State.GroupLayoutsEntry
-	8,  // 12: fleetgrpc.State.FleetsEntry.value:type_name -> fleetgrpc.Fleet
-	9,  // 13: fleetgrpc.State.GroupLayoutsEntry.value:type_name -> fleetgrpc.GroupLayout
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	11, // 7: fleetgrpc.FleetSettings.custom_mount_host_folders:type_name -> fleetgrpc.FleetSettings.CustomMountHostFoldersEntry
+	1,  // 8: fleetgrpc.Agent.backend:type_name -> fleetgrpc.BackendType
+	3,  // 9: fleetgrpc.Fleet.settings:type_name -> fleetgrpc.FleetSettings
+	2,  // 10: fleetgrpc.Fleet.instances:type_name -> fleetgrpc.Instance
+	12, // 11: fleetgrpc.State.fleets:type_name -> fleetgrpc.State.FleetsEntry
+	13, // 12: fleetgrpc.State.group_layouts:type_name -> fleetgrpc.State.GroupLayoutsEntry
+	8,  // 13: fleetgrpc.State.FleetsEntry.value:type_name -> fleetgrpc.Fleet
+	9,  // 14: fleetgrpc.State.GroupLayoutsEntry.value:type_name -> fleetgrpc.GroupLayout
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_domain_proto_init() }
@@ -1467,7 +1488,7 @@ func file_domain_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_domain_proto_rawDesc), len(file_domain_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

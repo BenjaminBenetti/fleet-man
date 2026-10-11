@@ -69,6 +69,10 @@ func RunSpoke(ctx context.Context, o SpokeOptions) error {
 	if err := enterTree(o.Sync, o.Dir); err != nil {
 		return err
 	}
+	// Before dropping root: RootsDir is root's.
+	if err := makeRoots(".", o.Spec); err != nil {
+		return err
+	}
 	if err := dropTo(o.Spec.UID, o.Spec.GID); err != nil {
 		return err
 	}
@@ -80,7 +84,7 @@ func RunSpoke(ctx context.Context, o SpokeOptions) error {
 
 	var roots []sharesync.TreeRoot
 	for _, r := range o.Spec.Roots {
-		roots = append(roots, sharesync.TreeRoot{Name: r.Name, Dir: r.Dir(), Reserved: r.Reserved, Skip: r.Skip})
+		roots = append(roots, sharesync.TreeRoot{Name: r.Name, Dir: r.Dir(), Reserved: r.Reserved, Skip: r.Skip, Only: r.Only})
 	}
 	tree, err := sharesync.OpenTree(roots, sharesync.TreeOptions{StateDir: StateDir, FullReason: "share full", Logger: log})
 	if err != nil {
