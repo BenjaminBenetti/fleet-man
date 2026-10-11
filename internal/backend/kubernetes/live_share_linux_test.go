@@ -163,7 +163,7 @@ func TestLiveShare(t *testing.T) {
 	// instance's create seeds them; with only cluster instances nothing
 	// does, and an empty JSON settings file is a write under way to the
 	// hub, which never lands the share's copy over it. The daemon's sync
-	// manager seeds them before it attaches the host (P4.6); so does this.
+	// manager seeds them before it attaches the host; so does this.
 	for _, e := range resolved.Layout {
 		if p := filepath.Join(host, e.Path); !e.Dir && e.Seed != "" {
 			if fi, err := os.Stat(p); err == nil && fi.Size() == 0 {

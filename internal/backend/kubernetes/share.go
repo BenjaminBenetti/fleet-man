@@ -50,8 +50,9 @@ import (
 // has no share at all (the copy tier): each instance keeps its own copy on
 // its disk.
 //
-// The share outlives its instances; destroying the fleet deletes it (after a
-// flush, P4.6). It grows by half when 90% full where its class allows
+// The share outlives its instances; destroying the fleet deletes it once the
+// daemon flushed what it held, else keeps it labelled an orphan
+// (share_retire.go). It grows by half when 90% full where its class allows
 // (MaintainShare).
 
 // shareState is where a create puts the instance's fleet mounts.

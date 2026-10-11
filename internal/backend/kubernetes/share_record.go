@@ -7,7 +7,8 @@ import (
 )
 
 // ShareRecord is where an instance's fleet mounts live on its connection,
-// as its record keeps it: what attaching its share's spoke takes (P4.6).
+// as its record keeps it: what attaching its share's spoke takes (the
+// daemon's sync manager reads it).
 type ShareRecord struct {
 	// Mode is the share's mode (topology.Mode).
 	Mode string `json:"mode"`
