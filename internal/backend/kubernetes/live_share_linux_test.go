@@ -311,3 +311,139 @@ func ptrOr(p *string) string {
 	}
 	return *p
 }
+
+// TestLiveShareCopyTier runs a fleet on the copy tier (where two pods on one
+// node cannot mount one RWO volume): no share is made; each instance keeps
+// its own copy of the fleet's folders on its disk, laid out alike, and runs
+// its own spoke; a host write reaches both, and one instance's write reaches
+// the other through the hub. Gated like TestLiveShare.
+func TestLiveShareCopyTier(t *testing.T) {
+	kctx := os.Getenv("FLEET_KUBE_TEST_CONTEXT")
+	if kctx == "" {
+		t.Skip("set FLEET_KUBE_TEST_CONTEXT=<context> to run a fleet's copies on a cluster")
+	}
+	image := os.Getenv("FLEET_KUBE_TEST_IMAGE")
+	if image == "" {
+		image = "mcr.microsoft.com/devcontainers/base:debian-12"
+	}
+	lb := newLiveBackend(t, kctx)
+	lb.prefix = "fleet-it-p4-03-share-copy-"
+	lv := lb.connect(t, nil, true)
+	lb.classifyStorage(t, lv)
+	lb.mu.Lock()
+	lb.facts[lv.rec.ID].Capabilities.ShareMode = string(topology.Copy)
+	lb.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	resolved, err := resolver.Resolve("live", fleet.FleetSettings{ClaudeCodeMount: true, HomeDir: "/home/vscode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := filepath.Join(state.WorkspacesDir(), "live")
+	for _, e := range resolved.Layout {
+		if p := filepath.Join(host, e.Path); !e.Dir && e.Seed != "" {
+			if fi, err := os.Stat(p); err == nil && fi.Size() == 0 {
+				_ = os.WriteFile(p, []byte(e.Seed), 0o666)
+			}
+		}
+	}
+	type made struct {
+		inst *fleet.Instance
+		res  *backend.UpResult
+		b    *Backend
+	}
+	var all []*made
+	for _, name := range []string{"one", "two"} {
+		inst, _ := lb.instance(t, lv, name, func(ws string) { writeLiveWorkspace(t, ws, map[string]any{"image": image}) })
+		b := newHandle(inst, lb.pool)
+		res, err := b.UpContext(backend.WithJobLog(ctx, &lineLog{t: t}), backend.UpRequest{WorkspaceDir: inst.WorkspaceDir, Mounts: resolved.Mounts, Layout: resolved.Layout})
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		inst.ContainerID, inst.Status = res.ContainerID, fleet.StatusRunning
+		m := &made{inst: inst, res: res, b: newHandle(inst, lb.pool)}
+		all = append(all, m)
+		defer func() {
+			_ = m.b.Down(m.res.ContainerID)
+			lb.waitNothingLeft(t, lv, m.inst.KubeKey)
+		}()
+	}
+	sh := func(m *made, script string) string {
+		t.Helper()
+		out, err := m.b.RunScript(m.res.ContainerID, script)
+		if err != nil {
+			t.Fatalf("%s: %q: %v\n%s", m.inst.Name, script, err, out)
+		}
+		return strings.TrimSpace(out)
+	}
+	h8 := names.FleetHash(lb.daemonID, lv.rec.ID, "live")
+	if _, err := lv.cs.CoreV1().PersistentVolumeClaims(lv.ns).Get(ctx, ShareClaim("live", h8), metav1.GetOptions{}); err == nil {
+		t.Fatal("a share was made on the copy tier")
+	}
+	sh(all[0], "echo mine > ~/.claude/own.txt")
+	if got := sh(all[1], "cat ~/.claude/own.txt 2>/dev/null || echo absent"); got != "absent" {
+		t.Fatalf("a copy-tier sibling sees the other's folder at once: %q", got)
+	}
+	if got := sh(all[1], "cat /fleet-mounts/files/.claude.json"); got != "{}" {
+		t.Errorf("the copy's .claude.json holds %q", got)
+	}
+
+	var roots []sharesync.TreeRoot
+	var rootNames []string
+	_, share, err := InstanceShare(lv.rec.ID, all[0].inst.KubeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.Mode != "copy" || share.Claim != "" {
+		t.Fatalf("the copy tier's record %+v", share)
+	}
+	for _, r := range share.Roots {
+		roots = append(roots, sharesync.TreeRoot{Name: r.Name, Dir: filepath.Join(host, r.Name), Reserved: r.Reserved, Skip: r.Skip})
+		rootNames = append(rootNames, r.Name)
+	}
+	syncDir := filepath.Join(state.FleetDir(), "sync-live")
+	hub, err := sharesync.OpenHub(filepath.Join(syncDir, "hub"), syncpolicy.Defaults(), rootNames, sharesync.HubOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+	tree, err := sharesync.OpenTree(roots, sharesync.TreeOptions{StateDir: filepath.Join(syncDir, "host")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tree.Close()
+	if err := sharesync.NewSide(sharesync.SideInfo{ID: "host", Location: "host"}, tree, hub, sharesync.SideOptions{NoWatch: true}).Attach(ctx, hub); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range all {
+		target, share, err := InstanceShare(lv.rec.ID, m.inst.KubeKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		link, err := lb.pool.OpenSpoke(ctx, target, m.inst.KubeKey, share)
+		if err != nil {
+			t.Fatalf("OpenSpoke %s: %v", m.inst.Name, err)
+		}
+		defer link.Close()
+		go func() { _ = lb.pool.ServeSpoke(ctx, link, hub, ShareSide(lv.rec.ID, m.inst.KubeKey, share), nil) }()
+	}
+	if err := os.WriteFile(filepath.Join(host, ".claude", "host.md"), []byte("from the host"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		flushLive(t, ctx, hub)
+		if sh(all[1], "cat ~/.claude/own.txt 2>/dev/null || echo absent") == "mine" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("one copy's write never reached the other")
+		}
+		time.Sleep(2 * time.Second)
+	}
+	for _, m := range all {
+		if got := sh(m, "cat ~/.claude/host.md"); got != "from the host" {
+			t.Errorf("%s has %q of the host's write", m.inst.Name, got)
+		}
+	}
+}
