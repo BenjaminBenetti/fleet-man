@@ -3,6 +3,7 @@ package execas
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -86,6 +87,8 @@ func newMatrixHost(t *testing.T) *matrixHost {
 			// Root, with an fsGroup the runtime added.
 			Self:   Creds{UID: 0, GID: 0, Groups: []uint32{0, 4000}},
 			Prober: prober,
+			// The agent serves the pod an ssh-agent (its socket is bound).
+			AgentSocket: func(string) bool { return true },
 		},
 	}
 }
@@ -455,6 +458,47 @@ func TestPlanEnvironmentLayers(t *testing.T) {
 	}
 	if plan.TTYGroup != 5 {
 		t.Errorf("TTYGroup = %d, want the tty group's 5", plan.TTYGroup)
+	}
+}
+
+// TestPlanExportsTheAgentSocketOnlyWhileItIsThere: SSH_AUTH_SOCK names the
+// pod's ssh-agent socket only while the agent has it bound (the daemon can
+// serve an agent); a socket file of the user's own beats it through remoteEnv
+// either way, as on docker.
+func TestPlanExportsTheAgentSocketOnlyWhileItIsThere(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "agent.sock")
+	m := newMatrixHost(t)
+	m.host.AgentSocket = nil
+	m.host.Spec.SSHAuthSock = sock
+	plan := func() map[string]string {
+		t.Helper()
+		p, err := m.host.Plan(context.Background(), Request{Class: ClassExec, Argv: []string{"tool"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return envMap(p.Env)
+	}
+	if got, ok := plan()["SSH_AUTH_SOCK"]; ok {
+		t.Fatalf("SSH_AUTH_SOCK = %q with no socket bound", got)
+	}
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := plan()["SSH_AUTH_SOCK"]; ok {
+		t.Fatalf("SSH_AUTH_SOCK = %q for a plain file", got)
+	}
+	_ = os.Remove(sock)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if got := plan()["SSH_AUTH_SOCK"]; got != sock {
+		t.Fatalf("SSH_AUTH_SOCK = %q, want the bound socket %s", got, sock)
+	}
+	m.host.Spec.RemoteEnv = map[string]string{"SSH_AUTH_SOCK": "/run/mine.sock"}
+	if got := plan()["SSH_AUTH_SOCK"]; got != "/run/mine.sock" {
+		t.Fatalf("SSH_AUTH_SOCK = %q, want the config's remoteEnv", got)
 	}
 }
 

@@ -123,6 +123,35 @@ func TestProberCachesUntilAStartupFileChanges(t *testing.T) {
 	}
 }
 
+// TestProberCacheFollowsItsDeps: a cached environment is probed again once a
+// file it depends on besides the startup files (an in-pod socket fleet.rc
+// tests) comes, goes or is replaced.
+func TestProberCacheFollowsItsDeps(t *testing.T) {
+	home := probeHome(t, "")
+	p := NewProber("")
+	target := probeTarget(home)
+	dep := filepath.Join(home, "mcp.sock")
+	target.Deps = []string{dep}
+	ctx := context.Background()
+	p.ProbeEnv(ctx, target)
+	p.ProbeEnv(ctx, target)
+	if n := probeRuns(t, home); n != 1 {
+		t.Fatalf("%d runs with nothing changed, want 1", n)
+	}
+	if err := os.WriteFile(dep, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.ProbeEnv(ctx, target)
+	if n := probeRuns(t, home); n != 2 {
+		t.Fatalf("a dep that came: %d runs, want 2", n)
+	}
+	_ = os.Remove(dep)
+	p.ProbeEnv(ctx, target)
+	if n := probeRuns(t, home); n != 3 {
+		t.Fatalf("a dep that went: %d runs, want 3", n)
+	}
+}
+
 func TestProberCacheExpires(t *testing.T) {
 	home := probeHome(t, "")
 	p := NewProber("")
