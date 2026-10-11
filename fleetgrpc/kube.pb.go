@@ -2519,8 +2519,9 @@ type KubeInstanceRuntime struct {
 	RestartHint string `protobuf:"bytes,8,opt,name=restart_hint,json=restartHint,proto3" json:"restart_hint,omitempty"`
 	// audio_unavailable says why the instance can have no virtual microphone
 	// or audio output ("no root": a cluster that runs containers without root,
-	// on an image without PulseAudio and ALSA); "" when it can.
-	AudioUnavailable string `protobuf:"bytes,9,opt,name=audio_unavailable,json=audioUnavailable,proto3" json:"audio_unavailable,omitempty"`
+	// on an image without PulseAudio and ALSA); "" when it can. (9 is
+	// published_ports.)
+	AudioUnavailable string `protobuf:"bytes,10,opt,name=audio_unavailable,json=audioUnavailable,proto3" json:"audio_unavailable,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -4379,7 +4380,8 @@ const file_kube_proto_rawDesc = "" +
 	"\x0esessions_ended\x18\x06 \x01(\bR\rsessionsEnded\x120\n" +
 	"\x14node_cordoned_moving\x18\a \x01(\bR\x12nodeCordonedMoving\x12!\n" +
 	"\frestart_hint\x18\b \x01(\tR\vrestartHint\x12+\n" +
-	"\x11audio_unavailable\x18\t \x01(\tR\x10audioUnavailable\"\xd4\x01\n" +
+	"\x11audio_unavailable\x18\n" +
+	" \x01(\tR\x10audioUnavailable\"\xd4\x01\n" +
 	"\x0fShareSyncStatus\x12/\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x19.fleetgrpc.ShareSyncStateR\x05state\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x18\n" +
