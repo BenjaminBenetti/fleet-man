@@ -526,8 +526,7 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		// ListDeployTargets does. An explicit coder/codespaces still fails fast.
 		target = s.resolveTarget(req, remote)
 		// Refused before the record exists: a backend a new instance can't
-		// use (Kubernetes, until this build can run instances on a cluster)
-		// would otherwise leave a FAILED record behind.
+		// use would otherwise leave a FAILED record behind.
 		if err := fleet.ValidateBackendType(target.Backend); err != nil {
 			return status.Error(codes.InvalidArgument, err.Error())
 		}

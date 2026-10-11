@@ -126,12 +126,3 @@ func TestKubeClusterJSONRoundTrip(t *testing.T) {
 		}
 	}
 }
-
-func TestExperimentalK8s(t *testing.T) {
-	for value, want := range map[string]bool{"": false, "0": false, "false": false, "OFF": false, "no": false, "1": true, "true": true, "yes": true} {
-		t.Setenv(EnvExperimentalK8s, value)
-		if got := ExperimentalK8s(); got != want {
-			t.Errorf("%s=%q: ExperimentalK8s = %v, want %v", EnvExperimentalK8s, value, got, want)
-		}
-	}
-}

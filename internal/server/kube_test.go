@@ -726,9 +726,8 @@ func TestCreateKubeNamespace(t *testing.T) {
 	}
 }
 
-// Cluster deploy targets appear only behind FLEET_EXPERIMENTAL_K8S, one per
-// connection, available only when it is healthy and fleetd has docker and the
-// devcontainer CLI.
+// Cluster deploy targets are one per connection, available only when it is
+// healthy and fleetd has docker and the devcontainer CLI.
 func TestKubeDeployTargets(t *testing.T) {
 	f := newKubeFixture(t)
 	stubDaemonHost(t, "h", "devcontainer", "docker")
@@ -747,10 +746,6 @@ func TestKubeDeployTargets(t *testing.T) {
 		}
 		return out
 	}
-	if got := clusterTargets(); len(got) != 0 {
-		t.Fatalf("cluster targets without the experimental flag: %+v", got)
-	}
-	t.Setenv(fleet.EnvExperimentalK8s, "1")
 	got := clusterTargets()
 	if len(got) != 2 || got[0].Target.KubeCluster != ready || got[1].Target.KubeCluster != broken {
 		t.Fatalf("cluster targets = %+v", got)
@@ -758,12 +753,6 @@ func TestKubeDeployTargets(t *testing.T) {
 	if !got[0].Available || got[1].Available || !strings.HasPrefix(got[1].Reason, "cluster context missing: ") {
 		t.Errorf("targets = %+v", got)
 	}
-	orig := kubeBackendCreatable
-	kubeBackendCreatable = func() bool { return false }
-	if got := clusterTargets(); got[0].Available || !strings.Contains(got[0].Reason, "cannot create Kubernetes instances yet") {
-		t.Errorf("from a build that cannot create them: %+v", got[0])
-	}
-	kubeBackendCreatable = orig
 	stubDaemonHost(t, "h", "devcontainer")
 	if got = clusterTargets(); got[0].Available || got[0].Reason != "docker not found where fleetd runs" {
 		t.Errorf("without docker: %+v", got[0])

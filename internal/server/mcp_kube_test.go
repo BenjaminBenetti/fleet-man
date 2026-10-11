@@ -137,7 +137,6 @@ func TestMCPClusterTest(t *testing.T) {
 // instance on Kubernetes there; the reply says where it went.
 func TestMCPUpOnACluster(t *testing.T) {
 	f := newKubeFixture(t)
-	t.Setenv(fleet.EnvExperimentalK8s, "1")
 	stubDaemonIdentity(t)
 	dev := f.add(&fleetgrpc.KubeCluster{Context: "minikube", DisplayName: "dev", Namespace: "fleet"}).GetCluster()
 	if err := state.Update(func(st *state.State) error {

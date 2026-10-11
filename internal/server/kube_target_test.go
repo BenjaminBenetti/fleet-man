@@ -13,15 +13,14 @@ import (
 
 // kube_target_test.go covers what the daemon does with Kubernetes deploy
 // targets: it carries the cluster wherever a target travels, refuses a
-// create before any record exists while it runs without
-// FLEET_EXPERIMENTAL_K8S, and gives an accepted create's record its key.
+// create on a connection it does not have before any record exists, and
+// gives an accepted create's record its key.
 
-// Without FLEET_EXPERIMENTAL_K8S, a create that names Kubernetes is refused
-// up front (no FAILED record left behind, nothing remembered), from the
-// local socket as from any client.
-func TestCreateInstanceRefusesKubernetesBeforeAnyRecord(t *testing.T) {
+// A create on a Kubernetes connection the daemon does not have is refused up
+// front (no FAILED record left behind, nothing remembered), from the local
+// socket as from any client.
+func TestCreateInstanceRefusesAnUnknownClusterBeforeAnyRecord(t *testing.T) {
 	isolateFleetDir(t)
-	t.Setenv(fleet.EnvExperimentalK8s, "")
 	ran := false
 	orig := jobRunCreate
 	jobRunCreate = func(context.Context, string, string, string, string, bool, fleet.BackendType) error {
@@ -41,8 +40,8 @@ func TestCreateInstanceRefusesKubernetesBeforeAnyRecord(t *testing.T) {
 		Fleet: "alpha", Instance: "k1", Backend: fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES,
 		KubeCluster: "minikube", RememberDefault: true,
 	})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("Kubernetes create error = %v, want InvalidArgument", err)
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("create on an unknown connection: error = %v, want NotFound", err)
 	}
 	if ran {
 		t.Fatal("a refused create still ran its provisioning job")
