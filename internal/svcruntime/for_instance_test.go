@@ -16,8 +16,8 @@ func TestForInstanceByBackend(t *testing.T) {
 		fleet.BackendDevcontainer: true,
 		fleet.BackendCodespaces:   false,
 		fleet.BackendCoder:        false,
-		// A cluster's pods can't reach the daemon host's docker; they get no
-		// shared services until their cluster has a runtime of its own.
+		// A cluster's pods can't reach the daemon host's docker: their
+		// cluster is their runtime (for_instance_k8s_test.go).
 		fleet.BackendKubernetes: false,
 	}
 	for _, backendType := range fleet.BackendTypes() {
@@ -30,8 +30,11 @@ func TestForInstanceByBackend(t *testing.T) {
 			t.Errorf("ForInstance(%q) uses docker = %v, want %v", backendType, got, want)
 		}
 	}
-	if rt := ForInstance(&fleet.Instance{Backend: fleet.BackendKubernetes, KubeCluster: "c"}); rt != nil {
-		t.Errorf("a Kubernetes instance got runtime %q", rt.Key())
+	if rt := ForInstance(&fleet.Instance{Backend: fleet.BackendKubernetes}); rt != nil {
+		t.Errorf("a Kubernetes record that names no connection got runtime %q", rt.Key())
+	}
+	if rt := ForCluster(""); rt != nil {
+		t.Errorf("no connection got runtime %q", rt.Key())
 	}
 	// A record from before the Backend field is a devcontainer.
 	if ForInstance(&fleet.Instance{}) != Docker() {

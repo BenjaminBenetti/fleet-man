@@ -6,6 +6,7 @@ package svcruntimetest
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -23,8 +24,9 @@ type Call struct {
 	ContainerID string
 }
 
-// Recorder is a svcruntime.Runtime that records every call that acts (Key and
-// ReconfigureOnStart only answer) and does nothing else. Set its fields before
+// Recorder is a svcruntime.Runtime that records every call that acts (Key,
+// Endpoint, ReconfigureOnStart and ReconcileBudget only answer) and does
+// nothing else. Set its fields before
 // sharing it between goroutines.
 type Recorder struct {
 	// Name is Key's answer.
@@ -35,6 +37,11 @@ type Recorder struct {
 	Unreachable bool
 	// Mounts is what InstanceMounts returns for each service.
 	Mounts map[fleet.SharedService][]backend.Mount
+	// Endpoints is what Endpoint returns for each service; a service with
+	// none answers ErrNoEndpoint.
+	Endpoints map[fleet.SharedService]fleet.ServiceEndpoint
+	// Budget is ReconcileBudget's answer (a minute when zero).
+	Budget time.Duration
 	// OnCall, when set, runs on each recorded call before it returns (to hold
 	// one in flight, say). It runs without the Recorder's lock.
 	OnCall func(Call)
@@ -44,10 +51,15 @@ type Recorder struct {
 	failures map[string]error
 }
 
-// New returns a Recorder keyed name that reconfigures on start, as the docker
-// runtime does.
+// New returns a Recorder keyed name that reconfigures on start and has an
+// endpoint for every service, as the docker runtime does (buildkit through a
+// mount, the caches at "<name>-<service>" hosts).
 func New(name string) *Recorder {
-	return &Recorder{Name: name, Reconfigure: true}
+	return &Recorder{Name: name, Reconfigure: true, Endpoints: map[fleet.SharedService]fleet.ServiceEndpoint{
+		fleet.ServiceBuildkit:   {},
+		fleet.ServiceDebCache:   {URL: "http://" + name + "-debcache:3142", HostPort: name + "-debcache:3142"},
+		fleet.ServiceImageCache: {URL: "http://" + name + "-imagecache:5000", HostPort: name + "-imagecache:5000"},
+	}}
 }
 
 // FailOn makes every later call of method return err (nil clears it).
@@ -89,6 +101,11 @@ func (r *Recorder) record(c Call) error {
 // Key returns Name.
 func (r *Recorder) Key() string { return r.Name }
 
+// PrepareFleet records the call.
+func (r *Recorder) PrepareFleet(fleetName string) error {
+	return r.record(Call{Method: "PrepareFleet", Fleet: fleetName})
+}
+
 // EnsureService records the call.
 func (r *Recorder) EnsureService(fleetName string, svc fleet.SharedService) error {
 	return r.record(Call{Method: "EnsureService", Fleet: fleetName, Service: svc})
@@ -98,6 +115,17 @@ func (r *Recorder) EnsureService(fleetName string, svc fleet.SharedService) erro
 func (r *Recorder) InstanceMounts(fleetName string, svc fleet.SharedService) []backend.Mount {
 	_ = r.record(Call{Method: "InstanceMounts", Fleet: fleetName, Service: svc})
 	return r.Mounts[svc]
+}
+
+// Endpoint returns Endpoints[svc], or ErrNoEndpoint. It is not recorded: it
+// only answers.
+func (r *Recorder) Endpoint(_ string, svc fleet.SharedService) (fleet.ServiceEndpoint, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.Endpoints[svc]; ok {
+		return e, r.failures["Endpoint"]
+	}
+	return fleet.ServiceEndpoint{}, svcruntime.ErrNoEndpoint
 }
 
 // ConnectInstance records the call.
@@ -115,6 +143,11 @@ func (r *Recorder) WipeService(fleetName string, svc fleet.SharedService) error 
 	return r.record(Call{Method: "WipeService", Fleet: fleetName, Service: svc})
 }
 
+// ReleaseFleet records the call.
+func (r *Recorder) ReleaseFleet(fleetName string) error {
+	return r.record(Call{Method: "ReleaseFleet", Fleet: fleetName})
+}
+
 // TeardownFleet records the call.
 func (r *Recorder) TeardownFleet(fleetName string) error {
 	return r.record(Call{Method: "TeardownFleet", Fleet: fleetName})
@@ -127,4 +160,12 @@ func (r *Recorder) ReconfigureOnStart() bool { return r.Reconfigure }
 func (r *Recorder) Reachable(context.Context) bool {
 	_ = r.record(Call{Method: "Reachable"})
 	return !r.Unreachable
+}
+
+// ReconcileBudget returns Budget (a minute when zero).
+func (r *Recorder) ReconcileBudget() time.Duration {
+	if r.Budget == 0 {
+		return time.Minute
+	}
+	return r.Budget
 }

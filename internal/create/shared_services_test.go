@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -153,6 +154,7 @@ func TestResolveProvisionMountsGates(t *testing.T) {
 			var wantCalls []svcruntimetest.Call
 			if tt.withServices {
 				wantCalls = []svcruntimetest.Call{
+					{Method: "PrepareFleet", Fleet: "alpha"},
 					{Method: "EnsureService", Fleet: "alpha", Service: fleet.ServiceBuildkit},
 					{Method: "InstanceMounts", Fleet: "alpha", Service: fleet.ServiceBuildkit},
 				}
@@ -182,8 +184,66 @@ func TestResolveProvisionMountsWarnsWhenBuildkitFails(t *testing.T) {
 	if got, _ := os.ReadFile(state.WarnPath("alpha", "i1")); string(got) != "buildkit server: no docker" {
 		t.Fatalf("warning = %q", got)
 	}
-	if calls := rec.Calls(); len(calls) != 1 {
-		t.Fatalf("calls = %+v, want only the failed ensure", calls)
+	want := []svcruntimetest.Call{{Method: "PrepareFleet", Fleet: "alpha"}, {Method: "EnsureService", Fleet: "alpha", Service: fleet.ServiceBuildkit}}
+	if calls := rec.Calls(); !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %+v, want the prepare and the failed ensure", calls)
+	}
+}
+
+// TestResolveProvisionMountsFailsWhenTheFleetCannotBePrepared: an instance
+// whose runtime cannot make what the fleet's instances need there (on a
+// cluster: its sibling DNS and NetworkPolicies) is not created, and nothing
+// else is asked of the runtime.
+func TestResolveProvisionMountsFailsWhenTheFleetCannotBePrepared(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	seedSettings(t, fleet.FleetSettings{BuildkitServer: true})
+	rec := svcruntimetest.New("kubernetes:c1")
+	rec.FailOn("PrepareFleet", errors.New("networkpolicies is forbidden"))
+
+	_, err := resolveProvisionMounts(context.Background(), mountBackend{shared: true}, rec, "alpha", "i1")
+	if err == nil || !strings.Contains(err.Error(), "networkpolicies is forbidden") {
+		t.Fatalf("resolveProvisionMounts = %v, want the prepare's error", err)
+	}
+	if calls := rec.Calls(); !reflect.DeepEqual(calls, []svcruntimetest.Call{{Method: "PrepareFleet", Fleet: "alpha"}}) {
+		t.Fatalf("calls = %+v, want only the prepare", calls)
+	}
+}
+
+// TestCacheSetupLeavesTheInstanceAloneWithoutAnEndpoint: on a runtime that
+// runs a cache but points no instance at it, the cache's server is still
+// ensured, the step says why the instance was left alone, and nothing inside
+// the instance is touched; buildx is left alone without a word (the buildkit
+// server's own step already said why).
+func TestCacheSetupLeavesTheInstanceAloneWithoutAnEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	seedSettings(t, fleet.FleetSettings{BuildkitServer: true, DebCacheServer: true, ImageCacheServer: true})
+	for name, run := range map[string]func(svcruntime.Runtime, backend.Backend) error{
+		"deb cache": func(rt svcruntime.Runtime, b backend.Backend) error {
+			return setupDebCache(rt, b, "alpha", "cid", "/ws")
+		},
+		"image cache": func(rt svcruntime.Runtime, b backend.Backend) error {
+			return setupImageCache(rt, b, "alpha", "i1", "cid", "/ws")
+		},
+	} {
+		rec := svcruntimetest.New("kubernetes:c1")
+		rec.Endpoints = nil
+		b := &execBackend{mountBackend: mountBackend{shared: true}}
+		err := run(rec, b)
+		if !errors.Is(err, svcruntime.ErrNoEndpoint) {
+			t.Errorf("%s: err = %v, want ErrNoEndpoint", name, err)
+		}
+		if b.execs() != 0 {
+			t.Errorf("%s: %d commands ran in the instance", name, b.execs())
+		}
+		if calls := rec.Calls(); len(calls) == 0 || calls[0].Method != "EnsureService" {
+			t.Errorf("%s: calls = %+v, want the server ensured", name, calls)
+		}
+	}
+	rec := svcruntimetest.New("kubernetes:c1")
+	rec.Endpoints = nil
+	b := &execBackend{mountBackend: mountBackend{shared: true}}
+	if err := configureBuildkit(rec, b, "alpha", "/ws"); err != nil || b.execs() != 0 {
+		t.Fatalf("configureBuildkit = %v with %d commands, want nothing done and no error", err, b.execs())
 	}
 }
 

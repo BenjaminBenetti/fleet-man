@@ -1,5 +1,7 @@
 package fleet
 
+import "errors"
+
 // SharedService names one of a fleet's shared services: a per-fleet server
 // that every instance of the fleet uses, switched on by its own FleetSettings
 // toggle. Where a service runs is up to the runtime that hosts it (see
@@ -49,3 +51,53 @@ func (s FleetSettings) EnabledSharedServices() []SharedService {
 	}
 	return on
 }
+
+// CacheUsage is how full one of a fleet's shared service volumes is, in one
+// place the fleet's services run on volumes of a fixed size (a cluster).
+type CacheUsage struct {
+	Service SharedService
+	// Cluster is the connection the volume is on, Location its display name.
+	Cluster  string
+	Location string
+	// UsedBytes and CapacityBytes are the volume's use and size (0 when
+	// unknown).
+	UsedBytes     int64
+	CapacityBytes int64
+	// Expandable: the volume grows by half when it is nearly full.
+	Expandable bool
+	// State is the service's server: "ready", "starting", or why it is
+	// neither.
+	State string
+	// Warning is the line the fleet's Caching row shows for the volume ("93%
+	// full; its StorageClass cannot grow it"); empty when all is well.
+	Warning string
+}
+
+// CacheFullPercent is how full a cache volume gets before it grows (where its
+// StorageClass allows) or warns.
+const CacheFullPercent = 90
+
+// Percent is how full u's volume is (0 when its size is unknown).
+func (u CacheUsage) Percent() int {
+	if u.CapacityBytes <= 0 {
+		return 0
+	}
+	return int(u.UsedBytes * 100 / u.CapacityBytes)
+}
+
+// ServiceEndpoint is where an instance reaches one of its fleet's shared
+// services, for the configuration inside the instance that points it there
+// (svcruntime.Endpoint).
+type ServiceEndpoint struct {
+	// URL is the service's base URL as the instance reaches it (the deb
+	// cache's HTTP proxy, the image cache's mirror); empty for a service the
+	// instance reaches through a mount (buildkit's socket on docker).
+	URL string
+	// HostPort is URL's host:port, for configuration that names it bare (an
+	// insecure registry mirror).
+	HostPort string
+}
+
+// ErrNoServiceEndpoint is a shared service a runtime runs but does not point
+// instances at (svcruntime.ErrNoEndpoint).
+var ErrNoServiceEndpoint = errors.New("instances are not pointed at this shared service here")
