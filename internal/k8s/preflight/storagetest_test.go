@@ -166,6 +166,8 @@ func TestAutoSharedStorage(t *testing.T) {
 		refused  bool
 		tested   []string
 		mnResult map[string]fleetgrpc.KubeCheckResult
+		// off sets EnvMultiNode=off.
+		off bool
 	}{
 		{name: "one passes", results: map[string]StorageTest{"nfs": passed, "cephfs": smb}, mode: "multi-node", class: "nfs",
 			result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, detail: "auto → nfs: multi-node mode", tested: []string{"cephfs", "nfs"},
@@ -182,8 +184,18 @@ func TestAutoSharedStorage(t *testing.T) {
 			result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, detail: "storage class cephfs fails the multi-node test: file modes", limited: "fleet shares unavailable", refused: true, tested: []string{"cephfs"}},
 		{name: "own class on one node at a time", rec: fleet.KubeCluster{SharedStorageClass: "nfs"}, results: map[string]StorageTest{"nfs": noRWX}, mode: "single-node", class: "nfs",
 			result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, detail: "nfs does not give multi-node mode: no ReadWriteMany volume", limited: LimitedOneNode, tested: []string{"nfs"}},
+		{name: "multi-node off: Auto", off: true, results: map[string]StorageTest{"nfs": passed, "cephfs": passed}, mode: "single-node", class: "standard-rwo",
+			result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, detail: "multi-node mode is off (FLEET_KUBE_MULTI_NODE=off); auto → standard-rwo: single-node mode", limited: LimitedOneNode, tested: []string{"cephfs", "nfs"},
+			mnResult: map[string]fleetgrpc.KubeCheckResult{"nfs": fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS}},
+		{name: "multi-node off: own class passes", off: true, rec: fleet.KubeCluster{SharedStorageClass: "cephfs"}, results: map[string]StorageTest{"cephfs": passed}, mode: "single-node", class: "cephfs",
+			result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, detail: "multi-node mode is off (FLEET_KUBE_MULTI_NODE=off); single-node mode", limited: LimitedOneNode, tested: []string{"cephfs"}},
+		{name: "multi-node off: own class refused", off: true, rec: fleet.KubeCluster{SharedStorageClass: "cephfs"}, results: map[string]StorageTest{"cephfs": smb}, mode: "",
+			result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, detail: "storage class cephfs fails the multi-node test: file modes", limited: "fleet shares unavailable", refused: true, tested: []string{"cephfs"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.off {
+				t.Setenv(EnvMultiNode, "off")
+			}
 			ran := stubStorageTests(t, tc.results)
 			c := newCluster(t, append(append([]runtime.Object{}, two...), classes...)...)
 			tgt := target(c, tc.rec)
@@ -216,7 +228,7 @@ func TestAutoSharedStorage(t *testing.T) {
 					}
 				}
 			}
-			if tc.limited == LimitedOneNode && tc.rec.SharedStorageClass == "" && !strings.Contains(got.GetFix(), "Filestore") {
+			if tc.limited == LimitedOneNode && tc.rec.SharedStorageClass == "" && !tc.off && !strings.Contains(got.GetFix(), "Filestore") {
 				t.Errorf("no class passed on GKE, and the fix is %q", got.GetFix())
 			}
 		})

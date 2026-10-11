@@ -13,7 +13,14 @@ schedulable=$(itest_k8s_kubectl get nodes -o go-template='{{range .items}}{{$ok 
 class="${FLEET_ITEST_MOVABLE_CLASS:-fleet-shared-path}"
 itest_k8s_kubectl get storageclass "${class}" >/dev/null 2>&1 \
   || pass "not run: no StorageClass ${class} whose volumes every node mounts (integration/clusters/kind-shared-path.sh makes one)"
+default_class=$(itest_k8s_kubectl get storageclass -o go-template='{{range .items}}{{if eq (index .metadata.annotations "storageclass.kubernetes.io/is-default-class") "true"}}{{.metadata.name}}{{end}}{{end}}')
+[ -n "${default_class}" ] || pass "not run: the cluster has no default StorageClass"
 
+# The movable class passes the multi-node test too (its volumes are one host
+# folder every node mounts), which would hold the fleet's share in
+# multi-node mode, where nothing moves: every fleetd of the test keeps
+# shares in single-node mode.
+export FLEET_KUBE_MULTI_NODE=off
 setup_agent_test
 pinned="itest-pinned"
 cat > "${HOME}/.fleet/state.json" <<STATE
@@ -62,6 +69,8 @@ uncordon_all() {
 trap uncordon_all EXIT
 
 info "a fleet whose share is on its node's own disk (the default class) stays put"
+# Auto would put disks and share on the movable class.
+"${FLEET_BIN}" cluster set itest "storage_class=${default_class}" "shared_storage_class=${default_class}" >/dev/null
 "${FLEET_BIN}" up "${pinned}/alpha" --repo "${FIXTURE_REPO_URL}" >/dev/null
 pinned_node=$(node_of "${pinned}/alpha")
 pinned_uid=$(uid_of "${pinned}/alpha")

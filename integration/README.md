@@ -208,7 +208,9 @@ default class, as a kind cluster with two workers has (`kind create cluster
 node it passes saying it did not run. `tests/819_k8s_evacuate_drain.sh` (a
 fleet moved off a drained node, and one on a node-local class left there)
 also needs a class whose volumes every node mounts
-(`FLEET_ITEST_MOVABLE_CLASS`, default `fleet-shared-path`).
+(`FLEET_ITEST_MOVABLE_CLASS`, default `fleet-shared-path`); since that class
+passes the multi-node test too, it runs its fleetd with
+`FLEET_KUBE_MULTI_NODE=off`, which keeps new shares in single-node mode.
 `clusters/kind-shared-path.sh up [name] [workers]` makes such a cluster in
 the QA container (two nodes that both take pods, kind's node-local default
 class, and `fleet-shared-path` on a host folder every node mounts) and prints

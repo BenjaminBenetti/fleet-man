@@ -12,6 +12,9 @@
 # host directory mounted on every node: data that outlives its node, as a
 # network disk's does, so a fleet can move between nodes. kind's own default
 # class (standard, local-path) stays: its volumes are each on one node's disk.
+# fleet-shared-path passes fleet's multi-node storage test (Auto picks it for
+# shares in multi-node mode); 819 keeps it in single-node mode with
+# FLEET_KUBE_MULTI_NODE=off.
 # The class is provisioned by a second copy of kind's local-path provisioner
 # in shared-filesystem mode, from the images kind already loaded.
 #

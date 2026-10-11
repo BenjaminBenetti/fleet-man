@@ -5,6 +5,7 @@ package preflight
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -51,6 +52,17 @@ const LimitedOneNode = "each fleet on one node"
 // OneNodeWarning is the capability line of single-node mode on a cluster
 // of several nodes.
 const OneNodeWarning = "Each fleet's instances run together on one node"
+
+// EnvMultiNode set to "off" in the daemon's environment keeps new fleet
+// shares out of multi-node mode: a class that passed the multi-node test
+// holds them in single-node mode, as one whose volumes mount on one node at
+// a time does (the tests still run). A knob for tests of single-node mode
+// on a cluster whose movable class passes the test too
+// (integration/tests/819_k8s_evacuate_drain.sh).
+const EnvMultiNode = "FLEET_KUBE_MULTI_NODE"
+
+// multiNodeOff reports whether EnvMultiNode turns multi-node mode off.
+func multiNodeOff() bool { return os.Getenv(EnvMultiNode) == "off" }
 
 // The other LIMITED reasons shared_storage gives.
 const (
@@ -125,11 +137,11 @@ func (r *run) sharedStorage(ctx context.Context) {
 			r.limit(limitedSharesUnavailable)
 			r.caps.ShareRefused = msg
 			return
-		case tested && t.Passed():
+		case tested && t.Passed() && !multiNodeOff():
 			r.multiNodeMode(picked, false)
 			return
 		}
-	} else if best := r.bestStorage(); best != "" {
+	} else if best := r.bestStorage(); best != "" && !multiNodeOff() {
 		r.multiNodeMode(best, true)
 		return
 	}
@@ -237,6 +249,9 @@ func (r *run) singleNodeMode(ctx context.Context) {
 // whyNotMultiNode says why no class gave multi-node mode on a cluster of
 // several nodes, with the remedy.
 func (r *run) whyNotMultiNode(picked string) (string, string) {
+	if multiNodeOff() {
+		return "multi-node mode is off (" + EnvMultiNode + "=off)", "unset " + EnvMultiNode + " in the daemon's environment"
+	}
 	if picked != "" {
 		if t, ok := r.storage[picked]; ok {
 			return fmt.Sprintf("%s does not give multi-node mode: %s", picked, t.Detail), t.Fix
