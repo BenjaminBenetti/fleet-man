@@ -54,6 +54,9 @@ type sideRoot struct {
 	paused  string
 	retryAt time.Time
 	lastErr string
+	// only, for a side that keeps some paths alone (SideInfo.LoginsOnly),
+	// reports whether it keeps p; nil keeps every path.
+	only func(p string) bool
 }
 
 // retry is a path's backoff.
@@ -80,8 +83,16 @@ func newSideRoot(s *hubSide) *sideRoot {
 	}
 }
 
+// keeps reports whether the side keeps p at all.
+func (sr *sideRoot) keeps(p string) bool {
+	return sr.only == nil || sr.only(p)
+}
+
 // mark marks p to be looked at for the side and wakes it.
 func (sr *sideRoot) mark(p string, now time.Time) {
+	if !sr.keeps(p) {
+		return
+	}
 	if _, ok := sr.dirty[p]; !ok {
 		sr.dirty[p] = now
 	}
@@ -198,7 +209,7 @@ func earliest(a, b time.Time) time.Time {
 func (root *hubRoot) opFor(sr *sideRoot, p string) (Op, bool) {
 	k, _, ok := root.keyFor(p, sr.side.info.logins())
 	held, holds := sr.held[p]
-	if !ok {
+	if !ok || !sr.keeps(p) {
 		return Op{}, false
 	}
 	e := root.entries[k]

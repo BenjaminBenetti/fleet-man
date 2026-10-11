@@ -21,21 +21,32 @@ import (
 // shareInitEnded is a pod whose share-layout init container ended with
 // exit and message, its dev container held back.
 func shareInitEnded(exit int32, msg string) func(*corev1.Pod) {
+	return shareInitFailed(exit, msg, shareLayoutAttempts-1)
+}
+
+// shareInitFailed is shareInitEnded after restarts runs before it.
+func shareInitFailed(exit int32, msg string, restarts int32) func(*corev1.Pod) {
 	return func(p *corev1.Pod) {
 		waiting("PodInitializing", "")(p)
-		p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: podspec.ShareInit, State: corev1.ContainerState{
+		p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: podspec.ShareInit, RestartCount: restarts, State: corev1.ContainerState{
 			Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: exit, Message: msg},
 		}}}
 	}
 }
 
 // TestPodWaitNamesTheShareLayoutsFailure: a share-layout init container
-// that failed ends the wait at once with its reason (it lays out the same
-// tree every time); one that is fine does not.
+// that keeps failing ends the wait with its reason (it lays out the same
+// tree every time); one that failed once or twice (a full share that got
+// room) is waited for; one that is fine does not end it.
 func TestPodWaitNamesTheShareLayoutsFailure(t *testing.T) {
 	d, _ := LoadDeadlines(func(string) string { return "" })
 	w := newPodWait(d, DevContainer, "the instance pod")
 	msg := "fleet share layout: laying out the fleet's share: /opt/fleet/run/sync/share/roots/.claude is a file where the fleet's folder belongs; remove it from the share"
+	for restarts := int32(0); restarts < shareLayoutAttempts-1; restarts++ {
+		if err := w.observe(time.Now(), waitPod(shareInitFailed(1, msg, restarts)), nil); err != nil {
+			t.Fatalf("a layout that failed %d time(s): %v, want waited for", restarts+1, err)
+		}
+	}
 	err := w.observe(time.Now(), waitPod(shareInitEnded(1, msg)), nil)
 	var pe *PodError
 	if !errors.As(err, &pe) || !strings.Contains(err.Error(), "roots/.claude is a file") {

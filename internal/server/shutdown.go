@@ -41,10 +41,11 @@ var (
 	// stepGrace is how long past its deadline a step that does not heed its
 	// context is waited for before the next one starts without it.
 	stepGrace = 250 * time.Millisecond
-	// shareFlush delivers what the shared-state sync still holds (agent
-	// logins, settings) into the instances before their sessions close. The
-	// sync sets it once it exists (sharesync); nil until then, and the step
-	// is skipped. It must not depend on the hub context, which is gone.
+	// shareFlush, when set (tests), stands in for the shared-state sync's
+	// flush, which delivers what the sync still holds (agent logins,
+	// settings, custom mounts) both ways before the pods' sessions close,
+	// then closes it (shareSync.flushAndClose). Neither may depend on the hub
+	// context, which is gone.
 	shareFlush func(ctx context.Context) error
 )
 
@@ -59,7 +60,11 @@ type shutdownStep struct {
 // shutdownSteps are steps 2 to 5, in order.
 func (s *service) shutdownSteps() []shutdownStep {
 	steps := []shutdownStep{{name: "flush the shared state", limit: shareFlushLimit, run: func(ctx context.Context) {
-		if flush := shareFlush; flush != nil {
+		flush := shareFlush
+		if flush == nil && s.shareSync != nil {
+			flush = s.shareSync.flushAndClose
+		}
+		if flush != nil {
 			if err := flush(ctx); err != nil {
 				flog.Warn("fleet server shutdown: flushing the shared state", "err", err)
 			}

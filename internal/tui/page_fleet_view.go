@@ -416,6 +416,9 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				backendIcon = dimStyle.Render("⏣")
 			case fleet.BackendKubernetes:
 				backendIcon = m.kubeRowTarget(instance)
+				if instance.Status == fleet.StatusRunning {
+					backendIcon += kubeSyncBadge(rt)
+				}
 			}
 			branchItem := ""
 			if branch := instanceBranch(rt, instance); branch != "" {

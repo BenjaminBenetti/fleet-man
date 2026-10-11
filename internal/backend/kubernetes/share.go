@@ -50,8 +50,9 @@ import (
 // has no share at all (the copy tier): each instance keeps its own copy on
 // its disk.
 //
-// The share outlives its instances; destroying the fleet deletes it (after a
-// flush, P4.6). It grows by half when 90% full where its class allows
+// The share outlives its instances; destroying the fleet deletes it once the
+// daemon flushed what it held, else keeps it labelled an orphan
+// (share_retire.go). It grows by half when 90% full where its class allows
 // (MaintainShare).
 
 // shareState is where a create puts the instance's fleet mounts.
@@ -265,6 +266,12 @@ func (c *creation) prepareShare(ctx context.Context) error {
 		s.mode = topology.Mode(pvc.Annotations[names.AnnotationShareMode])
 		if !s.mode.Shared() {
 			s.mode = topology.SingleNode
+		}
+		if pvc.Labels[names.LabelOrphan] != "" {
+			// A share its destroyed fleet left (its last changes never
+			// reached the daemon host) is the fleet's again: they come back
+			// with it.
+			c.adoptShare(ctx, pvc.Name)
 		}
 		if pvc.Spec.StorageClassName != nil {
 			s.class = *pvc.Spec.StorageClassName

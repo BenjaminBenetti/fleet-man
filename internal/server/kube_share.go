@@ -26,6 +26,11 @@ const shareUpkeepTimeout = 2 * time.Minute
 // sharePool is the pool's share upkeep (a seam for tests).
 var sharePool = func() shareMaintainer { return kubernetes.DefaultPool() }
 
+// shareKick retries the fleet's sync on a connection whose share the upkeep
+// just looked at (it may have grown: a side paused for a full share takes
+// files again at once); the serve loop sets it.
+var shareKick = func(clusterID, fleetName string) {}
+
 type shareMaintainer interface {
 	MaintainShare(ctx context.Context, clusterID, fleetName string) (fleet.ShareUsage, bool, error)
 }
@@ -62,6 +67,8 @@ func maintainShares(ctx context.Context) {
 		sctx, cancel := context.WithTimeout(ctx, shareUpkeepTimeout)
 		if _, _, err := sharePool().MaintainShare(sctx, s.cluster, s.fleet); err != nil && ctx.Err() == nil {
 			flog.Warn("kube share upkeep failed", "cluster", s.cluster, "fleet", s.fleet, "err", err)
+		} else if err == nil {
+			shareKick(s.cluster, s.fleet)
 		}
 		cancel()
 	}

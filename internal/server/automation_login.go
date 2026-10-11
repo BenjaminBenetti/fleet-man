@@ -85,14 +85,36 @@ func credentialFile(tool fleet.LoginTool) (string, bool) {
 }
 
 // locationLoggedIn reports whether the fleet's copy of location's login
-// files holds tool's (a regular file with something in it).
+// files holds tool's (a regular file with something in it), or, for a
+// connection that shares the daemon host's logins (credential_scope fleet,
+// experimental), the fleet's own folders on the daemon host do.
 func locationLoggedIn(fleetName, location string, tool fleet.LoginTool) bool {
 	rel, ok := credentialFile(tool)
 	if !ok {
 		return false
 	}
-	fi, err := os.Lstat(filepath.Join(state.SyncLocationDir(fleetName, location), filepath.FromSlash(rel)))
-	return err == nil && fi.Mode().IsRegular() && fi.Size() > 0
+	dirs := []string{state.SyncLocationDir(fleetName, location)}
+	if sharesHostLogins(location) {
+		dirs = append(dirs, filepath.Join(state.WorkspacesDir(), fleetName))
+	}
+	for _, dir := range dirs {
+		fi, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err == nil && fi.Mode().IsRegular() && fi.Size() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// sharesHostLogins reports whether connection id shares the daemon host's
+// logins (credential_scope fleet).
+func sharesHostLogins(id string) bool {
+	reg, err := state.LoadKubeClusters()
+	if err != nil {
+		return false
+	}
+	rec := reg.Find(id)
+	return rec != nil && rec.CredentialScope == fleet.KubeCredentialsPerFleet
 }
 
 // fleetDevcontainerEnv is the names the fleet's devcontainer.json sets in

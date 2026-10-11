@@ -52,6 +52,12 @@ type Environment struct {
 	// the devcontainer CLI and docker on PATH, the daemon's own executable
 	// as the docker shim).
 	Tools devcli.Tools
+	// ShareReady is the shared-state Ready gate of a Start (the daemon's
+	// SharedStateReady, which a create, clone or rebuild gets through its
+	// job's hooks instead, backend.HooksFrom): it waits for the fleet's
+	// logins and settings in the instance's pod before the start hooks run;
+	// an error is a warning. nil skips it.
+	ShareReady func(ctx context.Context, fleetName, instance string) error
 }
 
 var (

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: a user-defined custom mount appears in the container at the
 # user-supplied path, is a real bind mount backed by the fleet's .mnt
 # directory, and shares writes across the host boundary like the built-in
@@ -20,6 +21,7 @@ printf "from-host\n" > "${host_mnt_dir}/seed.txt"
 
 info "fleet up alpha (custom mount /opt/data enabled)"
 fleet_up alpha
+itest_share_sync "${FIXTURE_REPO_NAME}"
 
 info "asserting /opt/data is a directory inside the container"
 "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- test -d /opt/data \

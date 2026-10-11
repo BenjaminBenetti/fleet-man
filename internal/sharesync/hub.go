@@ -65,6 +65,9 @@ type Hub struct {
 	closed bool
 
 	flushing atomic.Int32
+	// hostFull is why the last conflict copy the hub had to keep did not fit
+	// on the daemon host ("" since one did): the decision waits.
+	hostFull atomic.Pointer[string]
 }
 
 // OpenHub opens the hub of the roots named (".claude", ".mnt", ...) with its
@@ -169,6 +172,9 @@ func (h *Hub) Attach(ctx context.Context, info SideInfo, peer Peer, hello Hello)
 		rh := hellos[root.name]
 		root.mu.Lock()
 		sr := newSideRoot(s)
+		if info.LoginsOnly {
+			sr.only = root.locationScoped
+		}
 		root.sides[info.ID] = sr
 		w.Epochs[root.name] = root.epoch
 		if root.broken != nil {
@@ -179,7 +185,7 @@ func (h *Hub) Attach(ctx context.Context, info SideInfo, peer Peer, hello Hello)
 		matching := rh.Epoch != "" && rh.Epoch == root.epoch
 		regressed := false
 		for _, held := range rh.Held {
-			if !validPath(held.Path) || held.Entry.check() != nil || !held.Entry.Live() {
+			if !validPath(held.Path) || held.Entry.check() != nil || !held.Entry.Live() || !sr.keeps(held.Path) {
 				continue
 			}
 			var cur *hubEntry
@@ -366,11 +372,15 @@ var errNoHolder = fmt.Errorf("%w: no side holds it", ErrNoSource)
 func (h *Hub) hostRoom(size int64) error {
 	sp, err := h.opts.Space(h.dir)
 	if err != nil || sp.Total <= 0 {
+		h.hostFull.Store(nil)
 		return nil
 	}
 	if sp.Free-size < int64(h.opts.MinFree*float64(sp.Total)) {
+		reason := fmt.Sprintf("the daemon host's disk is under %d%% free", int(h.opts.MinFree*100+0.5))
+		h.hostFull.Store(&reason)
 		return fmt.Errorf("%w on the daemon host: %d bytes needed, %d free of %d", errNoSpace, size, sp.Free, sp.Total)
 	}
+	h.hostFull.Store(nil)
 	return nil
 }
 
@@ -404,26 +414,51 @@ func (h *Hub) Kick(side string) {
 // the lanes' delays, until every side holds every path's state. It returns a
 // FlushError naming what is still behind when ctx ends first, or at once
 // when all that is left cannot move (paused for space, over a cap,
-// refused).
+// refused, or a side that could not rescan).
 func (h *Hub) Flush(ctx context.Context) error {
+	return h.flush(ctx, "", nil)
+}
+
+// FlushSide is Flush for what one side is owed: every side is asked to
+// rescan (so a change made a moment ago anywhere is in), then side gets
+// what it lacks without the lanes' delays, until it holds the state of every
+// path want keeps (nil keeps every path), and no change of such a path waits
+// for a root's cap. Only side's own rescan failing counts against it.
+func (h *Hub) FlushSide(ctx context.Context, side string, want func(root, path string) bool) error {
+	if h.side(side) == nil {
+		return fmt.Errorf("sharesync: flushing %s: %w", side, ErrNotAttached)
+	}
+	return h.flush(ctx, side, want)
+}
+
+// flush is Flush, narrowed to one side's paths that want keeps when side is
+// set.
+func (h *Hub) flush(ctx context.Context, side string, want func(root, path string) bool) error {
 	h.flushing.Add(1)
 	defer h.flushing.Add(-1)
 	var unreached []string
+	down := map[string]bool{}
 	for _, s := range h.sideList() {
 		if err := s.peer.Rescan(ctx); err != nil {
-			unreached = append(unreached, fmt.Sprintf("%s: rescan: %v", s.info.ID, err))
+			// What it is owed waits for it, and cannot move now.
+			down[s.info.ID] = true
+			if side == "" || s.info.ID == side {
+				unreached = append(unreached, fmt.Sprintf("%s: rescan: %v", s.info.ID, err))
+			} else {
+				h.log.Debug("sharesync: a side could not rescan for another's flush", "side", s.info.ID, "for", side, "err", err)
+			}
 		}
 		s.poke()
 	}
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		pending, stuck := h.pending()
+		pending, stuck := h.pending(side, want, down)
 		if len(pending) == 0 && len(unreached) == 0 {
 			return nil
 		}
-		if stuck && len(unreached) == 0 {
-			return &FlushError{Pending: pending}
+		if stuck {
+			return &FlushError{Pending: append(unreached, pending...)}
 		}
 		select {
 		case <-ctx.Done():
@@ -433,28 +468,41 @@ func (h *Hub) Flush(ctx context.Context) error {
 	}
 }
 
-// pending lists each side and root still behind; stuck is set when none of
-// it can move.
-func (h *Hub) pending() (pending []string, stuck bool) {
+// pending lists each side and root still behind (only side's paths want
+// keeps when side is set); stuck is set when none of it can move (down are
+// sides that could not be reached).
+func (h *Hub) pending(side string, want func(root, path string) bool, down map[string]bool) (pending []string, stuck bool) {
 	stuck = true
+	wanted := func(root, p string) bool { return want == nil || want(root, p) }
 	for _, root := range h.order {
 		root.mu.Lock()
 		if root.broken != nil {
 			root.mu.Unlock()
 			continue
 		}
-		if len(root.holds) > 0 {
-			pending = append(pending, fmt.Sprintf("%s: %d changes wait: %s", root.name, len(root.holds), root.capReason()))
+		held := 0
+		for hk := range root.holds {
+			if wanted(root.name, hk.path) {
+				held++
+			}
+		}
+		if held > 0 {
+			pending = append(pending, fmt.Sprintf("%s: %d changes wait: %s", root.name, held, root.capReason()))
 		}
 		ids := make([]string, 0, len(root.sides))
 		for id := range root.sides {
-			ids = append(ids, id)
+			if side == "" || id == side {
+				ids = append(ids, id)
+			}
 		}
 		slices.Sort(ids)
 		for _, id := range ids {
 			sr := root.sides[id]
 			n, movable := 0, false
 			for p := range sr.dirty {
+				if !wanted(root.name, p) {
+					continue
+				}
 				op, ok := root.opFor(sr, p)
 				if !ok {
 					continue
@@ -467,12 +515,17 @@ func (h *Hub) pending() (pending []string, stuck bool) {
 					movable = true
 				}
 			}
-			n += len(sr.inflight)
-			if len(sr.inflight) > 0 {
-				movable = true
+			for p := range sr.inflight {
+				if wanted(root.name, p) {
+					n++
+					movable = true
+				}
 			}
 			if n == 0 {
 				continue
+			}
+			if down[id] {
+				movable = false
 			}
 			line := fmt.Sprintf("%s %s: %d to send", id, root.name, n)
 			if sr.paused != "" {

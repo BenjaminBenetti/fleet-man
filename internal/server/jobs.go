@@ -579,12 +579,22 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 	j.target = protoconv.DeployTargetToProto(target)
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		plog := openProvisioningLog(j, fleetName, instanceName, "create")
-		ctx := backend.WithJobLog(gitutil.WithHostKeyPrompt(j.ctx, s.gitHostKeys.ask), plog)
+		ctx := backend.WithJobLog(gitutil.WithHostKeyPrompt(s.provisionHooks(j.ctx, fleetName, instanceName), s.gitHostKeys.ask), plog)
 		err := jobRunCreate(ctx, fleetName, instanceName, remote, req.GetBranch(), req.GetVerbose(), target.Backend)
 		plog.finish(err)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil
+}
+
+// provisionHooks is ctx carrying the server-owned steps a provisioning run
+// of fleetName/instanceName runs (backend.Hooks): the shared-state Ready
+// gate, which a Kubernetes instance passes once the fleet's logins and
+// settings are in its pod, before its devcontainer hooks run.
+func (s *service) provisionHooks(ctx context.Context, fleetName, instanceName string) context.Context {
+	return backend.WithHooks(ctx, backend.Hooks{SharedStateReady: func(ctx context.Context) error {
+		return s.shareSync.ready(ctx, fleetName, instanceName)
+	}})
 }
 
 // remoteKind names a fleet remote's kind for error messages.
@@ -711,7 +721,7 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_CLONE_INSTANCE, fleetName, destName, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		plog := openProvisioningLog(j, fleetName, destName, "clone of "+srcName)
-		err := jobRunClone(backend.WithJobLog(j.ctx, plog), fleetName, srcName, destName, false)
+		err := jobRunClone(backend.WithJobLog(s.provisionHooks(j.ctx, fleetName, destName), plog), fleetName, srcName, destName, false)
 		plog.finish(err)
 		return loadInstanceSnapshot(fleetName, destName), nil, err
 	})
@@ -756,6 +766,9 @@ func (s *service) startStopInstanceJob(req *fleetgrpc.StopInstanceRequest) (*job
 	}
 	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_STOP_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
+		// A cluster instance's last changes to the fleet's shared folders
+		// reach the daemon host before its pod goes.
+		s.shareSync.beforeStop(req.GetFleet(), req.GetInstance())
 		err := jobRunStop(req.GetFleet(), req.GetInstance())
 		return loadInstanceSnapshot(req.GetFleet(), req.GetInstance()), nil, err
 	})
@@ -818,7 +831,7 @@ func (s *service) startRebuildInstanceJob(req *fleetgrpc.RebuildInstanceRequest)
 	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE, fleetName, instanceName, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		plog := openProvisioningLog(j, fleetName, instanceName, "rebuild")
-		err := jobRunRebuild(backend.WithJobLog(j.ctx, plog), fleetName, instanceName)
+		err := jobRunRebuild(backend.WithJobLog(s.provisionHooks(j.ctx, fleetName, instanceName), plog), fleetName, instanceName)
 		plog.finish(err)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
@@ -950,6 +963,9 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 		}
 	}
 
+	// What the instances' pods hold of the fleet's shared folders reaches
+	// the daemon host before they go (a fleet's shares go after, below).
+	flushed := s.shareSync.beforeDestroy(fleetName, instanceName, destroyFleet)
 	for _, t := range targets {
 		// A Kubernetes instance's key is tombstoned first: what of it the
 		// teardown leaves is known garbage (kube_reconcile.go).
@@ -976,6 +992,10 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 	}
 	if destroyFleet {
 		warnings = append(warnings, teardownFleetSharedServices(fleetName, buildkitEnabled, destroyed)...)
+		// Its shares on the clusters: deleted once flushed, else kept as
+		// orphans (the daemon host keeps the canonical copy, and the
+		// clusters' logins in their login stores).
+		warnings = append(warnings, s.shareSync.retireFleet(fleetName, flushed)...)
 	}
 
 	_ = state.Update(func(st *state.State) error {

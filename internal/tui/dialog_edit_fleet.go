@@ -1706,6 +1706,9 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 				arrow = "▼ "
 			}
 			d.WriteString(marker(row) + dialogLabel.Render(fmt.Sprintf("%sCustom mounts (%d)", arrow, len(fleetPage.editFleet.customMounts))))
+			for _, reason := range m.fleetSyncPaused(fleetPage.dlg.fleet) {
+				d.WriteString("\n      " + warnTextStyle.Render("sync paused: "+reason))
+			}
 		case editFleetRowCaching:
 			arrow := "▶ "
 			if fleetPage.editFleet.cachingExpanded {
@@ -1774,7 +1777,7 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 		d.WriteString("\n")
 	}
 
-	if footer := fleetPage.customMountFooter(); footer != "" {
+	if footer := fleetPage.customMountFooter(syncedWithSuffix(m.fleetSyncClusters(fleetPage.dlg.fleet))); footer != "" {
 		d.WriteString("\n  " + footer + "\n")
 	}
 	if footer := fleetPage.coderFooter(); footer != "" {
@@ -1908,14 +1911,16 @@ func (fleetPage *fleetPage) coderFooter() string {
 
 // customMountFooter returns a context line shown beneath the dialog rows while
 // the cursor is on a custom-mount row: the resolved host path for an existing
-// mount or the in-progress add, plus a hint or inline validation error.
-func (fleetPage *fleetPage) customMountFooter() string {
+// mount or the in-progress add (with synced, the " (synced with <cluster>)"
+// of a fleet on clusters, whose host folder is then a synced copy), plus a
+// hint or inline validation error.
+func (fleetPage *fleetPage) customMountFooter(synced string) string {
 	if !isCustomMountChildRow(fleetPage.dlg.row) {
 		return ""
 	}
 	idx := fleetPage.dlg.row - editFleetRowCustomMountBase
 	if idx < len(fleetPage.editFleet.customMounts) {
-		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, fleetPage.editFleet.customMounts[idx]))
+		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, fleetPage.editFleet.customMounts[idx]) + synced)
 	}
 	// The add row.
 	if !fleetPage.editFleet.addingMount {
@@ -1925,7 +1930,7 @@ func (fleetPage *fleetPage) customMountFooter() string {
 		return errorStyle.Render("✗ " + fleetPage.editFleet.customMountErr)
 	}
 	if v := strings.TrimSpace(fleetPage.customMountInput.Value()); v != "" {
-		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, v))
+		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, v) + synced)
 	}
 	return dimStyle.Render("enter an absolute container path, e.g. /opt/data")
 }

@@ -70,6 +70,11 @@ type service struct {
 	// build). failInterruptedJobs uses its journals at start; the serve
 	// loop starts its undo jobs and background passes.
 	kubeRecovery *kubeRecovery
+	// shareSync keeps each fleet's shared folders on its clusters converged
+	// with the daemon host's (share_sync.go; inert in a -tags nok8s build,
+	// and until a fleet has an instance on a cluster). Started by the serve
+	// loop; flushed and closed by the shutdown (shareFlush).
+	shareSync *shareSync
 
 	// sshListen serves the token-gated gRPC server on a loopback port while
 	// remote fleet is enabled in SSH mode (sshlisten.go); sshTunnels maintains
@@ -166,7 +171,8 @@ func newService() *service {
 	svc.kubePods = newKubePods(svc)
 	svc.podAgents = newPodAgentHub(svc)
 	svc.kubeRecovery = newKubeRecovery(svc)
-	svc.hub.stateListeners = append(svc.hub.stateListeners, svc.kubePods.onState, svc.podAgents.onState)
+	svc.shareSync = newShareSync(svc)
+	svc.hub.stateListeners = append(svc.hub.stateListeners, svc.kubePods.onState, svc.podAgents.onState, svc.shareSync.onState)
 	// The in-flight jobs and their current steps are pushed over Watch. The
 	// set is taken on the hub loop, so pushes land in the order they happen
 	// and the last one is always current.

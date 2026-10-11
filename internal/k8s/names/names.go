@@ -46,9 +46,17 @@ const (
 	// LabelService holds the shared service (fleet.SharedService: buildkit,
 	// debcache, imagecache) a RoleCache object belongs to.
 	LabelService = "fleet.dev/service"
+	// LabelOrphan marks a fleet share kept when its fleet was destroyed
+	// because its last changes could not be flushed to the daemon host
+	// (OrphanFlushFailed): counted in Settings, deleted by `fleet cluster gc
+	// --apply`, taken up again by a fleet made under the same name.
+	LabelOrphan = "fleet.dev/orphan"
 
 	// ManagedBy is LabelManagedBy's value.
 	ManagedBy = "fleet"
+	// OrphanFlushFailed is LabelOrphan's value on a share whose flush
+	// failed.
+	OrphanFlushFailed = "flush-failed"
 )
 
 // Annotations fleet sets. They hold hashes and non-secret fields only.

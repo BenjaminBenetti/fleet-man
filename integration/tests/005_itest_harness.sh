@@ -121,20 +121,30 @@ out=$(in_backend devcontainer 'itest_backend_is devcontainer && itest_share_sync
 assert_contains "${out}" "ok" "devcontainer dispatch"
 assert_contains "${out}" "rc=0" "devcontainer dispatch exit code"
 
-info "kubernetes stubs end the test with one clear failure, in \$(...) and in conditions"
-out=$(in_backend kubernetes 's=$(itest_share_sync x); echo unreachable')
-assert_contains "${out}" "itest_share_sync is not wired yet (P4.6)" "share-sync stub message in \$(...)"
-assert_contains "${out}" "rc=1" "stub exit code"
-assert_not_contains "${out}" "unreachable" "the test must stop at the stub"
-# In a condition set -e is off, so only an exit stops the test there.
-out=$(in_backend kubernetes 'if itest_share_sync x; then echo synced; fi; echo unreachable')
-assert_contains "${out}" "itest_share_sync is not wired yet (P4.6)" "share-sync stub message"
-assert_not_contains "${out}" "unreachable" "the test must stop at a stub inside a condition"
-
 info "kubernetes control-dir helpers look in the pod's /fleet-mounts/control through fleet exec"
 stand_in="${work}/fleet-stand-in.sh"
 printf '#!/bin/sh\nprintf "%%s|" "$@"; echo\n' > "${stand_in}"
 chmod +x "${stand_in}"
+
+info "kubernetes share sync waits through fleet sync wait, and ends the test when it does not converge"
+recorder="${work}/fleet-recorder.sh"
+printf '#!/bin/sh\nprintf "%%s|" "$@" > "%s"\n' "${work}/argv" > "${recorder}"
+chmod +x "${recorder}"
+out=$(in_backend kubernetes 'itest_share_sync myfleet && echo synced' FLEET_BIN="${recorder}")
+assert_equals "sync|wait|myfleet|--timeout|120s|" "$(cat "${work}/argv")" "itest_share_sync runs fleet sync wait"
+assert_contains "${out}" "synced" "a converged share sync"
+assert_contains "${out}" "rc=0" "a converged share sync's exit code"
+behind="${work}/fleet-behind.sh"
+printf '#!/bin/sh\necho "  host .claude: 3 to send" >&2; echo "Error: not in sync within 120s" >&2; exit 1\n' > "${behind}"
+chmod +x "${behind}"
+out=$(in_backend kubernetes 'itest_share_sync myfleet; echo unreachable' FLEET_BIN="${behind}")
+assert_contains "${out}" "fleet sync wait myfleet:" "a share sync that does not converge fails, naming the fleet"
+assert_contains "${out}" "host .claude: 3 to send" "it names what was behind"
+assert_contains "${out}" "rc=1" "its exit code"
+assert_not_contains "${out}" "unreachable" "the test stops there"
+# In a condition set -e is off, so only an exit stops the test there.
+out=$(in_backend kubernetes 'if itest_share_sync myfleet; then echo synced; fi; echo unreachable' FLEET_BIN="${behind}")
+assert_not_contains "${out}" "unreachable" "the test stops at a share sync inside a condition"
 out=$(in_backend kubernetes 'itest_control_test x/y -S ssh-agent.sock; itest_control_read x/y claude-status.json; itest_control_mode x/y mcp.sock' FLEET_BIN="${stand_in}")
 assert_contains "${out}" "exec|x/y|--|test|-S|/fleet-mounts/control/ssh-agent.sock|" "itest_control_test in the pod"
 assert_contains "${out}" "exec|x/y|--|cat|/fleet-mounts/control/claude-status.json|" "itest_control_read in the pod"

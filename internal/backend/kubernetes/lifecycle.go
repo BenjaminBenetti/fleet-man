@@ -54,7 +54,8 @@ func (b *Backend) Stop(containerID string) error {
 // Start scales the instance to 1, waits for its pod (delivering its image
 // again when the node lost it, or warming the gateway a gateway-delivered
 // one pulls through), connects its agent (restaging the daemon's
-// fleet build into it) and runs the devcontainer's start hooks
+// fleet build into it), waits for the fleet's shared state in it (the Ready
+// gate, Environment.ShareReady) and runs the devcontainer's start hooks
 // (postStart, postAttach). A hook that fails is a warning, as on docker: the
 // instance runs. A pod that does not come up, or whose agent does not
 // connect, fails the start, scaled back to 0.
@@ -105,6 +106,11 @@ func (b *Backend) Start(containerID string) error {
 	sess, err := p.EnsureAgent(ctx, t)
 	if err != nil {
 		return failed(err)
+	}
+	if ready := currentEnvironment().ShareReady; ready != nil {
+		if err := ready(ctx, id.fleet, id.name); err != nil {
+			state.WriteWarn(id.fleet, id.name, fmt.Sprintf("shared state is not in sync yet: %v", err))
+		}
 	}
 	if err := b.startHooks(ctx, sess, pod, rec, containerID); err != nil {
 		state.WriteWarn(id.fleet, id.name, fmt.Sprintf("lifecycle hooks after start: %v", err))

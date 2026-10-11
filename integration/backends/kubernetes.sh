@@ -18,17 +18,9 @@
 # container id fleet records: k8s:<connection>/<namespace>/<statefulset>@g<gen>.
 # The workspace is the checkout on the instance's disk, and the control dir
 # the pod's /fleet-mounts/control, both reached through `fleet exec`. The
-# share sync (P4.6) is not wired yet: its helper fails the calling test,
-# naming the unit.
-
-# _be_not_yet <what> <unit> — fail the calling test: <what> has no kubernetes
-# implementation yet. It exits rather than calling fail, so a call inside $(...)
-# still ends the test with a single result row (via the caller's set -e).
-_be_not_yet() {
-  printf '%b[fail]%b  FLEET_ITEST_BACKEND=kubernetes: %s is not wired yet (%s)\n' \
-    "${C_RED}" "${C_RESET}" "$1" "$2" >&2
-  exit 1
-}
+# fleet's shared mounts live on its share in the cluster, which fleetd keeps
+# converged with the host tree (itest_share_dir); `fleet sync wait` is the
+# barrier between a write on one side and a read on the other.
 
 FLEET_ITEST_NAMESPACE="${FLEET_ITEST_NAMESPACE:-fleet-itest}"
 export FLEET_ITEST_NAMESPACE
@@ -434,9 +426,17 @@ _be_control_mode() {  # <ref> <name>
   "${FLEET_BIN}" exec "$1" -- stat -c %a "/fleet-mounts/control/$2"
 }
 
-# --- shared fleet mounts: wait for the share to sync both ways (P4.6) ---
+# --- shared fleet mounts: wait for the share to sync both ways ---
+#
+# FLEET_ITEST_SHARE_SYNC_TIMEOUT bounds the wait (a Go duration; 120s). A
+# sync that does not converge fails the test, naming what was behind.
 
-_be_share_sync() { _be_not_yet itest_share_sync P4.6; }
+_be_share_sync() {  # <fleet>
+  local out
+  if ! out=$("${FLEET_BIN}" sync wait "$1" --timeout "${FLEET_ITEST_SHARE_SYNC_TIMEOUT:-120s}" 2>&1); then
+    fail "fleet sync wait $1: ${out}"
+  fi
+}
 
 # --- a fleet's own objects (svcruntime/kubert) ---
 

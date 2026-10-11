@@ -186,6 +186,13 @@ func (root *hubRoot) merger(p string) (Merger, bool) {
 	return m, m != nil
 }
 
+// locationScoped reports whether p's policy keeps one state per location
+// (the logins): all a LoginsOnly side keeps.
+func (root *hubRoot) locationScoped(p string) bool {
+	m, ok := root.merger(p)
+	return ok && m.Scope() == ScopeLocation
+}
+
 // keyFor returns the key of p as a side of location loc sees it.
 func (root *hubRoot) keyFor(p, loc string) (key, Merger, bool) {
 	m, ok := root.merger(p)
@@ -324,7 +331,7 @@ func (h *Hub) process(ctx context.Context, root *hubRoot, side *hubSide, c Chang
 		return ack
 	}
 	k, m, ok := root.keyFor(c.Path, side.info.logins())
-	if !ok {
+	if !ok || side.info.LoginsOnly && m.Scope() != ScopeLocation {
 		return ack
 	}
 	base := c.Base

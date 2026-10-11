@@ -39,8 +39,19 @@ const helloChunk = 4096
 // at most SideOptions.ReportSize, 512 by default).
 const maxReportChanges = 4096
 
-// MaxRemoteHeld bounds the paths a spoke's hello may name.
-const MaxRemoteHeld = 4 << 20
+// MaxRemoteHeld bounds the paths a spoke's hello may name: well past any
+// real share (agents' transcripts run to tens of thousands of files), and
+// what fleetd holds in memory for a hostile pod's hello stays bounded too.
+const MaxRemoteHeld = 1 << 20
+
+// maxRemoteCalls bounds the reports, and the content asks, of one spoke the
+// hub serves at once; one past it is refused (the spoke tries again on its
+// next scan, or its op again later). A spoke scans one root at a time, so
+// it has at most a report or two in flight.
+const (
+	maxRemoteReports = 16
+	maxRemoteNeeds   = 64
+)
 
 // maxRemoteRev bounds a rev a spoke may claim: revs count accepted changes,
 // and 2^53 is beyond any real one.
