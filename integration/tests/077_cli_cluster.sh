@@ -148,10 +148,18 @@ remote_out=$(
   session
 )
 
+# The one designed difference: a client of a remote daemon is told that a
+# connection mirroring the daemon host's ports (host_gateway, on by default)
+# reaches that host, not the client's machine (fleet.HostGatewayRemoteWarning).
+remote_warning="warning: fleetd runs on another host: pods that declare host-gateway reach every TCP port listening there, loopback-only ones too"
+assert_not_contains "${local_out}" "${remote_warning}" "a local client is not warned of the daemon's host"
+assert_contains "$(printf '%s\n' "${remote_out}" | sed -n '/^\$ fleet cluster ls offline$/,/^\$ /p')" "${remote_warning}" \
+  "ls of a connection through the gateway warns that its pods reach the daemon's host"
+
 local_norm="${TEST_SCRATCH_DIR}/local.txt"
 remote_norm="${TEST_SCRATCH_DIR}/remote.txt"
 printf '%s\n' "${local_out}" | normalize > "${local_norm}"
-printf '%s\n' "${remote_out}" | normalize > "${remote_norm}"
+printf '%s\n' "${remote_out}" | grep -vxF -- "${remote_warning}" | normalize > "${remote_norm}"
 if ! diff -u "${local_norm}" "${remote_norm}"; then
   fail "fleet cluster prints differently through the gateway"
 fi
