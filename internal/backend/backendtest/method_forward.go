@@ -29,8 +29,12 @@ const lateReply = 2 * time.Second
 // direct dial to ResolveHostname's address (which is only offered when it is
 // reachable), and ForwardStdioCommand. Each carries data both ways, and where
 // it can half-close, the server sees EOF while its reply still comes back
-// (the Forward data plane relies on it). A half-close path also keeps a reply
-// that comes seconds after the EOF; whether the others do is recorded.
+// (the Forward data plane relies on it). A backend with a HalfCloseDialer
+// says its other ways in may not pass a half-close on (a cluster's runtime
+// drops it and ends the connection about a second later): on those the
+// half-close exchanges are recorded, and the HalfCloseDialer must keep a
+// reply that comes seconds after the EOF; on the others whether a late reply
+// arrives is recorded.
 func caseForward(c *C) {
 	i := c.Shared()
 	if !c.NeedTool(i, "socat") {
@@ -39,9 +43,11 @@ func caseForward(c *C) {
 	echoPort := 40000 + rand.IntN(5000)
 	countPort := echoPort + 5000
 	latePort := echoPort + 10000
+	// The late server's socat waits past the reply (-t) after its client's
+	// EOF: by default it gives the other direction only half a second.
 	pids := c.Script(i, fmt.Sprintf(
-		`socat TCP-LISTEN:%d,reuseaddr,fork EXEC:cat >/dev/null 2>&1 & echo $!; socat TCP-LISTEN:%d,reuseaddr,fork 'EXEC:wc -c' >/dev/null 2>&1 & echo $!; socat TCP-LISTEN:%d,reuseaddr,fork 'SYSTEM:cat >/dev/null; sleep %d; echo late' >/dev/null 2>&1 & echo $!`,
-		echoPort, countPort, latePort, int(lateReply/time.Second)))
+		`socat TCP-LISTEN:%d,reuseaddr,fork EXEC:cat >/dev/null 2>&1 & echo $!; socat TCP-LISTEN:%d,reuseaddr,fork 'EXEC:wc -c' >/dev/null 2>&1 & echo $!; socat -t %d TCP-LISTEN:%d,reuseaddr,fork 'SYSTEM:cat >/dev/null; sleep %d; echo late' >/dev/null 2>&1 & echo $!`,
+		echoPort, countPort, int(lateReply/time.Second)+5, latePort, int(lateReply/time.Second)))
 	c.Cleanup(func() { _, _ = i.B.RunScript(i.ID(), "kill "+strings.Join(strings.Fields(pids), " ")+" 2>/dev/null") })
 	for _, port := range []int{echoPort, countPort, latePort} {
 		c.Eventually(fmt.Sprintf("the in-instance server on port %d", port), 30*time.Second, func() (bool, string) {
@@ -51,16 +57,17 @@ func caseForward(c *C) {
 	}
 
 	surfaces := 0
+	hc, hasHalfClose := i.B.(backend.HalfCloseDialer)
 	if dialer, ok := i.B.(backend.PortDialer); ok {
 		surfaces++
 		dial := func(port int) (io.ReadWriteCloser, error) { return dialer.DialPort(c.Ctx, i.ID(), port) }
-		checkForward(c, "PortDialer", dial, echoPort, countPort)
+		checkForward(c, "PortDialer", dial, echoPort, countPort, hasHalfClose)
 		recordLateReply(c, "PortDialer", dial, latePort)
 	}
-	if hc, ok := i.B.(backend.HalfCloseDialer); ok {
+	if hasHalfClose {
 		surfaces++
 		dial := func(port int) (io.ReadWriteCloser, error) { return hc.DialPortHalfClose(c.Ctx, i.ID(), port) }
-		checkForward(c, "HalfCloseDialer", dial, echoPort, countPort)
+		checkForward(c, "HalfCloseDialer", dial, echoPort, countPort, false)
 		if got, err := lateExchange(dial, latePort); err != nil || got != "late" {
 			c.Errorf("HalfCloseDialer: a reply %v after the half-close should arrive; got %q (err %v)", lateReply, got, err)
 		}
@@ -70,7 +77,7 @@ func caseForward(c *C) {
 		dial := func(port int) (io.ReadWriteCloser, error) {
 			return net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 5*time.Second)
 		}
-		checkForward(c, "ResolveHostname "+host, dial, echoPort, countPort)
+		checkForward(c, "ResolveHostname "+host, dial, echoPort, countPort, hasHalfClose)
 		recordLateReply(c, "ResolveHostname", dial, latePort)
 	}
 	if _, ok := i.B.ForwardStdioCommand(i.ID(), echoPort); ok {
@@ -79,7 +86,7 @@ func caseForward(c *C) {
 			cmd, _ := i.B.ForwardStdioCommand(i.ID(), port)
 			return startStdio(cmd)
 		}
-		checkForward(c, "ForwardStdioCommand", dial, echoPort, countPort)
+		checkForward(c, "ForwardStdioCommand", dial, echoPort, countPort, hasHalfClose)
 		recordLateReply(c, "ForwardStdioCommand", dial, latePort)
 	}
 	if surfaces == 0 {
@@ -88,8 +95,9 @@ func caseForward(c *C) {
 }
 
 // checkForward runs an echo exchange and, where the connection half-closes, a
-// half-close exchange through one surface.
-func checkForward(c *C, surface string, dial func(port int) (io.ReadWriteCloser, error), echoPort, countPort int) {
+// half-close exchange through one surface; recordHalfClose logs the
+// half-close exchange's outcome instead of requiring it.
+func checkForward(c *C, surface string, dial func(port int) (io.ReadWriteCloser, error), echoPort, countPort int, recordHalfClose bool) {
 	c.Helper()
 	conn, err := dial(echoPort)
 	if err != nil {
@@ -113,8 +121,12 @@ func checkForward(c *C, surface string, dial func(port int) (io.ReadWriteCloser,
 		c.Logf("%s: its connections cannot half-close; skipping the half-close exchange", surface)
 		return
 	}
+	start := time.Now()
 	got, err = exchange(conn, payload, true, -1)
-	if err != nil || strings.TrimSpace(string(got)) != strconv.Itoa(len(payload)) {
+	switch ok := err == nil && strings.TrimSpace(string(got)) == strconv.Itoa(len(payload)); {
+	case recordHalfClose:
+		c.Logf("%s: after a half-close the server counted and replied: %v (got %q, err %v, connection ended after %v)", surface, ok, got, err, time.Since(start).Round(100*time.Millisecond))
+	case !ok:
 		c.Errorf("%s: after a half-close the server should count %d bytes and reply; got %q (err %v)", surface, len(payload), got, err)
 	}
 }
