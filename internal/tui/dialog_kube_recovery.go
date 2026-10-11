@@ -14,7 +14,8 @@ import (
 // Kubernetes error (kubeerr) means for one instance and what to do about it.
 // It opens on its own when a create this TUI started fails, or is refused
 // before any record exists, with a code; and on enter on a failed Kubernetes
-// row, or on a stopped one the cluster parked (a crash loop, out of memory).
+// row, on a stopped one the cluster parked (a crash loop, out of memory), or
+// on a running one whose pod fleet refuses as tampered with.
 // Its buttons destroy the instance (through the usual confirmation), page
 // its logs, start a parked instance again, or open the cluster editor on the
 // setting that fixes the error. An interrupted create or rebuild is not
@@ -77,6 +78,22 @@ func (fleetPage *fleetPage) openKubeRecovery(fleetName string, inst *fleet.Insta
 	fleetPage.kubeRecovery = kubeRecoveryState{
 		fleet: fleetName, inst: inst.Name, cluster: inst.KubeCluster,
 		status: inst.Status, code: code, detail: detail,
+	}
+	fleetPage.mode = viewKubeRecovery
+	return true
+}
+
+// openKubePodRecovery opens the dialog for a running instance whose pod fleet
+// refuses (tampered with): no shell can reach it, so enter explains instead.
+// ok is false (nothing opened) for any other instance.
+func (fleetPage *fleetPage) openKubePodRecovery(m *model, fleetName string, inst *fleet.Instance) bool {
+	code, ok := kubePodRecoveryCode(inst, m.runtime[rtKey(fleetName, inst.Name)])
+	if !ok {
+		return false
+	}
+	fleetPage.kubeRecovery = kubeRecoveryState{
+		fleet: fleetName, inst: inst.Name, cluster: inst.KubeCluster,
+		status: inst.Status, code: code,
 	}
 	fleetPage.mode = viewKubeRecovery
 	return true

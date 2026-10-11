@@ -137,6 +137,21 @@ func kubeRecoveryCode(inst *fleet.Instance) (code kubeerr.Code, detail string, o
 	return code, detail, true
 }
 
+// kubePodRecoveryCode is the kubeerr code of a running Kubernetes instance's
+// pod that the recovery dialog explains: a pod fleet refused as tampered
+// with (pod_reason), which no session reaches. ok is false for every other
+// instance.
+func kubePodRecoveryCode(inst *fleet.Instance, rt *fleetgrpc.InstanceRuntime) (kubeerr.Code, bool) {
+	if inst == nil || inst.Backend != fleet.BackendKubernetes || inst.Status != fleet.StatusRunning {
+		return "", false
+	}
+	code := kubeerr.Code(strings.TrimSpace(rt.GetKube().GetPodReason()))
+	if !code.Is(kubeerr.Tampered) {
+		return "", false
+	}
+	return code, true
+}
+
 // kubeClassWords is each class as a row note says it.
 var kubeClassWords = map[kubeerr.Code]string{
 	kubeerr.Unreachable:     "cluster unreachable",

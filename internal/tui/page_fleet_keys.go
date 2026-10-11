@@ -651,9 +651,10 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		if instance == nil {
 			break
 		}
-		// A failed Kubernetes instance, or one the cluster parked, has no
-		// shell to open: enter explains what happened instead.
-		if fleetPage.openKubeRecovery(r.fleetName, instance) {
+		// A failed Kubernetes instance, one the cluster parked, or one whose
+		// pod fleet refuses has no shell to open: enter explains what
+		// happened instead.
+		if fleetPage.openKubeRecovery(r.fleetName, instance) || fleetPage.openKubePodRecovery(m, r.fleetName, instance) {
 			return nil
 		}
 		instFleetName := r.fleetName
@@ -795,9 +796,15 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 
 	case rowInstance:
 		keys := []string{"j/k: navigate"}
-		_, _, recoverable := kubeRecoveryCode(r.instance)
 		if r.instance != nil {
+			_, _, recoverable := kubeRecoveryCode(r.instance)
+			_, podRefused := kubePodRecoveryCode(r.instance, m.runtime[rtKey(r.fleetName, r.instance.Name)])
 			switch {
+			case podRefused:
+				keys = append(keys,
+					"enter: details", "e: edit", "s: stop",
+					"d: delete", "t: tag", "L: logs", "r: refresh", "q: quit",
+				)
 			case recoverable && r.instance.Status == fleet.StatusStopped:
 				keys = append(keys,
 					"enter: details", "e: edit", "s: start",

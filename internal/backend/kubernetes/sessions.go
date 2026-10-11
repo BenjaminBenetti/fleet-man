@@ -35,8 +35,12 @@ func (b *Backend) EnsureTmux(ctx context.Context) error {
 	return ensureTmuxOn(ctx, s)
 }
 
-// ensureTmuxOn is EnsureTmux on a session that is up.
+// ensureTmuxOn is EnsureTmux on a session that is up, within
+// ensureTmuxTimeout: a create or a start that calls it has a far longer
+// deadline of its own, and its tmux is best effort.
 func ensureTmuxOn(ctx context.Context, s *AgentSession) error {
+	ctx, cancel := context.WithTimeout(ctx, ensureTmuxTimeout)
+	defer cancel()
 	// `command -v tmux` finds the image's tmux, or the bundle once it is
 	// installed (the agent puts the bundle's bin last on PATH).
 	res, err := s.Client().Run(ctx, podwire.ExecHeader{Request: execas.Request{Class: execas.ClassScript, Argv: []string{"sh", "-c", "command -v tmux"}}}, nil)

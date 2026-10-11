@@ -240,6 +240,46 @@ func TestEnterOpensKubeRecovery(t *testing.T) {
 	}
 }
 
+// enter on a running cluster row whose pod fleet refuses (tampered with)
+// opens the dialog rather than a shell no session can reach; its footer says
+// so. A running row with a pod that is merely not ready still opens a shell.
+func TestEnterOnARefusedPodOpensKubeRecovery(t *testing.T) {
+	inst := kubeInst("t", fleet.StatusRunning, "")
+	m, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, inst)
+	m.runtime["alpha/t"] = &fleetgrpc.InstanceRuntime{Fleet: "alpha", Instance: "t",
+		Kube: &fleetgrpc.KubeInstanceRuntime{PodReason: "kubernetes:tampered"}}
+	keys := strings.Join(fp.contextualHelpKeys(m), "  ")
+	if !strings.Contains(keys, "enter: details") || strings.Contains(keys, "open shell") {
+		t.Errorf("a refused pod's footer %q", keys)
+	}
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if fp.mode != viewKubeRecovery {
+		t.Fatalf("enter on a refused pod left mode %v", fp.mode)
+	}
+	want := []kubeRecoveryAction{kubeRecoveryLogs, kubeRecoveryDestroy, kubeRecoveryClose}
+	if got := fp.kubeRecovery.actions(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("actions %v, want %v", got, want)
+	}
+	view := flatText(fp.viewFleetList(m))
+	for _, w := range []string{"Kubernetes: alpha/t has a pod fleet did not make on ☸ minikube", kubeerr.Hint(kubeerr.Tampered), "[ View logs ]"} {
+		if !strings.Contains(view, w) {
+			t.Errorf("the dialog lacks %q:\n%s", w, view)
+		}
+	}
+
+	if _, ok := kubePodRecoveryCode(inst, &fleetgrpc.InstanceRuntime{Kube: &fleetgrpc.KubeInstanceRuntime{PodReason: "ImagePullBackOff"}}); ok {
+		t.Error("a pod that is not ready yet reads as refused")
+	}
+	stopped := kubeInst("s", fleet.StatusStopped, "")
+	if _, ok := kubePodRecoveryCode(stopped, m.runtime["alpha/t"]); ok {
+		t.Error("a stopped instance reads as a refused pod")
+	}
+	docker := &fleet.Instance{Name: "d", Status: fleet.StatusRunning, Backend: fleet.BackendDevcontainer}
+	if _, ok := kubePodRecoveryCode(docker, m.runtime["alpha/t"]); ok {
+		t.Error("a docker instance reads as a refused pod")
+	}
+}
+
 // The recovery dialog's buttons: Destroy goes through the usual
 // confirmation, Start starts a parked instance, the settings button opens
 // the cluster editor on the field that fixes it, Close closes.

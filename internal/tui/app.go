@@ -1266,8 +1266,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.creating, key)
 		m.reload()
 		// A Kubernetes create refused with a code (no room under the
-		// connection's quotas) gets the recovery dialog.
-		if msg.cluster != "" && m.fleetPage != nil && m.fleetPage.openKubeRecoveryForRefusal(msg.fleet, msg.cluster, msg.err) {
+		// connection's quotas) gets the recovery dialog, unless another
+		// dialog opened meanwhile.
+		if msg.cluster != "" && m.fleetPage != nil && m.fleetPage.mode == viewNormal &&
+			m.fleetPage.openKubeRecoveryForRefusal(msg.fleet, msg.cluster, msg.err) {
 			m.message = ""
 			break
 		}
