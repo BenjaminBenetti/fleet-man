@@ -4,6 +4,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -65,14 +67,16 @@ func TestPodExecIsLocalOnly(t *testing.T) {
 }
 
 // podExecFirstErr opens a PodExec stream, sends first, and returns the gRPC
-// code of the first error (from Send or the first Recv).
+// code of the first error (from Send or the first Recv). A Send that meets
+// a stream the server already ended returns io.EOF, whose status is only in
+// the next Recv.
 func podExecFirstErr(t *testing.T, c fleetgrpc.FleetServiceClient, ctx context.Context, first *fleetgrpc.ExecIn) codes.Code {
 	t.Helper()
 	stream, err := c.PodExec(ctx)
 	if err != nil {
 		return status.Code(err)
 	}
-	if err := stream.Send(first); err != nil {
+	if err := stream.Send(first); err != nil && !errors.Is(err, io.EOF) {
 		return status.Code(err)
 	}
 	_ = stream.CloseSend()
