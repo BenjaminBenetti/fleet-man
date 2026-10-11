@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: devcontainer.json host binds stay live: a read-write ~/.aws-style directory syncs both ways (new, changed, nested and deleted files, owned by the host user on the host) and a read-only ~/.gitconfig-style file follows host edits but refuses instance writes, across a stop/start; removing the instance leaves the host files.
 set -euo pipefail
 
@@ -30,8 +31,9 @@ inst="${FIXTURE_REPO_NAME}/alpha"
 in_instance() { "${FLEET_BIN}" exec "${inst}" -- "$@"; }
 
 # eventually <description> <command...> — poll until the command succeeds. A
-# bind is instant; a backend that syncs host binds gets the same check with time
-# to catch up.
+# bind is instant; a cluster keeps a copy of each bound path on the fleet's
+# share in step with the host (both ways, or host to pod for a read-only one),
+# and gets the same check with time to catch up.
 eventually() {
   local what="$1" deadline
   shift
