@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Description: automation trigger payload files (391 variant) — a webhook event delivered through the gateway and a bash trigger's stdout each spawn an agent instance; the payload lands byte-exact in /tmp/fleet-event-<ts> inside it, the agent's prompt names that file, and fleet trigger logs records the firing.
+# itest: k8s
+# Description: automation trigger payload files (391 variant) — a webhook event delivered through the gateway and a bash trigger's stdout each spawn an agent instance (on the run's cluster on kubernetes, where the file goes through the pod agent's FileWrite); the payload lands byte-exact in /tmp/fleet-event-<ts> inside it, the agent's prompt names that file, and fleet trigger logs records the firing.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -110,8 +111,14 @@ cat > "${HOME}/.fleet/state.json" <<EOF
 }
 EOF
 info "creating agents and triggers (fleet agent / fleet trigger create)"
+# An agent's target is stored concretely: the run's connection on
+# kubernetes (named as `fleet cluster` names it), devcontainer otherwise.
+agent_target=(--backend devcontainer)
+if itest_backend_is kubernetes; then
+  agent_target=(--cluster itest)
+fi
 for agent in hooker basher; do
-  out=$("${FLEET_BIN}" agent create "${FLEET}" "${agent}" --backend devcontainer \
+  out=$("${FLEET_BIN}" agent create "${FLEET}" "${agent}" "${agent_target[@]}" \
     --command "claude --system-prompt '\${SYS_PROMPT}' '\${PROMPT}'" --system-prompt "be-terse" 2>&1) \
     || fail "agent create ${agent} failed: ${out}"
 done
@@ -161,6 +168,11 @@ wait_instance() {
 hook_inst=$(wait_instance hooker) || fail "the webhook never spawned an agent instance"
 bash_inst=$(wait_instance basher) || fail "the bash trigger never spawned an agent instance"
 info "spawned: ${hook_inst} (webhook), ${bash_inst} (bash)"
+for inst in "${hook_inst}" "${bash_inst}"; do
+  assert_equals "${FLEET_ITEST_BACKEND}" \
+    "$(jq -r --arg f "${FLEET}" --arg i "${inst}" '.fleets[$f].instances[] | select(.name == $i) | .backend' "${HOME}/.fleet/state.json")" \
+    "${inst} should run on its agent's target"
+done
 
 # agent_output <instance> — what the fake claude recorded once it launched.
 agent_output() {
