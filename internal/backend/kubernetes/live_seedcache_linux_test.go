@@ -14,7 +14,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -50,12 +52,14 @@ func TestLiveSeedCache(t *testing.T) {
 	lv := newLiveIn(t, lb.kctx, "fleet-it-p6-02a-seedcache-")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	if _, err := lv.cs.StorageV1().StorageClasses().Get(ctx, class, metav1.GetOptions{}); err != nil {
+	sc, err := lv.cs.StorageV1().StorageClasses().Get(ctx, class, metav1.GetOptions{})
+	if err != nil {
 		t.Skipf("no storage class %s to clone disks on: %v", class, err)
 	}
 	lv.rec.StorageClass = class
 	f := lv.facts(t)
 	f.Capabilities.CloneTier = "snapshot"
+	f.Capabilities.StorageClasses = []*fleetgrpc.KubeStorageClass{{Name: class, Provisioner: sc.Provisioner, CsiClone: podspec.ClonesVolumes(sc.Provisioner)}}
 	lb.mu.Lock()
 	lb.recs = append(lb.recs, lv.rec)
 	lb.facts[lv.rec.ID] = f

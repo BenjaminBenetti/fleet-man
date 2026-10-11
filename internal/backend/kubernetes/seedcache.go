@@ -146,14 +146,14 @@ func seedCacheID(daemonID, cluster, image string, spec *podseed.SeedSpec, nonRoo
 }
 
 // seedCacheFor is the create's seed cache plan, or nil when it seeds in full
-// as any create does: only an automation create uses one, on a connection
-// whose disks clone. A rebuild (c.prevGen set) never does: its seed resets
-// a disk that already holds the instance's workspace.
+// as any create does: only an automation create uses one, on a disk that
+// CSI-clones (diskClones). A rebuild (c.prevGen set) never does: its seed
+// resets a disk that already holds the instance's workspace.
 func (c *creation) seedCacheFor(ctx context.Context, spec *podseed.SeedSpec, image string, disk *corev1.PersistentVolumeClaim) *seedCachePlan {
 	switch {
 	case !c.b.inst.Automated || c.prevGen > 0 || image == "" || os.Getenv(EnvSeedCache) == "off":
 		return nil
-	case c.rec.CloneMethod == fleet.KubeCloneCopy || c.facts.Capabilities.GetCloneTier() != "snapshot":
+	case c.rec.CloneMethod == fleet.KubeCloneCopy || !c.diskClones(disk):
 		return nil
 	case seedCaches.isOff(c.id.cluster, time.Now()):
 		return nil
@@ -180,6 +180,22 @@ func (c *creation) seedCacheFor(ctx context.Context, spec *podseed.SeedSpec, ima
 		plan.clone = true
 	}
 	return plan
+}
+
+// diskClones reports whether disk can be a CSI clone (a PVC whose dataSource
+// is another PVC), which a seed cache is built and used by: its StorageClass
+// clones volumes as the preflight found it (csi_clone), or the connection
+// says its disks do (clone_method csi-clone). A snapshot class alone is not
+// enough: a driver that only snapshots (EBS) refuses a PVC data source.
+func (c *creation) diskClones(disk *corev1.PersistentVolumeClaim) bool {
+	if c.rec.CloneMethod == fleet.KubeCloneCSIClone {
+		return true
+	}
+	class := ""
+	if disk.Spec.StorageClassName != nil {
+		class = *disk.Spec.StorageClassName
+	}
+	return storageClassOf(c.facts.Capabilities, class).GetCsiClone()
 }
 
 // ownSeedCache reports whether labels are those of a seed cache this daemon

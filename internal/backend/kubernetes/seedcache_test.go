@@ -98,7 +98,10 @@ func cacheTestCreation(t *testing.T, automated bool, objs ...kruntime.Object) *c
 		owner:    cacheTestOwner,
 		daemonID: "daemon",
 		id:       bound{cluster: cacheTestCluster, key: "abcd2345", sts: "fi-live-a-abcd2345"},
-		facts:    Facts{Capabilities: &fleetgrpc.KubeCapabilities{CloneTier: "snapshot"}},
+		facts: Facts{Capabilities: &fleetgrpc.KubeCapabilities{CloneTier: "snapshot", StorageClasses: []*fleetgrpc.KubeStorageClass{
+			{Name: "csi-hostpath-sc", Provisioner: "hostpath.csi.k8s.io", CsiClone: true},
+			{Name: "standard", Provisioner: "k8s.io/minikube-hostpath", IsDefault: true},
+		}}},
 	}
 }
 
@@ -140,12 +143,45 @@ func TestSeedCacheFor(t *testing.T) {
 			t.Fatalf("plan %+v", p)
 		}
 	})
-	t.Run("no clone tier", func(t *testing.T) {
+	t.Run("a disk that does not clone", func(t *testing.T) {
+		// A snapshot class alone (EBS) takes no PVC data source; nor does
+		// the cluster's default class here, an in-tree hostpath.
 		c := cacheTestCreation(t, true)
-		c.facts.Capabilities.CloneTier = "copy"
+		c.facts.Capabilities.StorageClasses[0].CsiClone = false
 		if p := c.seedCacheFor(context.Background(), spec, image, cacheTestDisk()); p != nil {
 			t.Fatalf("plan %+v", p)
 		}
+		disk := cacheTestDisk()
+		disk.Spec.StorageClassName = nil
+		if p := cacheTestCreation(t, true).seedCacheFor(context.Background(), spec, image, disk); p != nil {
+			t.Fatalf("plan on the default class %+v", p)
+		}
+		other := "fast"
+		disk.Spec.StorageClassName = &other
+		if p := cacheTestCreation(t, true).seedCacheFor(context.Background(), spec, image, disk); p != nil {
+			t.Fatalf("plan on a class the preflight did not find %+v", p)
+		}
+	})
+	t.Run("a disk that clones without a snapshot class", func(t *testing.T) {
+		c := cacheTestCreation(t, true)
+		c.facts.Capabilities.CloneTier = "csi-clone"
+		p := c.seedCacheFor(context.Background(), spec, image, cacheTestDisk())
+		if p == nil || !p.build {
+			t.Fatalf("plan %+v, want a build", p)
+		}
+		seedCaches.release(cacheTestCluster, p.id)
+	})
+	t.Run("clone method csi-clone", func(t *testing.T) {
+		// The connection says its disks clone, on a class the preflight
+		// does not know to.
+		c := cacheTestCreation(t, true)
+		c.rec.CloneMethod = fleet.KubeCloneCSIClone
+		c.facts.Capabilities.StorageClasses = nil
+		p := c.seedCacheFor(context.Background(), spec, image, cacheTestDisk())
+		if p == nil || !p.build {
+			t.Fatalf("plan %+v, want a build", p)
+		}
+		seedCaches.release(cacheTestCluster, p.id)
 	})
 	t.Run("clone method copy", func(t *testing.T) {
 		c := cacheTestCreation(t, true)

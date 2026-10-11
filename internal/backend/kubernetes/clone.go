@@ -325,12 +325,7 @@ func (c *cloning) cloneFacts(ctx context.Context) (CloneFacts, error) {
 	if c.srcDisk.Spec.StorageClassName != nil {
 		class = *c.srcDisk.Spec.StorageClassName
 	}
-	var known *fleetgrpc.KubeStorageClass
-	for _, sc := range c.facts.Capabilities.GetStorageClasses() {
-		if sc.GetName() == class || (class == "" && sc.GetIsDefault()) {
-			known = sc
-		}
-	}
+	known := storageClassOf(c.facts.Capabilities, class)
 	switch {
 	case known != nil:
 		f.Driver, f.CSIClone = known.GetProvisioner(), known.GetCsiClone()
@@ -351,6 +346,18 @@ func (c *cloning) cloneFacts(ctx context.Context) (CloneFacts, error) {
 	}
 	c.driver = f.Driver
 	return f, nil
+}
+
+// storageClassOf is the preflight's finding for StorageClass class ("" is
+// the cluster's default), or nil when it found none.
+func storageClassOf(caps *fleetgrpc.KubeCapabilities, class string) *fleetgrpc.KubeStorageClass {
+	var known *fleetgrpc.KubeStorageClass
+	for _, sc := range caps.GetStorageClasses() {
+		if sc.GetName() == class || (class == "" && sc.GetIsDefault()) {
+			known = sc
+		}
+	}
+	return known
 }
 
 // provision makes the clone after its journal began.
