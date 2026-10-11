@@ -435,3 +435,15 @@ func TestIDKeyNormalizes(t *testing.T) {
 		t.Fatal("a string id is not a number id")
 	}
 }
+
+// TestWaitSetsTheConnectAndReplayWaits: a bridge given Wait (a pod's) waits
+// that long for the socket and for a replayed initialize's answer.
+func TestWaitSetsTheConnectAndReplayWaits(t *testing.T) {
+	b := &Bridge{Dial: Dialer(filepath.Join(t.TempDir(), "none.sock")), In: strings.NewReader(""), Out: io.Discard, Wait: PodWait}
+	if err := b.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.timing.connect != PodWait || b.timing.replay != PodWait || b.timing.drain != defaultTimings.drain {
+		t.Fatalf("timings %+v", b.timing)
+	}
+}

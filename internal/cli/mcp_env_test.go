@@ -49,3 +49,21 @@ func TestMCPEnv(t *testing.T) {
 		t.Fatalf("the plugin should run this binary's mcp-bridge, got %+v", servers.MCPServers)
 	}
 }
+
+// TestMCPBridgeArgvInAPod: in a pod the plugin names the stable
+// /usr/bin/fleet link (not the content-addressed binary a restage removes)
+// and the pod's longer waits; elsewhere this binary as it is.
+func TestMCPBridgeArgvInAPod(t *testing.T) {
+	got := mcpBridgeArgv("/opt/fleet/bin/fleet-" + strings.Repeat("a", 64))
+	want := []string{"/usr/bin/fleet", "mcp-bridge", "--wait", "1m0s"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("in a pod: %q, want %q", got, want)
+	}
+	if got := mcpBridgeArgv("/usr/bin/fleet"); strings.Join(got, " ") != "/usr/bin/fleet mcp-bridge" {
+		t.Fatalf("on docker: %q", got)
+	}
+	cmd, _, err := NewRootCmd().Find([]string{"mcp-bridge"})
+	if err != nil || cmd.Flags().Lookup("wait") == nil {
+		t.Fatalf("mcp-bridge takes no --wait: %v", err)
+	}
+}

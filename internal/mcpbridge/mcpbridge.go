@@ -65,6 +65,12 @@ var defaultTimings = timings{
 	failFast:  2 * time.Second,
 }
 
+// PodWait is the bridge's connect and replay waits inside a Kubernetes pod
+// (Bridge.Wait): there the socket is the pod agent's, which comes back only
+// once the daemon's session to the pod reopens after a daemon restart, so a
+// call made meanwhile waits for it instead of failing.
+const PodWait = 60 * time.Second
+
 // errCodeUnavailable is the JSON-RPC error code of a request the bridge
 // answers itself because the daemon could not (JSON-RPC "internal error").
 const errCodeUnavailable = -32603
@@ -87,6 +93,10 @@ type Bridge struct {
 	// In carries the client's messages; Out receives the daemon's.
 	In  io.Reader
 	Out io.Writer
+
+	// Wait, when set, is how long a message waits for the daemon's socket,
+	// and for the daemon's answer to a replayed initialize (10s otherwise).
+	Wait time.Duration
 
 	// timing is defaultTimings unless a test shortens it.
 	timing timings
@@ -138,6 +148,9 @@ func (m message) hasID() bool {
 func (b *Bridge) Run(ctx context.Context) error {
 	if b.timing == (timings{}) {
 		b.timing = defaultTimings
+	}
+	if b.Wait > 0 {
+		b.timing.connect, b.timing.replay = b.Wait, b.Wait
 	}
 	b.mu.Lock()
 	b.pending = make(map[string]json.RawMessage)
