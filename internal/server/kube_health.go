@@ -444,6 +444,10 @@ type kubeWorker struct {
 	fullStarted time.Time
 	lastFull    time.Time
 	deepAt      time.Time
+	// multiPodRWO is what the last deep test found of two pods on one node
+	// mounting one RWO volume (nil before one told): full runs without a
+	// deep test keep it (it decides the connection's share mode).
+	multiPodRWO *bool
 	// lastProbe is when the last probe of either kind returned.
 	lastProbe time.Time
 	// probeFail is the failure the last shallow probe found since the last
@@ -652,6 +656,9 @@ func (w *kubeWorker) target(rec fleet.KubeCluster, link *kubeLink, lease kubeLea
 		// A draft (the context picker's test) has no id yet.
 		Delivery: w.m.delivery(rec, link, rec.ID != ""),
 	}
+	w.mu.Lock()
+	t.MultiPodRWO = w.multiPodRWO
+	w.mu.Unlock()
 	if lease != nil {
 		t.Lease = lease
 	}
@@ -753,6 +760,9 @@ func (w *kubeWorker) applyFull(rec fleet.KubeCluster, link *kubeLink, res prefli
 	w.lastFull, w.lastProbe = res.CheckedAt, res.CheckedAt
 	if !res.DeepCheckedAt.IsZero() {
 		w.deepAt = res.DeepCheckedAt
+	}
+	if res.MultiPodRWO != nil {
+		w.multiPodRWO = res.MultiPodRWO
 	}
 	w.probeFail, w.probeFailMsg = fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNSPECIFIED, ""
 	w.cred, w.credErr, w.credAt = res.Credential, nil, res.CheckedAt
