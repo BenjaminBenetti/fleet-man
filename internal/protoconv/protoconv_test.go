@@ -33,6 +33,9 @@ func fillValue(t *testing.T, v reflect.Value, path string) {
 	case reflect.TypeFor[fleet.BackendType]():
 		v.Set(reflect.ValueOf(fleet.BackendCoder))
 		return
+	case reflect.TypeFor[state.EditorEndpointKind]():
+		v.Set(reflect.ValueOf(state.EditorEndpointSSH))
+		return
 	case reflect.TypeFor[time.Time]():
 		// UTC wall-clock time: timestamppb round-trips to a UTC time.Time, so a
 		// zoned or monotonic-clock-carrying value would fail DeepEqual for

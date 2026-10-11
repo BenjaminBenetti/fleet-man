@@ -74,6 +74,8 @@ func NewRootCmd() *cobra.Command {
 		newPodJobCmd(),
 		newPodAgentCmd(),
 		newKubeExecCmd(),
+		newSSHProxyCmd(),
+		newSSHServerCmd(),
 	)
 
 	return root

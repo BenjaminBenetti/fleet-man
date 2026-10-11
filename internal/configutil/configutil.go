@@ -42,6 +42,15 @@ type (
 	State              = state.State
 	GroupLayout        = state.GroupLayout
 	ArmadaRemote       = state.ArmadaRemote
+	EditorEndpoint     = state.EditorEndpoint
+	EditorEndpointKind = state.EditorEndpointKind
+)
+
+// EditorEndpointKind values, re-exported alongside the type alias.
+const (
+	EditorEndpointGateway = state.EditorEndpointGateway
+	EditorEndpointSSH     = state.EditorEndpointSSH
+	EditorEndpointServer  = state.EditorEndpointServer
 )
 
 // AgentTool values, re-exported alongside the type alias.

@@ -588,6 +588,8 @@ func (fleetPage *fleetPage) viewActiveDialog(m *model) string {
 		return fleetPage.renderCodespacesLimitDialog(m)
 	case viewKubeRecovery:
 		return fleetPage.renderKubeRecoveryDialog(m)
+	case viewEditorConsent:
+		return fleetPage.renderEditorConsentDialog(m)
 	case viewCreateSession:
 		return fleetPage.renderCreateSessionDialog(m)
 	case viewAutomationTrigger:

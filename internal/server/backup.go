@@ -64,6 +64,7 @@ func backupSources() []string {
 		fleetpaths.McpTokenPath(),       // mcp.token
 		state.StatePath(),               // state.json
 		state.ArmadaPath(),              // armada.json (remote-fleet registry; embeds bearer tokens)
+		state.EditorEndpointsPath(),     // editor_endpoints.json (remotes editor aliases lead to; may embed bearer tokens)
 		state.KubeClustersPath(),        // kube_clusters.json (Kubernetes connections; embeds the gateway pull credential)
 		state.DaemonIDPath(),            // daemon_id (names and labels this daemon's cluster objects)
 		state.KubeFootprintPath(),       // kube/footprint.json
@@ -483,6 +484,7 @@ func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ 
 			{Name: "config.json", Description: "user/global fleet configuration (settings, backends, remote-MCP/gateway config)."},
 			{Name: "state.json", Description: "the fleet & instance registry — fleetd's core durable state."},
 			{Name: "armada.json", Description: "registry of remote fleetd connections (gateway URL + bearer token per fleet) — SECRET."},
+			{Name: "editor_endpoints.json", Description: "remote fleetd connections that VS Code Remote-SSH aliases lead to, recorded by `fleet code` when FLEET_GATEWAY/FLEET_SSH/FLEET_SERVER chose them (a FLEET_TOKEN bearer token when one was given) — SECRET."},
 			{Name: "gateway_session.json", Description: "sticky remote-MCP gateway session (session id + public URL)."},
 			{Name: "mcp.env", Description: "sourceable shell exports for the local MCP endpoint (FLEET_MCP_URL/PORT/TOKEN)."},
 			{Name: "mcp.port", Description: "TCP port the local MCP HTTP server bound to."},

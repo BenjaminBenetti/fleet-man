@@ -195,9 +195,10 @@ func TestHandleCapabilities(t *testing.T) {
 	}
 	// The exec surface (Exec, ExecCommand, CopyFile, Logs) reaches the pod
 	// now; its shape is checked in cmd_test.go, not run here against a
-	// cluster. Editor, mic and forwarding are still later units'.
+	// cluster. Mic and forwarding are still later units'; the editor URI
+	// needs fleetd's record of the pod (editor_test.go).
 	if uri, ok := b.EditorURI("/ws", "p"); ok || uri != "" {
-		t.Error("an editor URI")
+		t.Error("an editor URI without a record of the pod")
 	}
 	if cmd, ok := b.MicSinkCommand("cid"); ok || cmd != nil {
 		t.Error("a mic sink")

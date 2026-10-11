@@ -149,8 +149,7 @@ func kubernetesTarget(t *testing.T, sel backendtest.Selection) backendtest.Targe
 		ListSessionsP95:  15 * time.Millisecond,
 		RebuildRollsBack: true,
 		Skip: map[string]string{
-			"up-again":   "a cluster create always gets a key of its own: the daemon never runs a second Up on one, so there is nothing to adopt or prune",
-			"editor-uri": "the editor launch for a pod lands with P7.0 (Remote-SSH)",
+			"up-again": "a cluster create always gets a key of its own: the daemon never runs a second Up on one, so there is nothing to adopt or prune",
 		},
 	}
 }

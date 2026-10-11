@@ -22,6 +22,68 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type EditorLaunchMode int32
+
+const (
+	EditorLaunchMode_EDITOR_LAUNCH_MODE_UNSPECIFIED EditorLaunchMode = 0
+	// DEVCONTAINER_URI: run argv (`code --folder-uri vscode-remote://dev-container+…`).
+	EditorLaunchMode_EDITOR_LAUNCH_MODE_DEVCONTAINER_URI EditorLaunchMode = 1
+	// CODER_CLI: run argv (`coder open vscode <workspace>`).
+	EditorLaunchMode_EDITOR_LAUNCH_MODE_CODER_CLI EditorLaunchMode = 2
+	// CODESPACES_CLI: run argv (`gh codespace code -c <name>`).
+	EditorLaunchMode_EDITOR_LAUNCH_MODE_CODESPACES_CLI EditorLaunchMode = 3
+	// REMOTE_SSH: the client opens `vscode-remote://ssh-remote+<alias><workspace_folder>`,
+	// where alias is the instance's `*.fleet` host, which ~/.ssh/fleet_config
+	// routes through `fleet ssh-proxy`. argv is empty: the alias names the
+	// daemon the client reached, which only the client knows.
+	EditorLaunchMode_EDITOR_LAUNCH_MODE_REMOTE_SSH EditorLaunchMode = 4
+)
+
+// Enum value maps for EditorLaunchMode.
+var (
+	EditorLaunchMode_name = map[int32]string{
+		0: "EDITOR_LAUNCH_MODE_UNSPECIFIED",
+		1: "EDITOR_LAUNCH_MODE_DEVCONTAINER_URI",
+		2: "EDITOR_LAUNCH_MODE_CODER_CLI",
+		3: "EDITOR_LAUNCH_MODE_CODESPACES_CLI",
+		4: "EDITOR_LAUNCH_MODE_REMOTE_SSH",
+	}
+	EditorLaunchMode_value = map[string]int32{
+		"EDITOR_LAUNCH_MODE_UNSPECIFIED":      0,
+		"EDITOR_LAUNCH_MODE_DEVCONTAINER_URI": 1,
+		"EDITOR_LAUNCH_MODE_CODER_CLI":        2,
+		"EDITOR_LAUNCH_MODE_CODESPACES_CLI":   3,
+		"EDITOR_LAUNCH_MODE_REMOTE_SSH":       4,
+	}
+)
+
+func (x EditorLaunchMode) Enum() *EditorLaunchMode {
+	p := new(EditorLaunchMode)
+	*p = x
+	return p
+}
+
+func (x EditorLaunchMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EditorLaunchMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_exec_proto_enumTypes[0].Descriptor()
+}
+
+func (EditorLaunchMode) Type() protoreflect.EnumType {
+	return &file_exec_proto_enumTypes[0]
+}
+
+func (x EditorLaunchMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EditorLaunchMode.Descriptor instead.
+func (EditorLaunchMode) EnumDescriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{0}
+}
+
 // Exec is a bidi stream for running a command inside an instance's container and
 // piping stdin/stdout/stderr. The FIRST ExecIn MUST carry `start`; subsequent
 // ExecIn carry stdin bytes (or resize). The server replies with ExecOut frames
@@ -3019,6 +3081,128 @@ func (x *ResolveLogsCommandReply) GetArgv() []string {
 	return nil
 }
 
+// ResolveEditorLaunch says how the caller opens VS Code on an instance (the
+// TUI's `c`, `fleet code`). The daemon picks the mode: a local caller opens a
+// local devcontainer instance through the Dev Containers URI; a remote caller
+// (gateway, Armada SSH, FLEET_SERVER) and every Kubernetes instance go through
+// VS Code Remote-SSH to the in-instance `fleet ssh-server`; Coder and
+// Codespaces keep their own CLIs.
+type ResolveEditorLaunchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	Instance      string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveEditorLaunchRequest) Reset() {
+	*x = ResolveEditorLaunchRequest{}
+	mi := &file_exec_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveEditorLaunchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveEditorLaunchRequest) ProtoMessage() {}
+
+func (x *ResolveEditorLaunchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveEditorLaunchRequest.ProtoReflect.Descriptor instead.
+func (*ResolveEditorLaunchRequest) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *ResolveEditorLaunchRequest) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+func (x *ResolveEditorLaunchRequest) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+type ResolveEditorLaunchReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Mode  EditorLaunchMode       `protobuf:"varint,1,opt,name=mode,proto3,enum=fleetgrpc.EditorLaunchMode" json:"mode,omitempty"`
+	// argv the client runs for the DEVCONTAINER_URI, CODER_CLI and
+	// CODESPACES_CLI modes.
+	Argv []string `protobuf:"bytes,2,rep,name=argv,proto3" json:"argv,omitempty"`
+	// REMOTE_SSH: the folder VS Code opens inside the instance (the
+	// devcontainer's workspaceFolder).
+	WorkspaceFolder string `protobuf:"bytes,3,opt,name=workspace_folder,json=workspaceFolder,proto3" json:"workspace_folder,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ResolveEditorLaunchReply) Reset() {
+	*x = ResolveEditorLaunchReply{}
+	mi := &file_exec_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveEditorLaunchReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveEditorLaunchReply) ProtoMessage() {}
+
+func (x *ResolveEditorLaunchReply) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveEditorLaunchReply.ProtoReflect.Descriptor instead.
+func (*ResolveEditorLaunchReply) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *ResolveEditorLaunchReply) GetMode() EditorLaunchMode {
+	if x != nil {
+		return x.Mode
+	}
+	return EditorLaunchMode_EDITOR_LAUNCH_MODE_UNSPECIFIED
+}
+
+func (x *ResolveEditorLaunchReply) GetArgv() []string {
+	if x != nil {
+		return x.Argv
+	}
+	return nil
+}
+
+func (x *ResolveEditorLaunchReply) GetWorkspaceFolder() string {
+	if x != nil {
+		return x.WorkspaceFolder
+	}
+	return ""
+}
+
 // TriggerLogs reads back an automation trigger's recorded event logs. Each time
 // a trigger fires, the daemon writes the firing's payload (the webhook body, or
 // the schedule fire-time) to a per-trigger log directory, keeping the most
@@ -3036,7 +3220,7 @@ type TriggerLogsRequest struct {
 
 func (x *TriggerLogsRequest) Reset() {
 	*x = TriggerLogsRequest{}
-	mi := &file_exec_proto_msgTypes[41]
+	mi := &file_exec_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3048,7 +3232,7 @@ func (x *TriggerLogsRequest) String() string {
 func (*TriggerLogsRequest) ProtoMessage() {}
 
 func (x *TriggerLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[41]
+	mi := &file_exec_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3061,7 +3245,7 @@ func (x *TriggerLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerLogsRequest.ProtoReflect.Descriptor instead.
 func (*TriggerLogsRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{41}
+	return file_exec_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *TriggerLogsRequest) GetFleet() string {
@@ -3091,7 +3275,7 @@ type TriggerLogsReply struct {
 
 func (x *TriggerLogsReply) Reset() {
 	*x = TriggerLogsReply{}
-	mi := &file_exec_proto_msgTypes[42]
+	mi := &file_exec_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3103,7 +3287,7 @@ func (x *TriggerLogsReply) String() string {
 func (*TriggerLogsReply) ProtoMessage() {}
 
 func (x *TriggerLogsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[42]
+	mi := &file_exec_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3116,7 +3300,7 @@ func (x *TriggerLogsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerLogsReply.ProtoReflect.Descriptor instead.
 func (*TriggerLogsReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{42}
+	return file_exec_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *TriggerLogsReply) GetLogs() string {
@@ -3145,7 +3329,7 @@ type GetCoderTemplateParamsRequest struct {
 
 func (x *GetCoderTemplateParamsRequest) Reset() {
 	*x = GetCoderTemplateParamsRequest{}
-	mi := &file_exec_proto_msgTypes[43]
+	mi := &file_exec_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3157,7 +3341,7 @@ func (x *GetCoderTemplateParamsRequest) String() string {
 func (*GetCoderTemplateParamsRequest) ProtoMessage() {}
 
 func (x *GetCoderTemplateParamsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[43]
+	mi := &file_exec_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3170,7 +3354,7 @@ func (x *GetCoderTemplateParamsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCoderTemplateParamsRequest.ProtoReflect.Descriptor instead.
 func (*GetCoderTemplateParamsRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{43}
+	return file_exec_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetCoderTemplateParamsRequest) GetTemplate() string {
@@ -3196,7 +3380,7 @@ type CoderRichParameter struct {
 
 func (x *CoderRichParameter) Reset() {
 	*x = CoderRichParameter{}
-	mi := &file_exec_proto_msgTypes[44]
+	mi := &file_exec_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3208,7 +3392,7 @@ func (x *CoderRichParameter) String() string {
 func (*CoderRichParameter) ProtoMessage() {}
 
 func (x *CoderRichParameter) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[44]
+	mi := &file_exec_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3221,7 +3405,7 @@ func (x *CoderRichParameter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CoderRichParameter.ProtoReflect.Descriptor instead.
 func (*CoderRichParameter) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{44}
+	return file_exec_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *CoderRichParameter) GetName() string {
@@ -3269,7 +3453,7 @@ type GetCoderTemplateParamsReply struct {
 
 func (x *GetCoderTemplateParamsReply) Reset() {
 	*x = GetCoderTemplateParamsReply{}
-	mi := &file_exec_proto_msgTypes[45]
+	mi := &file_exec_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3281,7 +3465,7 @@ func (x *GetCoderTemplateParamsReply) String() string {
 func (*GetCoderTemplateParamsReply) ProtoMessage() {}
 
 func (x *GetCoderTemplateParamsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[45]
+	mi := &file_exec_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3294,7 +3478,7 @@ func (x *GetCoderTemplateParamsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCoderTemplateParamsReply.ProtoReflect.Descriptor instead.
 func (*GetCoderTemplateParamsReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{45}
+	return file_exec_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *GetCoderTemplateParamsReply) GetParameters() []*CoderRichParameter {
@@ -3324,7 +3508,7 @@ type GetBrowserConfigRequest struct {
 
 func (x *GetBrowserConfigRequest) Reset() {
 	*x = GetBrowserConfigRequest{}
-	mi := &file_exec_proto_msgTypes[46]
+	mi := &file_exec_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3336,7 +3520,7 @@ func (x *GetBrowserConfigRequest) String() string {
 func (*GetBrowserConfigRequest) ProtoMessage() {}
 
 func (x *GetBrowserConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[46]
+	mi := &file_exec_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3349,7 +3533,7 @@ func (x *GetBrowserConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBrowserConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetBrowserConfigRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{46}
+	return file_exec_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *GetBrowserConfigRequest) GetFleet() string {
@@ -3378,7 +3562,7 @@ type GetBrowserConfigReply struct {
 
 func (x *GetBrowserConfigReply) Reset() {
 	*x = GetBrowserConfigReply{}
-	mi := &file_exec_proto_msgTypes[47]
+	mi := &file_exec_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3390,7 +3574,7 @@ func (x *GetBrowserConfigReply) String() string {
 func (*GetBrowserConfigReply) ProtoMessage() {}
 
 func (x *GetBrowserConfigReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[47]
+	mi := &file_exec_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3403,7 +3587,7 @@ func (x *GetBrowserConfigReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBrowserConfigReply.ProtoReflect.Descriptor instead.
 func (*GetBrowserConfigReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{47}
+	return file_exec_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *GetBrowserConfigReply) GetInitialUrl() string {
@@ -3441,7 +3625,7 @@ type PrepareBrowserRequest struct {
 
 func (x *PrepareBrowserRequest) Reset() {
 	*x = PrepareBrowserRequest{}
-	mi := &file_exec_proto_msgTypes[48]
+	mi := &file_exec_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3453,7 +3637,7 @@ func (x *PrepareBrowserRequest) String() string {
 func (*PrepareBrowserRequest) ProtoMessage() {}
 
 func (x *PrepareBrowserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[48]
+	mi := &file_exec_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3466,7 +3650,7 @@ func (x *PrepareBrowserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareBrowserRequest.ProtoReflect.Descriptor instead.
 func (*PrepareBrowserRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{48}
+	return file_exec_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *PrepareBrowserRequest) GetFleet() string {
@@ -3506,7 +3690,7 @@ type PrepareBrowserReply struct {
 
 func (x *PrepareBrowserReply) Reset() {
 	*x = PrepareBrowserReply{}
-	mi := &file_exec_proto_msgTypes[49]
+	mi := &file_exec_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3518,7 +3702,7 @@ func (x *PrepareBrowserReply) String() string {
 func (*PrepareBrowserReply) ProtoMessage() {}
 
 func (x *PrepareBrowserReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[49]
+	mi := &file_exec_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3531,7 +3715,7 @@ func (x *PrepareBrowserReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareBrowserReply.ProtoReflect.Descriptor instead.
 func (*PrepareBrowserReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{49}
+	return file_exec_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *PrepareBrowserReply) GetInitialUrl() string {
@@ -3732,7 +3916,14 @@ const file_exec_proto_rawDesc = "" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\"-\n" +
 	"\x17ResolveLogsCommandReply\x12\x12\n" +
-	"\x04argv\x18\x01 \x03(\tR\x04argv\"D\n" +
+	"\x04argv\x18\x01 \x03(\tR\x04argv\"N\n" +
+	"\x1aResolveEditorLaunchRequest\x12\x14\n" +
+	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
+	"\binstance\x18\x02 \x01(\tR\binstance\"\x8a\x01\n" +
+	"\x18ResolveEditorLaunchReply\x12/\n" +
+	"\x04mode\x18\x01 \x01(\x0e2\x1b.fleetgrpc.EditorLaunchModeR\x04mode\x12\x12\n" +
+	"\x04argv\x18\x02 \x03(\tR\x04argv\x12)\n" +
+	"\x10workspace_folder\x18\x03 \x01(\tR\x0fworkspaceFolder\"D\n" +
 	"\x12TriggerLogsRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x18\n" +
 	"\atrigger\x18\x02 \x01(\tR\atrigger\"<\n" +
@@ -3769,7 +3960,13 @@ const file_exec_proto_rawDesc = "" +
 	"\v_target_url\"6\n" +
 	"\x13PrepareBrowserReply\x12\x1f\n" +
 	"\vinitial_url\x18\x01 \x01(\tR\n" +
-	"initialUrlB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"initialUrl*\xcb\x01\n" +
+	"\x10EditorLaunchMode\x12\"\n" +
+	"\x1eEDITOR_LAUNCH_MODE_UNSPECIFIED\x10\x00\x12'\n" +
+	"#EDITOR_LAUNCH_MODE_DEVCONTAINER_URI\x10\x01\x12 \n" +
+	"\x1cEDITOR_LAUNCH_MODE_CODER_CLI\x10\x02\x12%\n" +
+	"!EDITOR_LAUNCH_MODE_CODESPACES_CLI\x10\x03\x12!\n" +
+	"\x1dEDITOR_LAUNCH_MODE_REMOTE_SSH\x10\x04B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_exec_proto_rawDescOnce sync.Once
@@ -3783,101 +3980,106 @@ func file_exec_proto_rawDescGZIP() []byte {
 	return file_exec_proto_rawDescData
 }
 
-var file_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 53)
+var file_exec_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
 var file_exec_proto_goTypes = []any{
-	(*ExecIn)(nil),                        // 0: fleetgrpc.ExecIn
-	(*ExecStart)(nil),                     // 1: fleetgrpc.ExecStart
-	(*PodExecStart)(nil),                  // 2: fleetgrpc.PodExecStart
-	(*ExecResize)(nil),                    // 3: fleetgrpc.ExecResize
-	(*ExecOut)(nil),                       // 4: fleetgrpc.ExecOut
-	(*ExecExit)(nil),                      // 5: fleetgrpc.ExecExit
-	(*ResolveExecCommandRequest)(nil),     // 6: fleetgrpc.ResolveExecCommandRequest
-	(*ResolveExecCommandReply)(nil),       // 7: fleetgrpc.ResolveExecCommandReply
-	(*LogsRequest)(nil),                   // 8: fleetgrpc.LogsRequest
-	(*LogLine)(nil),                       // 9: fleetgrpc.LogLine
-	(*ForwardChunk)(nil),                  // 10: fleetgrpc.ForwardChunk
-	(*ForwardOpen)(nil),                   // 11: fleetgrpc.ForwardOpen
-	(*MicUp)(nil),                         // 12: fleetgrpc.MicUp
-	(*MicOpen)(nil),                       // 13: fleetgrpc.MicOpen
-	(*MicDevice)(nil),                     // 14: fleetgrpc.MicDevice
-	(*MicDeviceList)(nil),                 // 15: fleetgrpc.MicDeviceList
-	(*MicDown)(nil),                       // 16: fleetgrpc.MicDown
-	(*MicListDevices)(nil),                // 17: fleetgrpc.MicListDevices
-	(*MicDemand)(nil),                     // 18: fleetgrpc.MicDemand
-	(*MicSource)(nil),                     // 19: fleetgrpc.MicSource
-	(*MicSources)(nil),                    // 20: fleetgrpc.MicSources
-	(*ListMicSourcesRequest)(nil),         // 21: fleetgrpc.ListMicSourcesRequest
-	(*ListMicSourcesReply)(nil),           // 22: fleetgrpc.ListMicSourcesReply
-	(*SSHAgentUp)(nil),                    // 23: fleetgrpc.SSHAgentUp
-	(*SSHAgentHello)(nil),                 // 24: fleetgrpc.SSHAgentHello
-	(*SSHAgentReady)(nil),                 // 25: fleetgrpc.SSHAgentReady
-	(*SSHAgentPong)(nil),                  // 26: fleetgrpc.SSHAgentPong
-	(*SSHAgentDown)(nil),                  // 27: fleetgrpc.SSHAgentDown
-	(*SSHAgentOpen)(nil),                  // 28: fleetgrpc.SSHAgentOpen
-	(*SSHAgentData)(nil),                  // 29: fleetgrpc.SSHAgentData
-	(*SSHAgentClose)(nil),                 // 30: fleetgrpc.SSHAgentClose
-	(*SSHAgentStatus)(nil),                // 31: fleetgrpc.SSHAgentStatus
-	(*SSHAgentPing)(nil),                  // 32: fleetgrpc.SSHAgentPing
-	(*CopyFileRequest)(nil),               // 33: fleetgrpc.CopyFileRequest
-	(*CopyFileChunk)(nil),                 // 34: fleetgrpc.CopyFileChunk
-	(*CopyFileMeta)(nil),                  // 35: fleetgrpc.CopyFileMeta
-	(*CopyIntoChunk)(nil),                 // 36: fleetgrpc.CopyIntoChunk
-	(*CopyIntoOpen)(nil),                  // 37: fleetgrpc.CopyIntoOpen
-	(*CopyIntoReply)(nil),                 // 38: fleetgrpc.CopyIntoReply
-	(*ResolveLogsCommandRequest)(nil),     // 39: fleetgrpc.ResolveLogsCommandRequest
-	(*ResolveLogsCommandReply)(nil),       // 40: fleetgrpc.ResolveLogsCommandReply
-	(*TriggerLogsRequest)(nil),            // 41: fleetgrpc.TriggerLogsRequest
-	(*TriggerLogsReply)(nil),              // 42: fleetgrpc.TriggerLogsReply
-	(*GetCoderTemplateParamsRequest)(nil), // 43: fleetgrpc.GetCoderTemplateParamsRequest
-	(*CoderRichParameter)(nil),            // 44: fleetgrpc.CoderRichParameter
-	(*GetCoderTemplateParamsReply)(nil),   // 45: fleetgrpc.GetCoderTemplateParamsReply
-	(*GetBrowserConfigRequest)(nil),       // 46: fleetgrpc.GetBrowserConfigRequest
-	(*GetBrowserConfigReply)(nil),         // 47: fleetgrpc.GetBrowserConfigReply
-	(*PrepareBrowserRequest)(nil),         // 48: fleetgrpc.PrepareBrowserRequest
-	(*PrepareBrowserReply)(nil),           // 49: fleetgrpc.PrepareBrowserReply
-	nil,                                   // 50: fleetgrpc.ExecStart.EnvEntry
-	nil,                                   // 51: fleetgrpc.PodExecStart.EnvEntry
-	nil,                                   // 52: fleetgrpc.ResolveExecCommandReply.EnvEntry
-	(*timestamppb.Timestamp)(nil),         // 53: google.protobuf.Timestamp
-	(*MicSettings)(nil),                   // 54: fleetgrpc.MicSettings
+	(EditorLaunchMode)(0),                 // 0: fleetgrpc.EditorLaunchMode
+	(*ExecIn)(nil),                        // 1: fleetgrpc.ExecIn
+	(*ExecStart)(nil),                     // 2: fleetgrpc.ExecStart
+	(*PodExecStart)(nil),                  // 3: fleetgrpc.PodExecStart
+	(*ExecResize)(nil),                    // 4: fleetgrpc.ExecResize
+	(*ExecOut)(nil),                       // 5: fleetgrpc.ExecOut
+	(*ExecExit)(nil),                      // 6: fleetgrpc.ExecExit
+	(*ResolveExecCommandRequest)(nil),     // 7: fleetgrpc.ResolveExecCommandRequest
+	(*ResolveExecCommandReply)(nil),       // 8: fleetgrpc.ResolveExecCommandReply
+	(*LogsRequest)(nil),                   // 9: fleetgrpc.LogsRequest
+	(*LogLine)(nil),                       // 10: fleetgrpc.LogLine
+	(*ForwardChunk)(nil),                  // 11: fleetgrpc.ForwardChunk
+	(*ForwardOpen)(nil),                   // 12: fleetgrpc.ForwardOpen
+	(*MicUp)(nil),                         // 13: fleetgrpc.MicUp
+	(*MicOpen)(nil),                       // 14: fleetgrpc.MicOpen
+	(*MicDevice)(nil),                     // 15: fleetgrpc.MicDevice
+	(*MicDeviceList)(nil),                 // 16: fleetgrpc.MicDeviceList
+	(*MicDown)(nil),                       // 17: fleetgrpc.MicDown
+	(*MicListDevices)(nil),                // 18: fleetgrpc.MicListDevices
+	(*MicDemand)(nil),                     // 19: fleetgrpc.MicDemand
+	(*MicSource)(nil),                     // 20: fleetgrpc.MicSource
+	(*MicSources)(nil),                    // 21: fleetgrpc.MicSources
+	(*ListMicSourcesRequest)(nil),         // 22: fleetgrpc.ListMicSourcesRequest
+	(*ListMicSourcesReply)(nil),           // 23: fleetgrpc.ListMicSourcesReply
+	(*SSHAgentUp)(nil),                    // 24: fleetgrpc.SSHAgentUp
+	(*SSHAgentHello)(nil),                 // 25: fleetgrpc.SSHAgentHello
+	(*SSHAgentReady)(nil),                 // 26: fleetgrpc.SSHAgentReady
+	(*SSHAgentPong)(nil),                  // 27: fleetgrpc.SSHAgentPong
+	(*SSHAgentDown)(nil),                  // 28: fleetgrpc.SSHAgentDown
+	(*SSHAgentOpen)(nil),                  // 29: fleetgrpc.SSHAgentOpen
+	(*SSHAgentData)(nil),                  // 30: fleetgrpc.SSHAgentData
+	(*SSHAgentClose)(nil),                 // 31: fleetgrpc.SSHAgentClose
+	(*SSHAgentStatus)(nil),                // 32: fleetgrpc.SSHAgentStatus
+	(*SSHAgentPing)(nil),                  // 33: fleetgrpc.SSHAgentPing
+	(*CopyFileRequest)(nil),               // 34: fleetgrpc.CopyFileRequest
+	(*CopyFileChunk)(nil),                 // 35: fleetgrpc.CopyFileChunk
+	(*CopyFileMeta)(nil),                  // 36: fleetgrpc.CopyFileMeta
+	(*CopyIntoChunk)(nil),                 // 37: fleetgrpc.CopyIntoChunk
+	(*CopyIntoOpen)(nil),                  // 38: fleetgrpc.CopyIntoOpen
+	(*CopyIntoReply)(nil),                 // 39: fleetgrpc.CopyIntoReply
+	(*ResolveLogsCommandRequest)(nil),     // 40: fleetgrpc.ResolveLogsCommandRequest
+	(*ResolveLogsCommandReply)(nil),       // 41: fleetgrpc.ResolveLogsCommandReply
+	(*ResolveEditorLaunchRequest)(nil),    // 42: fleetgrpc.ResolveEditorLaunchRequest
+	(*ResolveEditorLaunchReply)(nil),      // 43: fleetgrpc.ResolveEditorLaunchReply
+	(*TriggerLogsRequest)(nil),            // 44: fleetgrpc.TriggerLogsRequest
+	(*TriggerLogsReply)(nil),              // 45: fleetgrpc.TriggerLogsReply
+	(*GetCoderTemplateParamsRequest)(nil), // 46: fleetgrpc.GetCoderTemplateParamsRequest
+	(*CoderRichParameter)(nil),            // 47: fleetgrpc.CoderRichParameter
+	(*GetCoderTemplateParamsReply)(nil),   // 48: fleetgrpc.GetCoderTemplateParamsReply
+	(*GetBrowserConfigRequest)(nil),       // 49: fleetgrpc.GetBrowserConfigRequest
+	(*GetBrowserConfigReply)(nil),         // 50: fleetgrpc.GetBrowserConfigReply
+	(*PrepareBrowserRequest)(nil),         // 51: fleetgrpc.PrepareBrowserRequest
+	(*PrepareBrowserReply)(nil),           // 52: fleetgrpc.PrepareBrowserReply
+	nil,                                   // 53: fleetgrpc.ExecStart.EnvEntry
+	nil,                                   // 54: fleetgrpc.PodExecStart.EnvEntry
+	nil,                                   // 55: fleetgrpc.ResolveExecCommandReply.EnvEntry
+	(*timestamppb.Timestamp)(nil),         // 56: google.protobuf.Timestamp
+	(*MicSettings)(nil),                   // 57: fleetgrpc.MicSettings
 }
 var file_exec_proto_depIdxs = []int32{
-	1,  // 0: fleetgrpc.ExecIn.start:type_name -> fleetgrpc.ExecStart
-	3,  // 1: fleetgrpc.ExecIn.resize:type_name -> fleetgrpc.ExecResize
-	2,  // 2: fleetgrpc.ExecIn.pod_start:type_name -> fleetgrpc.PodExecStart
-	50, // 3: fleetgrpc.ExecStart.env:type_name -> fleetgrpc.ExecStart.EnvEntry
-	51, // 4: fleetgrpc.PodExecStart.env:type_name -> fleetgrpc.PodExecStart.EnvEntry
-	5,  // 5: fleetgrpc.ExecOut.exit:type_name -> fleetgrpc.ExecExit
-	52, // 6: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
-	53, // 7: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
-	11, // 8: fleetgrpc.ForwardChunk.open:type_name -> fleetgrpc.ForwardOpen
-	13, // 9: fleetgrpc.MicUp.open:type_name -> fleetgrpc.MicOpen
-	15, // 10: fleetgrpc.MicUp.devices:type_name -> fleetgrpc.MicDeviceList
-	14, // 11: fleetgrpc.MicDeviceList.devices:type_name -> fleetgrpc.MicDevice
-	18, // 12: fleetgrpc.MicDown.demand:type_name -> fleetgrpc.MicDemand
-	17, // 13: fleetgrpc.MicDown.list_devices:type_name -> fleetgrpc.MicListDevices
-	14, // 14: fleetgrpc.MicSource.devices:type_name -> fleetgrpc.MicDevice
-	19, // 15: fleetgrpc.MicSources.sources:type_name -> fleetgrpc.MicSource
-	54, // 16: fleetgrpc.MicSources.settings:type_name -> fleetgrpc.MicSettings
-	20, // 17: fleetgrpc.ListMicSourcesReply.sources:type_name -> fleetgrpc.MicSources
-	24, // 18: fleetgrpc.SSHAgentUp.hello:type_name -> fleetgrpc.SSHAgentHello
-	25, // 19: fleetgrpc.SSHAgentUp.ready:type_name -> fleetgrpc.SSHAgentReady
-	29, // 20: fleetgrpc.SSHAgentUp.data:type_name -> fleetgrpc.SSHAgentData
-	30, // 21: fleetgrpc.SSHAgentUp.close:type_name -> fleetgrpc.SSHAgentClose
-	26, // 22: fleetgrpc.SSHAgentUp.pong:type_name -> fleetgrpc.SSHAgentPong
-	28, // 23: fleetgrpc.SSHAgentDown.open:type_name -> fleetgrpc.SSHAgentOpen
-	29, // 24: fleetgrpc.SSHAgentDown.data:type_name -> fleetgrpc.SSHAgentData
-	30, // 25: fleetgrpc.SSHAgentDown.close:type_name -> fleetgrpc.SSHAgentClose
-	31, // 26: fleetgrpc.SSHAgentDown.status:type_name -> fleetgrpc.SSHAgentStatus
-	32, // 27: fleetgrpc.SSHAgentDown.ping:type_name -> fleetgrpc.SSHAgentPing
-	35, // 28: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
-	37, // 29: fleetgrpc.CopyIntoChunk.open:type_name -> fleetgrpc.CopyIntoOpen
-	44, // 30: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
-	31, // [31:31] is the sub-list for method output_type
-	31, // [31:31] is the sub-list for method input_type
-	31, // [31:31] is the sub-list for extension type_name
-	31, // [31:31] is the sub-list for extension extendee
-	0,  // [0:31] is the sub-list for field type_name
+	2,  // 0: fleetgrpc.ExecIn.start:type_name -> fleetgrpc.ExecStart
+	4,  // 1: fleetgrpc.ExecIn.resize:type_name -> fleetgrpc.ExecResize
+	3,  // 2: fleetgrpc.ExecIn.pod_start:type_name -> fleetgrpc.PodExecStart
+	53, // 3: fleetgrpc.ExecStart.env:type_name -> fleetgrpc.ExecStart.EnvEntry
+	54, // 4: fleetgrpc.PodExecStart.env:type_name -> fleetgrpc.PodExecStart.EnvEntry
+	6,  // 5: fleetgrpc.ExecOut.exit:type_name -> fleetgrpc.ExecExit
+	55, // 6: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
+	56, // 7: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
+	12, // 8: fleetgrpc.ForwardChunk.open:type_name -> fleetgrpc.ForwardOpen
+	14, // 9: fleetgrpc.MicUp.open:type_name -> fleetgrpc.MicOpen
+	16, // 10: fleetgrpc.MicUp.devices:type_name -> fleetgrpc.MicDeviceList
+	15, // 11: fleetgrpc.MicDeviceList.devices:type_name -> fleetgrpc.MicDevice
+	19, // 12: fleetgrpc.MicDown.demand:type_name -> fleetgrpc.MicDemand
+	18, // 13: fleetgrpc.MicDown.list_devices:type_name -> fleetgrpc.MicListDevices
+	15, // 14: fleetgrpc.MicSource.devices:type_name -> fleetgrpc.MicDevice
+	20, // 15: fleetgrpc.MicSources.sources:type_name -> fleetgrpc.MicSource
+	57, // 16: fleetgrpc.MicSources.settings:type_name -> fleetgrpc.MicSettings
+	21, // 17: fleetgrpc.ListMicSourcesReply.sources:type_name -> fleetgrpc.MicSources
+	25, // 18: fleetgrpc.SSHAgentUp.hello:type_name -> fleetgrpc.SSHAgentHello
+	26, // 19: fleetgrpc.SSHAgentUp.ready:type_name -> fleetgrpc.SSHAgentReady
+	30, // 20: fleetgrpc.SSHAgentUp.data:type_name -> fleetgrpc.SSHAgentData
+	31, // 21: fleetgrpc.SSHAgentUp.close:type_name -> fleetgrpc.SSHAgentClose
+	27, // 22: fleetgrpc.SSHAgentUp.pong:type_name -> fleetgrpc.SSHAgentPong
+	29, // 23: fleetgrpc.SSHAgentDown.open:type_name -> fleetgrpc.SSHAgentOpen
+	30, // 24: fleetgrpc.SSHAgentDown.data:type_name -> fleetgrpc.SSHAgentData
+	31, // 25: fleetgrpc.SSHAgentDown.close:type_name -> fleetgrpc.SSHAgentClose
+	32, // 26: fleetgrpc.SSHAgentDown.status:type_name -> fleetgrpc.SSHAgentStatus
+	33, // 27: fleetgrpc.SSHAgentDown.ping:type_name -> fleetgrpc.SSHAgentPing
+	36, // 28: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
+	38, // 29: fleetgrpc.CopyIntoChunk.open:type_name -> fleetgrpc.CopyIntoOpen
+	0,  // 30: fleetgrpc.ResolveEditorLaunchReply.mode:type_name -> fleetgrpc.EditorLaunchMode
+	47, // 31: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
+	32, // [32:32] is the sub-list for method output_type
+	32, // [32:32] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_exec_proto_init() }
@@ -3934,19 +4136,20 @@ func file_exec_proto_init() {
 		(*CopyIntoChunk_Open)(nil),
 		(*CopyIntoChunk_Data)(nil),
 	}
-	file_exec_proto_msgTypes[48].OneofWrappers = []any{}
+	file_exec_proto_msgTypes[50].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_exec_proto_rawDesc), len(file_exec_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   53,
+			NumEnums:      1,
+			NumMessages:   55,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_exec_proto_goTypes,
 		DependencyIndexes: file_exec_proto_depIdxs,
+		EnumInfos:         file_exec_proto_enumTypes,
 		MessageInfos:      file_exec_proto_msgTypes,
 	}.Build()
 	File_exec_proto = out.File

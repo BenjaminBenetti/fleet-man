@@ -21,6 +21,61 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type EditorEndpointKind int32
+
+const (
+	EditorEndpointKind_EDITOR_ENDPOINT_KIND_UNSPECIFIED EditorEndpointKind = 0
+	// GATEWAY: address is a FLEET_GATEWAY URL.
+	EditorEndpointKind_EDITOR_ENDPOINT_KIND_GATEWAY EditorEndpointKind = 1
+	// SSH: address is a FLEET_SSH ssh:// URL (the local daemon keeps the tunnel).
+	EditorEndpointKind_EDITOR_ENDPOINT_KIND_SSH EditorEndpointKind = 2
+	// SERVER: address is a FLEET_SERVER host:port.
+	EditorEndpointKind_EDITOR_ENDPOINT_KIND_SERVER EditorEndpointKind = 3
+)
+
+// Enum value maps for EditorEndpointKind.
+var (
+	EditorEndpointKind_name = map[int32]string{
+		0: "EDITOR_ENDPOINT_KIND_UNSPECIFIED",
+		1: "EDITOR_ENDPOINT_KIND_GATEWAY",
+		2: "EDITOR_ENDPOINT_KIND_SSH",
+		3: "EDITOR_ENDPOINT_KIND_SERVER",
+	}
+	EditorEndpointKind_value = map[string]int32{
+		"EDITOR_ENDPOINT_KIND_UNSPECIFIED": 0,
+		"EDITOR_ENDPOINT_KIND_GATEWAY":     1,
+		"EDITOR_ENDPOINT_KIND_SSH":         2,
+		"EDITOR_ENDPOINT_KIND_SERVER":      3,
+	}
+)
+
+func (x EditorEndpointKind) Enum() *EditorEndpointKind {
+	p := new(EditorEndpointKind)
+	*p = x
+	return p
+}
+
+func (x EditorEndpointKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EditorEndpointKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_armada_proto_enumTypes[0].Descriptor()
+}
+
+func (EditorEndpointKind) Type() protoreflect.EnumType {
+	return &file_armada_proto_enumTypes[0]
+}
+
+func (x EditorEndpointKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EditorEndpointKind.Descriptor instead.
+func (EditorEndpointKind) EnumDescriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{0}
+}
+
 // ArmadaRemote is one registered remote fleet: where it is and the bearer
 // token that authenticates to the daemon behind it.
 type ArmadaRemote struct {
@@ -766,6 +821,249 @@ func (x *SetArmadaReply) GetRemotes() []*ArmadaRemote {
 	return nil
 }
 
+// EditorEndpoint is one remote daemon an editor alias leads to.
+type EditorEndpoint struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Kind    EditorEndpointKind     `protobuf:"varint,1,opt,name=kind,proto3,enum=fleetgrpc.EditorEndpointKind" json:"kind,omitempty"`
+	Address string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	// The bearer token, only when it came from FLEET_TOKEN (otherwise ssh-proxy
+	// falls back to ~/.fleet/mcp.token, as the client did). Never written into
+	// ssh config.
+	Token         string `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EditorEndpoint) Reset() {
+	*x = EditorEndpoint{}
+	mi := &file_armada_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EditorEndpoint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EditorEndpoint) ProtoMessage() {}
+
+func (x *EditorEndpoint) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EditorEndpoint.ProtoReflect.Descriptor instead.
+func (*EditorEndpoint) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *EditorEndpoint) GetKind() EditorEndpointKind {
+	if x != nil {
+		return x.Kind
+	}
+	return EditorEndpointKind_EDITOR_ENDPOINT_KIND_UNSPECIFIED
+}
+
+func (x *EditorEndpoint) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *EditorEndpoint) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+type SaveEditorEndpointRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Endpoint      *EditorEndpoint        `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveEditorEndpointRequest) Reset() {
+	*x = SaveEditorEndpointRequest{}
+	mi := &file_armada_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveEditorEndpointRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveEditorEndpointRequest) ProtoMessage() {}
+
+func (x *SaveEditorEndpointRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveEditorEndpointRequest.ProtoReflect.Descriptor instead.
+func (*SaveEditorEndpointRequest) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *SaveEditorEndpointRequest) GetEndpoint() *EditorEndpoint {
+	if x != nil {
+		return x.Endpoint
+	}
+	return nil
+}
+
+type SaveEditorEndpointReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The alias's remote part for this endpoint: "r" + six hex digits.
+	Remote        string `protobuf:"bytes,1,opt,name=remote,proto3" json:"remote,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveEditorEndpointReply) Reset() {
+	*x = SaveEditorEndpointReply{}
+	mi := &file_armada_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveEditorEndpointReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveEditorEndpointReply) ProtoMessage() {}
+
+func (x *SaveEditorEndpointReply) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveEditorEndpointReply.ProtoReflect.Descriptor instead.
+func (*SaveEditorEndpointReply) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *SaveEditorEndpointReply) GetRemote() string {
+	if x != nil {
+		return x.Remote
+	}
+	return ""
+}
+
+type ResolveEditorEndpointRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The alias's remote part ("r" + six hex digits).
+	Remote        string `protobuf:"bytes,1,opt,name=remote,proto3" json:"remote,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveEditorEndpointRequest) Reset() {
+	*x = ResolveEditorEndpointRequest{}
+	mi := &file_armada_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveEditorEndpointRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveEditorEndpointRequest) ProtoMessage() {}
+
+func (x *ResolveEditorEndpointRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveEditorEndpointRequest.ProtoReflect.Descriptor instead.
+func (*ResolveEditorEndpointRequest) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ResolveEditorEndpointRequest) GetRemote() string {
+	if x != nil {
+		return x.Remote
+	}
+	return ""
+}
+
+type ResolveEditorEndpointReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Unset when no record has that hash.
+	Endpoint      *EditorEndpoint `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveEditorEndpointReply) Reset() {
+	*x = ResolveEditorEndpointReply{}
+	mi := &file_armada_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveEditorEndpointReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveEditorEndpointReply) ProtoMessage() {}
+
+func (x *ResolveEditorEndpointReply) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveEditorEndpointReply.ProtoReflect.Descriptor instead.
+func (*ResolveEditorEndpointReply) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ResolveEditorEndpointReply) GetEndpoint() *EditorEndpoint {
+	if x != nil {
+		return x.Endpoint
+	}
+	return nil
+}
+
 var File_armada_proto protoreflect.FileDescriptor
 
 const file_armada_proto_rawDesc = "" +
@@ -813,7 +1111,24 @@ const file_armada_proto_rawDesc = "" +
 	"\x10SetArmadaRequest\x121\n" +
 	"\aremotes\x18\x01 \x03(\v2\x17.fleetgrpc.ArmadaRemoteR\aremotes\"C\n" +
 	"\x0eSetArmadaReply\x121\n" +
-	"\aremotes\x18\x01 \x03(\v2\x17.fleetgrpc.ArmadaRemoteR\aremotesB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"\aremotes\x18\x01 \x03(\v2\x17.fleetgrpc.ArmadaRemoteR\aremotes\"s\n" +
+	"\x0eEditorEndpoint\x121\n" +
+	"\x04kind\x18\x01 \x01(\x0e2\x1d.fleetgrpc.EditorEndpointKindR\x04kind\x12\x18\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x14\n" +
+	"\x05token\x18\x03 \x01(\tR\x05token\"R\n" +
+	"\x19SaveEditorEndpointRequest\x125\n" +
+	"\bendpoint\x18\x01 \x01(\v2\x19.fleetgrpc.EditorEndpointR\bendpoint\"1\n" +
+	"\x17SaveEditorEndpointReply\x12\x16\n" +
+	"\x06remote\x18\x01 \x01(\tR\x06remote\"6\n" +
+	"\x1cResolveEditorEndpointRequest\x12\x16\n" +
+	"\x06remote\x18\x01 \x01(\tR\x06remote\"S\n" +
+	"\x1aResolveEditorEndpointReply\x125\n" +
+	"\bendpoint\x18\x01 \x01(\v2\x19.fleetgrpc.EditorEndpointR\bendpoint*\x9b\x01\n" +
+	"\x12EditorEndpointKind\x12$\n" +
+	" EDITOR_ENDPOINT_KIND_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cEDITOR_ENDPOINT_KIND_GATEWAY\x10\x01\x12\x1c\n" +
+	"\x18EDITOR_ENDPOINT_KIND_SSH\x10\x02\x12\x1f\n" +
+	"\x1bEDITOR_ENDPOINT_KIND_SERVER\x10\x03B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_armada_proto_rawDescOnce sync.Once
@@ -827,33 +1142,43 @@ func file_armada_proto_rawDescGZIP() []byte {
 	return file_armada_proto_rawDescData
 }
 
-var file_armada_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_armada_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_armada_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_armada_proto_goTypes = []any{
-	(*ArmadaRemote)(nil),               // 0: fleetgrpc.ArmadaRemote
-	(*ResolveArmadaRemoteRequest)(nil), // 1: fleetgrpc.ResolveArmadaRemoteRequest
-	(*ResolveArmadaRemoteReply)(nil),   // 2: fleetgrpc.ResolveArmadaRemoteReply
-	(*SSHHostKey)(nil),                 // 3: fleetgrpc.SSHHostKey
-	(*UnknownSSHHostKey)(nil),          // 4: fleetgrpc.UnknownSSHHostKey
-	(*TrustSSHHostKeyRequest)(nil),     // 5: fleetgrpc.TrustSSHHostKeyRequest
-	(*TrustSSHHostKeyReply)(nil),       // 6: fleetgrpc.TrustSSHHostKeyReply
-	(*GitHostKeyPrompt)(nil),           // 7: fleetgrpc.GitHostKeyPrompt
-	(*GitHostKeyAnswer)(nil),           // 8: fleetgrpc.GitHostKeyAnswer
-	(*GetArmadaRequest)(nil),           // 9: fleetgrpc.GetArmadaRequest
-	(*GetArmadaReply)(nil),             // 10: fleetgrpc.GetArmadaReply
-	(*SetArmadaRequest)(nil),           // 11: fleetgrpc.SetArmadaRequest
-	(*SetArmadaReply)(nil),             // 12: fleetgrpc.SetArmadaReply
+	(EditorEndpointKind)(0),              // 0: fleetgrpc.EditorEndpointKind
+	(*ArmadaRemote)(nil),                 // 1: fleetgrpc.ArmadaRemote
+	(*ResolveArmadaRemoteRequest)(nil),   // 2: fleetgrpc.ResolveArmadaRemoteRequest
+	(*ResolveArmadaRemoteReply)(nil),     // 3: fleetgrpc.ResolveArmadaRemoteReply
+	(*SSHHostKey)(nil),                   // 4: fleetgrpc.SSHHostKey
+	(*UnknownSSHHostKey)(nil),            // 5: fleetgrpc.UnknownSSHHostKey
+	(*TrustSSHHostKeyRequest)(nil),       // 6: fleetgrpc.TrustSSHHostKeyRequest
+	(*TrustSSHHostKeyReply)(nil),         // 7: fleetgrpc.TrustSSHHostKeyReply
+	(*GitHostKeyPrompt)(nil),             // 8: fleetgrpc.GitHostKeyPrompt
+	(*GitHostKeyAnswer)(nil),             // 9: fleetgrpc.GitHostKeyAnswer
+	(*GetArmadaRequest)(nil),             // 10: fleetgrpc.GetArmadaRequest
+	(*GetArmadaReply)(nil),               // 11: fleetgrpc.GetArmadaReply
+	(*SetArmadaRequest)(nil),             // 12: fleetgrpc.SetArmadaRequest
+	(*SetArmadaReply)(nil),               // 13: fleetgrpc.SetArmadaReply
+	(*EditorEndpoint)(nil),               // 14: fleetgrpc.EditorEndpoint
+	(*SaveEditorEndpointRequest)(nil),    // 15: fleetgrpc.SaveEditorEndpointRequest
+	(*SaveEditorEndpointReply)(nil),      // 16: fleetgrpc.SaveEditorEndpointReply
+	(*ResolveEditorEndpointRequest)(nil), // 17: fleetgrpc.ResolveEditorEndpointRequest
+	(*ResolveEditorEndpointReply)(nil),   // 18: fleetgrpc.ResolveEditorEndpointReply
 }
 var file_armada_proto_depIdxs = []int32{
-	3, // 0: fleetgrpc.UnknownSSHHostKey.keys:type_name -> fleetgrpc.SSHHostKey
-	4, // 1: fleetgrpc.GitHostKeyPrompt.key:type_name -> fleetgrpc.UnknownSSHHostKey
-	0, // 2: fleetgrpc.GetArmadaReply.remotes:type_name -> fleetgrpc.ArmadaRemote
-	0, // 3: fleetgrpc.SetArmadaRequest.remotes:type_name -> fleetgrpc.ArmadaRemote
-	0, // 4: fleetgrpc.SetArmadaReply.remotes:type_name -> fleetgrpc.ArmadaRemote
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	4,  // 0: fleetgrpc.UnknownSSHHostKey.keys:type_name -> fleetgrpc.SSHHostKey
+	5,  // 1: fleetgrpc.GitHostKeyPrompt.key:type_name -> fleetgrpc.UnknownSSHHostKey
+	1,  // 2: fleetgrpc.GetArmadaReply.remotes:type_name -> fleetgrpc.ArmadaRemote
+	1,  // 3: fleetgrpc.SetArmadaRequest.remotes:type_name -> fleetgrpc.ArmadaRemote
+	1,  // 4: fleetgrpc.SetArmadaReply.remotes:type_name -> fleetgrpc.ArmadaRemote
+	0,  // 5: fleetgrpc.EditorEndpoint.kind:type_name -> fleetgrpc.EditorEndpointKind
+	14, // 6: fleetgrpc.SaveEditorEndpointRequest.endpoint:type_name -> fleetgrpc.EditorEndpoint
+	14, // 7: fleetgrpc.ResolveEditorEndpointReply.endpoint:type_name -> fleetgrpc.EditorEndpoint
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_armada_proto_init() }
@@ -866,13 +1191,14 @@ func file_armada_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_armada_proto_rawDesc), len(file_armada_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   13,
+			NumEnums:      1,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_armada_proto_goTypes,
 		DependencyIndexes: file_armada_proto_depIdxs,
+		EnumInfos:         file_armada_proto_enumTypes,
 		MessageInfos:      file_armada_proto_msgTypes,
 	}.Build()
 	File_armada_proto = out.File

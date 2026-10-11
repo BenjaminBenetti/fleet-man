@@ -101,11 +101,23 @@ func (s *service) Exec(stream fleetgrpc.FleetService_ExecServer) error {
 	if start.GetTty() {
 		ensureInstanceTmux(backendutil.NewForInstance(inst, false))
 	}
+	// An editor session (VS Code Remote-SSH through `fleet ssh-proxy`) gets
+	// the instance's editor settings first, and reports what it applied in
+	// the creation log as well as to the caller.
+	editor := isEditorSession(argv)
+	if editor {
+		prepareEditorSession(stream.Context(), start.GetFleet(), inst)
+	}
 	began := time.Now()
 	proc, err := openExecStream(stream.Context(), inst, start)
 	if err != nil {
 		flog.Error("exec session", append(logArgs, "ms", flog.MillisSince(began), "err", err)...)
 		return err
+	}
+	if editor {
+		log := newCreationLogAppender(start.GetFleet(), start.GetInstance())
+		defer log.Close()
+		proc = withCreationLog(proc, log)
 	}
 	if start.GetTty() {
 		// A terminal attached: the instance's "sessions reset" notice has
