@@ -326,7 +326,15 @@ func TestKubePodsLeavesFleetsOwnStartsAlone(t *testing.T) {
 	r.waitTracked()
 	sts := kubeSTS("one")
 	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusRunning, Restart: &backend.Restart{ID: "u2/0", Cause: backend.RestartPodDeleted}})
-	r.eventually("the observation", func() bool { return r.runtime("one") != nil })
+	// The restart itself handled while the record still says starting (the
+	// runtime alone does not show it: the evaluation Track asks for publishes
+	// one too, and may come first).
+	r.eventually("the observation", func() bool {
+		r.svc.kubePods.mu.Lock()
+		defer r.svc.kubePods.mu.Unlock()
+		ki := r.svc.kubePods.insts[kubeRef{"c1", sts}]
+		return ki != nil && ki.seenRestart == "u2/0"
+	})
 	// The start finishes; the same restart is still the last one.
 	if err := state.Update(func(st *state.State) error {
 		st.Fleets["alpha"].Instances[0].Status = fleet.StatusRunning
