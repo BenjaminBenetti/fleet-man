@@ -351,6 +351,58 @@ func TestClaudeJSONIsNeverEmptied(t *testing.T) {
 	r2.wantFile("files", ".claude.json", map[string]string{"host": claudeJSON, "a1": claudeJSON})
 }
 
+// TestARefusedSeedIsNoBaseForItsMaker checks the side that made the
+// fleet's ~/.claude.json, seeding '{}' over it and writing its first config
+// over the refused seed before the file is back, has its keys merged into
+// the fleet's file: its change was made on the seed, not on the file it
+// made (no fast forward by the origin's rule either).
+func TestARefusedSeedIsNoBaseForItsMaker(t *testing.T) {
+	r := mergeRig(t, 0, host)
+	f := r.faulty(SideInfo{ID: "a3", Location: "k1"})
+	r.write("a3", "files", ".claude.json", claudeJSON)
+	r.sync()
+	r.wantFile("files", ".claude.json", map[string]string{"host": claudeJSON})
+	f.set(func(f *faultyPeer) { f.deaf = true })
+	r.write("a3", "files", ".claude.json", "{}")
+	r.scan("a3")
+	r.write("a3", "files", ".claude.json", `{"numStartups":1,"firstStartTime":"now"}`)
+	r.scan("a3")
+	r.heal("a3", f)
+	r.assertConverged()
+	var got map[string]any
+	if err := json.Unmarshal([]byte(r.read("host", "files", ".claude.json")), &got); err != nil {
+		t.Fatalf("host .claude.json: %v", err)
+	}
+	if got["userID"] != "u1" || got["projects"] == nil || got["firstStartTime"] != "now" {
+		t.Errorf("host .claude.json lost keys: %v", got)
+	}
+
+	// The same with the hub killed in between.
+	r2 := mergeRig(t, 0, host)
+	f2 := r2.faulty(SideInfo{ID: "a3", Location: "k1"})
+	r2.write("a3", "files", ".claude.json", claudeJSON)
+	r2.sync()
+	f2.set(func(f *faultyPeer) { f.deaf = true })
+	r2.write("a3", "files", ".claude.json", "{}")
+	r2.scan("a3")
+	r2.crashHub()
+	r2.openHub()
+	for _, id := range r2.order {
+		r2.openSide(r2.sides[id])
+	}
+	r2.write("a3", "files", ".claude.json", `{"numStartups":2}`)
+	r2.scan("a3")
+	r2.heal("a3", f2)
+	r2.assertConverged()
+	got = nil
+	if err := json.Unmarshal([]byte(r2.read("host", "files", ".claude.json")), &got); err != nil {
+		t.Fatalf("host .claude.json: %v", err)
+	}
+	if got["userID"] != "u1" || got["projects"] == nil {
+		t.Errorf("host .claude.json after the hub was killed lost keys: %v", got)
+	}
+}
+
 // TestSettingsMergeAcrossLocations checks settings changed in two places at
 // once both survive everywhere, hooks merged as sets, and the merge is the
 // base of the next round.
@@ -521,6 +573,42 @@ func TestMergingFilesSettle(t *testing.T) {
 	advance(31 * time.Second)
 	if got, _ := scan("settings.json"); !slices.Equal(got, []string{"settings.json"}) {
 		t.Errorf("seen unchanged for the settle time: reported %q", got)
+	}
+}
+
+// TestASettlingFileGoneSettlesNoMore checks a merging file removed while
+// it settles is not waited for again: a side's rescans and flushes would
+// each wait out its settle and scan its folder again, for good.
+func TestASettlingFileGoneSettlesNoMore(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tool")
+	os.MkdirAll(dir, 0o755)
+	tree, err := OpenTree([]TreeRoot{{Name: "tool", Dir: dir}}, TreeOptions{StateDir: t.TempDir(), Table: mergeTable(), Settle: -1, MergeSettle: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tree.Close()
+	for _, name := range []string{"settings.json", "config.toml"} {
+		os.WriteFile(filepath.Join(dir, name), []byte(`a = 1`), 0o644)
+	}
+	if _, _, err := tree.Scan(context.Background(), "tool", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := tree.settling("tool"); len(got) != 2 {
+		t.Fatalf("settling %q, want both files", got)
+	}
+	os.Remove(filepath.Join(dir, "settings.json"))
+	// A scan of another path leaves it be; one that covers it does not.
+	if _, _, err := tree.Scan(context.Background(), "tool", []string{"config.toml"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := tree.settling("tool"); len(got) != 2 {
+		t.Errorf("settling %q after a scan elsewhere, want both files", got)
+	}
+	if _, _, err := tree.Scan(context.Background(), "tool", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := tree.settling("tool"); !slices.Equal(got, []string{"config.toml"}) {
+		t.Errorf("settling %q, want only the file still there", got)
 	}
 }
 

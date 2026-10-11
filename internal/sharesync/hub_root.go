@@ -603,10 +603,16 @@ func (root *hubRoot) commitPlan(p *plan, res MergeResult, extra planExtra) (Ack,
 		}
 		ack.Status = Superseded
 		if now != nil && !p.fast {
+			ack.Rev = now.Rev
+		}
+		if now != nil && p.fast {
 			// A change made on the current state and refused (the seed, a
 			// cleared login) answers rev 0: what the side holds is no state
 			// of the hub's, so its next change there is no fast forward.
-			ack.Rev = now.Rev
+			// Nor is it one by the origin's rule (its next change on the
+			// base it reported, base 0 for a file it made): that change is
+			// made on what was refused.
+			root.unvouch(p.k, now, p.side.info.ID)
 		}
 		return ack, false
 	}
@@ -659,6 +665,22 @@ func (root *hubRoot) commitPlan(p *plan, res MergeResult, extra planExtra) (Ack,
 	}
 	ack.Status = Accepted
 	return ack, false
+}
+
+// unvouch makes the origin's rule fast-forward no change of side's at k
+// that is not made on e's rev, journaled: side's own state was refused
+// there. Called with root.mu held.
+func (root *hubRoot) unvouch(k key, e *hubEntry, side string) {
+	if e.Origin != side || e.Base == e.Rev {
+		return
+	}
+	e.Base = e.Rev
+	if err := root.journal.put(k.journalKey(), e); err == nil {
+		err = root.journal.commit()
+		if err != nil {
+			root.hub.log.Warn("sharesync: recording state", "root", root.name, "err", err)
+		}
+	}
 }
 
 // forget drops the blobs of earlier contents a state kept before and no
