@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/execas"
+	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 )
@@ -250,4 +253,67 @@ func TestIsAgentMissing(t *testing.T) {
 			t.Errorf("isAgentMissing(%v) = %v, want %v", tc.err, got, tc.want)
 		}
 	}
+}
+
+// downKubeconfig is a kubeconfig whose one context's API server does not
+// answer (a loopback port nothing listens on).
+func downKubeconfig(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte(`apiVersion: v1
+kind: Config
+clusters:
+- name: c
+  cluster: {server: "https://`+addr+`"}
+contexts:
+- name: ctx
+  context: {cluster: c, user: u, namespace: team}
+users:
+- name: u
+  user: {token: tok}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// With fleetd away, the shim reaches the cluster with the kubeconfig itself:
+// a cluster that does not answer fails each of its cluster calls (the
+// agent's attach, the raw exec, the live log) with kubernetes:unreachable
+// leading the message, not client-go's bare dial error.
+func TestKubeExecNamesAnUnreachableCluster(t *testing.T) {
+	f := kubeExecFlags{
+		socket: filepath.Join(t.TempDir(), "no-fleetd.sock"), cluster: "kc-1", context: "ctx",
+		kubeconfig: []string{downKubeconfig(t)}, namespace: "team", pod: "fi-x-0", container: "dev", class: "exec",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	check := func(what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: no error from a cluster that does not answer", what)
+		}
+		if code, _, ok := kubeerr.Parse(err.Error()); !ok || !code.Is(kubeerr.Unreachable) {
+			t.Errorf("%s: %q does not lead with %s", what, err, kubeerr.Unreachable)
+		}
+		if !strings.Contains(err.Error(), "connection refused") {
+			t.Errorf("%s: %q lost the dial's own error", what, err)
+		}
+	}
+	code, err := runKubeExecDirect(ctx, f, []string{"true"}, false)
+	if code != -1 {
+		t.Errorf("agent attach: exit %d, want -1", code)
+	}
+	check("agent attach", err)
+	raw := f
+	raw.raw = true
+	_, err = runKubeExecDirect(ctx, raw, []string{"true"}, false)
+	check("raw exec", err)
+	check("logs", runKubeExecLogs(ctx, kubeExecLogsFlags{kubeExecFlags: f}))
 }

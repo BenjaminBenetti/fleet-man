@@ -47,7 +47,16 @@ func (p *Pool) RawScript(ctx context.Context, t PodTarget, script string, stdout
 	return p.paced(ctx, t, []string{"sh", "-s"}, kubeexec.Stdio{Stdin: strings.NewReader(script), Stdout: stdout, Stderr: stderr})
 }
 
+// paced runs argv in the target's verified pod, one kube exec at a time per
+// connection. Its errors carry their kubernetes: code: the fallback is how a
+// command reports a cluster that went away, so its error is what the user
+// sees (kubernetes:unreachable rather than client-go's dial error).
 func (p *Pool) paced(ctx context.Context, t PodTarget, argv []string, stdio kubeexec.Stdio) (int, error) {
+	code, err := p.pacedExec(ctx, t, argv, stdio)
+	return code, classify(err)
+}
+
+func (p *Pool) pacedExec(ctx context.Context, t PodTarget, argv []string, stdio kubeexec.Stdio) (int, error) {
 	c, err := p.Cluster(t.Cluster)
 	if err != nil {
 		return -1, err
