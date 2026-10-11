@@ -147,6 +147,9 @@ type kubeManager struct {
 	loadIdentity func() (owner.Identity, error)
 	newLease     func(link *kubeLink, rec fleet.KubeCluster, id owner.Identity) kubeLease
 	loadRegistry func() (*state.KubeClusters, error)
+	// configurePool hands the daemon's pool the connections
+	// (configureKubePool).
+	configurePool func([]fleet.KubeCluster)
 
 	idOnce sync.Once
 	id     owner.Identity
@@ -185,8 +188,9 @@ func newKubeManager(svc *service) *kubeManager {
 		newLease: func(link *kubeLink, rec fleet.KubeCluster, id owner.Identity) kubeLease {
 			return owner.NewLease(link.client.CoordinationV1(), rec.Namespace, rec.ID, id, owner.LeaseOptions{})
 		},
-		loadRegistry: state.LoadKubeClusters,
-		workers:      map[string]*kubeWorker{},
+		loadRegistry:  state.LoadKubeClusters,
+		configurePool: configureKubePool,
+		workers:       map[string]*kubeWorker{},
 	}
 }
 
@@ -243,7 +247,7 @@ func (m *kubeManager) sync() {
 		flog.Error("kube: load connections", "err", err)
 		return
 	}
-	configureKubePool(reg.Clusters)
+	m.configurePool(reg.Clusters)
 	m.mu.Lock()
 	m.records, m.loaded = reg.Clusters, true
 	var stopped []*kubeWorker
