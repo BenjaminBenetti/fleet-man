@@ -16,9 +16,11 @@
 //     it and using it is refused too (ErrChanged), with nothing done through
 //     the replacement. Operations on a link itself (Lstat, Readlink, Remove,
 //     RemoveAll, Rename, Lchown) act on the link.
-//   - never creates a set-user-ID or set-group-ID file. The files belong to
-//     the daemon's user, and content arriving from a pod must not plant a
-//     set-ID program on the daemon host.
+//   - never sets a set-user-ID or set-group-ID bit: they are dropped from
+//     every mode it is given. The files belong to the daemon's user, and
+//     content arriving from a pod must not plant a set-ID program on the
+//     daemon host. (A folder made inside a set-group-ID folder still
+//     inherits that bit from the kernel, which only steers group ownership.)
 //
 // The walk to an element's folder is portable: one os.Root per folder, each
 // element Lstat-ed and refused when it is a symlink or not a folder, and each
@@ -26,8 +28,10 @@
 // with RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS does the whole walk in one call
 // when the kernel has it. The last element is then reached from that folder
 // with a system call that does not follow it (fstatat, unlinkat, renameat,
-// symlinkat, fchownat, utimensat with AT_SYMLINK_NOFOLLOW, O_CREAT|O_EXCL)
-// or, for opening an existing file, an open checked against the Lstat. A file
+// symlinkat, fchownat, utimensat with AT_SYMLINK_NOFOLLOW, O_CREAT|O_EXCL; a
+// chmod through an O_PATH handle on Linux, which needs neither fchmodat2 nor
+// access to the file, and fchmodat with AT_SYMLINK_NOFOLLOW elsewhere) or,
+// for opening an existing file, an open checked against the Lstat. A file
 // is replaced through a temp file created O_CREAT|O_EXCL in its own folder
 // and renamed over it there.
 //
