@@ -11,8 +11,15 @@ import "fmt"
 // build, restaging it to its own version lazily.
 const (
 	ProtoMin = 1
-	ProtoMax = 1
+	ProtoMax = 2
 )
+
+// ProtoDesiredState is the first version whose control stream carries
+// DesiredState (fleetd to the agent) and DesiredAck (back): the in-pod
+// sockets and control-directory files fleetd wants. An agent that speaks only
+// an older version is still accepted, and restaged lazily; until then it binds
+// no sockets.
+const ProtoDesiredState = 2
 
 // Negotiate picks the version two ranges share: the highest one in both.
 func Negotiate(aMin, aMax, bMin, bMax int) (int, error) {
@@ -93,15 +100,21 @@ const (
 	MsgHelloAck = "hello_ack"
 	MsgLog      = "log"
 	MsgClose    = "close"
+	// MsgDesired carries a DesiredState (fleetd to the agent), MsgDesiredAck
+	// the agent's DesiredAck once it applied one.
+	MsgDesired    = "desired"
+	MsgDesiredAck = "desired_ack"
 )
 
 // ControlMessage is one message on the control stream, sent as a DATA frame.
 // A receiver ignores a type it does not know.
 type ControlMessage struct {
-	Type     string     `json:"type"`
-	Hello    *Hello     `json:"hello,omitempty"`
-	HelloAck *HelloAck  `json:"hello_ack,omitempty"`
-	Log      *LogRecord `json:"log,omitempty"`
+	Type       string        `json:"type"`
+	Hello      *Hello        `json:"hello,omitempty"`
+	HelloAck   *HelloAck     `json:"hello_ack,omitempty"`
+	Log        *LogRecord    `json:"log,omitempty"`
+	Desired    *DesiredState `json:"desired,omitempty"`
+	DesiredAck *DesiredAck   `json:"desired_ack,omitempty"`
 }
 
 // LogRecord is one of the agent's own warnings or errors, for fleet.log.
