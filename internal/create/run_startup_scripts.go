@@ -51,9 +51,12 @@ func runStartupScripts(ctx context.Context, instanceBackend backend.Backend, wsD
 // enabled and supported by the backend. Provision at creation so applications
 // can discover their virtual devices before a playback client attaches.
 // These global settings are not part of startup.ScriptsFor's per-fleet toggles.
+// An instance its backend says can have no audio (backend.AudioGate: a
+// cluster without root, on an image without the audio stack) gets none; the
+// backend's create has already said why on the instance's banner.
 func scriptsForInstance(instanceBackend backend.Backend, settings fleet.FleetSettings, config *state.Config) []startup.Script {
 	scripts := startup.ScriptsFor(settings)
-	if config != nil {
+	if config != nil && backend.AudioUnavailable(instanceBackend) == "" {
 		_, supportsOutput := instanceBackend.(backend.OutputBackend)
 		mic := config.MicSettings.Enabled && instanceBackend.SupportsMicSink()
 		output := config.OutputSettings.Enabled && supportsOutput

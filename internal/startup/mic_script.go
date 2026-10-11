@@ -33,17 +33,78 @@ func MicScript() Script {
 	return AudioScript(true, false)
 }
 
+// The audio script's steps. All is the whole script as the session user, which
+// escalates with sudo for the package install and the files under /etc: what
+// every backend without a root class of its own runs. A backend that runs
+// commands as root itself (backend.RootExecer: a cluster pod's agent) runs
+// the System step as root (the install and /etc, nothing that starts a sound
+// server, which must belong to the session user) and then the User step as
+// the session user; where the instance has no root at all, only User. User
+// installs nothing: it fails (exit 4) when the packages are missing, and when
+// nothing wrote fleet's system-wide configuration (an image that ships the
+// packages on a cluster without root) it writes the session user's own
+// instead: ~/.asoundrc and a drop-in beside the user's pulse client.conf.
+const (
+	audioStepAll    = "all"
+	audioStepSystem = "system"
+	audioStepUser   = "user"
+)
+
+// AudioUnavailableExit is the User step's exit status when the audio packages
+// are missing and it has no root to install them.
+const AudioUnavailableExit = 4
+
 // AudioScript installs the shared stack, then enables only the requested
 // directions. Output-only setup must never open a microphone for validation.
+// Its Privileged and Unprivileged halves are the System and User steps.
 func AudioScript(microphone, output bool) Script {
 	name := "mic"
 	if !microphone {
 		name = "output"
 	}
 	return Script{
-		Name: name,
-		Body: fmt.Sprintf(`marker='%[1]s'
+		Name:         name,
+		Body:         audioScript(microphone, output, audioStepAll),
+		Privileged:   audioScript(microphone, output, audioStepSystem),
+		Unprivileged: audioScript(microphone, output, audioStepUser),
+	}
+}
+
+// AudioInstalledScript exits 0 exactly when the audio stack AudioScript
+// installs is there for the user it runs as (the session user: the sound
+// server and its tools must be theirs to run), for both directions: what a
+// backend that cannot install it (no root) asks of an image.
+func AudioInstalledScript() string {
+	return fmt.Sprintf(`root="${FLEET_MIC_ROOT:-}"
+%s
+installed`, audioInstalledFuncs(true))
+}
+
+// audioInstalledFuncs is the shell functions that tell whether the stack is
+// installed (output: parec too).
+func audioInstalledFuncs(output bool) string {
+	return fmt.Sprintf(`# The ALSA pulse plugin, wherever this distro keeps alsa-lib's plugins
+# (debian: /usr/lib/<triplet>, fedora: /usr/lib64, alpine: /usr/lib). Globs
+# rather than find: findutils is not a given on a slim image.
+have_pulse_plugin() {
+  for libdir in "$root"/usr/lib/alsa-lib "$root"/usr/lib64/alsa-lib "$root"/usr/lib/*/alsa-lib "$root"/lib/*/alsa-lib; do
+    [ -e "$libdir/libasound_module_pcm_pulse.so" ] && return 0
+  done
+  return 1
+}
+
+installed() {
+  command -v pulseaudio >/dev/null 2>&1 && command -v pactl >/dev/null 2>&1 &&
+    command -v arecord >/dev/null 2>&1 && have_pulse_plugin &&
+    { [ '%t' != true ] || command -v parec >/dev/null 2>&1; }
+}`, output)
+}
+
+// audioScript is the audio script's body for one step.
+func audioScript(microphone, output bool, step string) string {
+	return fmt.Sprintf(`marker='%[1]s'
 socket='%[2]s'
+step='%[7]s'
 # Test seam: a prefix for every system path this script reads, writes or runs.
 root="${FLEET_MIC_ROOT:-}"
 fleet_bin="$root%[3]s"
@@ -61,23 +122,17 @@ as_root() {
   fi
 }
 
-# The ALSA pulse plugin, wherever this distro keeps alsa-lib's plugins
-# (debian: /usr/lib/<triplet>, fedora: /usr/lib64, alpine: /usr/lib). Globs
-# rather than find: findutils is not a given on a slim image.
-have_pulse_plugin() {
-  for libdir in "$root"/usr/lib/alsa-lib "$root"/usr/lib64/alsa-lib "$root"/usr/lib/*/alsa-lib "$root"/lib/*/alsa-lib; do
-    [ -e "$libdir/libasound_module_pcm_pulse.so" ] && return 0
-  done
-  return 1
-}
+%[8]s
 
-installed() {
-  command -v pulseaudio >/dev/null 2>&1 && command -v pactl >/dev/null 2>&1 &&
-    command -v arecord >/dev/null 2>&1 && have_pulse_plugin &&
-    { [ '%[5]t' != true ] || command -v parec >/dev/null 2>&1; }
-}
-
-if installed; then
+if [ "$step" = user ]; then
+  # The session user installs nothing: root did (the step before), or the
+  # instance has no root at all.
+  if ! installed; then
+    echo "the audio packages (pulseaudio, pulseaudio-utils, alsa-utils, the ALSA pulse plugin) are missing, and the instance has no root to install them"
+    exit %[9]d
+  fi
+  echo "audio packages installed"
+elif installed; then
   echo "audio packages already installed"
 elif command -v apt-get >/dev/null 2>&1; then
   # update and install are separate statements: a stale third-party repo makes
@@ -103,6 +158,30 @@ write_system() {
   as_root mkdir -p "$(dirname "$1")" && as_root tee "$1" >/dev/null
 }
 
+# The session user's step only READS fleet's system-wide configuration when it
+# is in place (root wrote it a moment ago, or the image's build did). Without
+# it there is no root to write it (an image that ships the packages, on a
+# cluster without root): the user's own configuration stands in, which serves
+# the session user (on such a cluster every process runs as that one user).
+read_only=""
+user_config=""
+if [ "$step" = user ]; then
+  # Nothing here escalates: what root had to do, it did.
+  as_root() { "$@"; }
+  if grep -qsF "unix:$socket" "$client_conf"; then
+    read_only=1
+  else
+    user_config=1
+    if [ -z "${HOME:-}" ]; then
+      echo "no home directory to write the user's audio configuration in"
+      exit 1
+    fi
+    pulse_home="${XDG_CONFIG_HOME:-$HOME/.config}/pulse"
+    asound="$HOME/.asoundrc"
+    client_conf="$pulse_home/client.conf.d/00-fleet-mic.conf"
+  fi
+fi
+
 # /etc/asound.conf is shared ground, so ownership is decided by CONTENT, not by
 # whether the file exists (RPM distros ship a stock one with alsa-lib — possibly
 # installed by this very script, possibly long before it ever ran):
@@ -120,7 +199,9 @@ end="# <<< $marker <<<"
 # configuration with fleet's block and report success. This is the one step here
 # that can destroy something the user owns, so a failed read is a hard stop.
 others=""
-if [ -e "$asound" ]; then
+if [ -n "$read_only" ] && [ -e "$asound" ] && ! [ -r "$asound" ]; then
+  : # root's to read (and it did, the step before): nothing to judge here
+elif [ -e "$asound" ]; then
   if ! current=$(as_root cat "$asound"); then
     echo "cannot read the existing $asound; leaving it untouched"
     exit 1
@@ -144,10 +225,10 @@ if printf '%%s\n' "$others" | grep -Eq '^[[:space:]]*(pcm|ctl)\.!default'; then
   # Standing down means taking fleet's OWN block out too, if an earlier run put
   # one there: left in, fleet would either override the default it claims to
   # respect or split the config (their pcm, fleet's ctl).
-  if [ "$others" != "$current" ]; then
+  if [ -z "$read_only" ] && [ "$others" != "$current" ]; then
     printf '%%s\n' "$others" | write_system "$asound" || exit 1
   fi
-else
+elif [ -z "$read_only" ]; then
   {
     [ -z "$others" ] || printf '%%s\n' "$others"
     printf '%%s\n' "$begin" 'pcm.!default { type pulse }' 'ctl.!default { type pulse }' "$end"
@@ -155,11 +236,24 @@ else
 fi
 
 # The drop-in is fleet's by name, so it is always (re)written.
-write_system "$client_conf" <<CONF || exit 1
+if [ -z "$read_only" ]; then
+  write_system "$client_conf" <<CONF || exit 1
 # $marker
 default-server = unix:$socket
 autospawn = no
 CONF
+fi
+# PulseAudio reads a user's client.conf.d only beside a user client.conf.
+if [ -n "$user_config" ] && [ ! -e "$pulse_home/client.conf" ]; then
+  printf '%%s\n' "# $marker: the user's own settings, over the system-wide ones" ".include /etc/pulse/client.conf" \
+    > "$pulse_home/client.conf" || exit 1
+fi
+
+if [ "$step" = system ]; then
+  # The sound server is the session user's: the next step starts it.
+  echo "audio packages and configuration installed"
+  exit 0
+fi
 
 if [ '%[5]t' = true ]; then
   if [ ! -x "$fleet_bin" ]; then
@@ -298,6 +392,5 @@ if [ -n "$foreign_asound" ] && ! alsa_default_reaches_pulse; then
   echo "Add 'pcm.!default { type pulse }' to it, or remove it and rebuild the instance."
   exit 3
 fi
-echo "virtual microphone ready"`, micConfigMarker, micsink.SocketPath, fleetlaunch.RemotePath, micsink.SourceName, output, microphone),
-	}
+echo "virtual microphone ready"`, micConfigMarker, micsink.SocketPath, fleetlaunch.RemotePath, micsink.SourceName, output, microphone, step, audioInstalledFuncs(output), AudioUnavailableExit)
 }

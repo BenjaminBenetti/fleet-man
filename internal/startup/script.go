@@ -24,4 +24,13 @@ type Script struct {
 	// Body is the shell snippet to execute. It runs under /bin/sh and
 	// inherits the container's environment for the workspace user.
 	Body string
+
+	// Privileged and Unprivileged split Body for a backend that runs a
+	// script's privileged steps as root itself (backend.RootExecer): the
+	// Privileged half (package installs, files under /etc) runs first,
+	// through the backend's root class, then the Unprivileged half as the
+	// workspace user; where the instance has no root at all, only the
+	// Unprivileged half runs. Every other backend runs Body as the workspace
+	// user, which escalates with sudo where it must. Empty: Body everywhere.
+	Privileged, Unprivileged string
 }
