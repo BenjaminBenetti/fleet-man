@@ -1944,6 +1944,11 @@ func (fleetPage *fleetPage) renderCacheRow(m *model, k cacheKind, label string) 
 		for _, l := range fleetPage.cacheUsageLines(k) {
 			line += "\n" + l
 		}
+		if k == cacheBuildkit {
+			for _, l := range fleetPage.buildkitClusterLines(m) {
+				line += "\n" + l
+			}
+		}
 	}
 	return line
 }
