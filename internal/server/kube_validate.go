@@ -119,6 +119,9 @@ func validateKubeCluster(c *fleet.KubeCluster) error {
 	if err := checkPodOverrides(c.PodOverridesYAML); err != nil {
 		return err
 	}
+	if _, err := fleet.ParseDockerAddressPools(c.DinDAddressPool); err != nil {
+		return invalidf("dind_address_pool: %v", err)
+	}
 	if c.MaxInstances < 0 {
 		return invalidf("max_instances cannot be negative")
 	}

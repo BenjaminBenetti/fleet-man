@@ -185,6 +185,7 @@ func TestAddKubeClusterValidation(t *testing.T) {
 		{"bad fire interval", &fleetgrpc.KubeCluster{Context: "minikube", AutomationFireInterval: "often"}, codes.InvalidArgument, "automation_fire_interval"},
 		{"negative max instances", &fleetgrpc.KubeCluster{Context: "minikube", MaxInstances: -1}, codes.InvalidArgument, "max_instances"},
 		{"bad runtime class", &fleetgrpc.KubeCluster{Context: "minikube", RuntimeClass: "Sysbox Runc"}, codes.InvalidArgument, "runtime_class"},
+		{"bad dind address pool", &fleetgrpc.KubeCluster{Context: "minikube", DindAddressPool: "base=10.200.0.0/16,size=8"}, codes.InvalidArgument, "dind_address_pool"},
 		{"missing kubeconfig", &fleetgrpc.KubeCluster{Context: "minikube", KubeconfigPaths: []string{filepath.Join(dir, "none")}}, codes.NotFound, "no context"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
