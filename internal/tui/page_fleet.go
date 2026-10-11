@@ -70,6 +70,7 @@ type fleetPage struct {
 	branchInput        textinput.Model
 	homedirInput       textinput.Model
 	customMountInput   textinput.Model
+	mountHostInput     textinput.Model // edit-fleet Custom mounts: a mount's host folder
 	coderWsNameInput   textinput.Model // edit-fleet Coder section: workspace-name override
 	coderTemplateInput textinput.Model // edit-fleet Coder section: template
 	coderParamInput    textinput.Model // edit-fleet Coder section: shared input for the focused parameter row
@@ -124,6 +125,10 @@ func newFleetPage() *fleetPage {
 	customMountInput.Placeholder = "/opt/data"
 	customMountInput.CharLimit = 256
 
+	mountHostInput := textinput.New()
+	mountHostInput.Placeholder = "/data/big (empty: the .mnt folder)"
+	mountHostInput.CharLimit = 512
+
 	coderWsNameInput := textinput.New()
 	coderWsNameInput.Placeholder = "workspace-name"
 	coderWsNameInput.CharLimit = 64
@@ -143,6 +148,7 @@ func newFleetPage() *fleetPage {
 		branchInput:        branchInput,
 		homedirInput:       homedirInput,
 		customMountInput:   customMountInput,
+		mountHostInput:     mountHostInput,
 		coderWsNameInput:   coderWsNameInput,
 		coderTemplateInput: coderTemplateInput,
 		coderParamInput:    coderParamInput,

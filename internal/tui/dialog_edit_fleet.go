@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -328,11 +329,16 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.editFleet.deleting = false
 	fleetPage.editFleet.customMountsExpanded = false
 	fleetPage.editFleet.customMounts = slices.Clone(f.Settings.CustomMounts)
+	fleetPage.editFleet.customMountHosts = maps.Clone(f.Settings.CustomMountHostFolders)
 	fleetPage.editFleet.addingMount = false
 	fleetPage.editFleet.customMountErr = ""
 	fleetPage.editFleet.mountRemoveConfirm = false
 	fleetPage.customMountInput.SetValue("")
 	fleetPage.customMountInput.Blur()
+	fleetPage.editFleet.editingMountHost = false
+	fleetPage.editFleet.mountHostErr = ""
+	fleetPage.mountHostInput.SetValue("")
+	fleetPage.mountHostInput.Blur()
 	fleetPage.editFleet.layoutsExpanded = false
 	fleetPage.editFleet.layoutPresets = slices.Clone(f.Settings.LayoutPresets)
 	fleetPage.editFleet.presetRemoveFocused = false
@@ -407,6 +413,24 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			return cmd
 		}
 		return nil
+	}
+
+	// A custom mount's host-folder text-editing sub-mode.
+	if fleetPage.editFleet.editingMountHost {
+		switch keyMsg.String() {
+		case "enter":
+			return fleetPage.commitMountHost(m)
+		case "esc":
+			fleetPage.cancelMountHost()
+			return nil
+		case "ctrl+c":
+			fleetPage.closeEditFleet(m)
+			return nil
+		}
+		fleetPage.editFleet.mountHostErr = ""
+		var cmd tea.Cmd
+		fleetPage.mountHostInput, cmd = fleetPage.mountHostInput.Update(msg)
+		return cmd
 	}
 
 	// Add-custom-mount text-editing sub-mode.
@@ -937,7 +961,71 @@ func (fleetPage *fleetPage) updateCustomMountRow(m *model, keyMsg tea.KeyMsg) te
 		}
 		fleetPage.editFleet.mountRemoveConfirm = false // second press: do it
 		return fleetPage.removeCustomMount(m, idx)
+	case "f":
+		fleetPage.editFleet.mountRemoveConfirm = false
+		fleetPage.beginMountHost(idx)
+		return fleetPage.mountHostInput.Cursor.BlinkCmd()
 	}
+	return nil
+}
+
+// beginMountHost opens the idx-th custom mount's host-folder input, holding
+// its current folder.
+func (fleetPage *fleetPage) beginMountHost(idx int) {
+	fleetPage.editFleet.editingMountHost = true
+	fleetPage.editFleet.mountHostErr = ""
+	fleetPage.mountHostInput.SetValue(fleetPage.editFleet.customMountHosts[fleetPage.editFleet.customMounts[idx]])
+	fleetPage.mountHostInput.CursorEnd()
+	fleetPage.mountHostInput.Focus()
+}
+
+// cancelMountHost leaves the host-folder sub-mode, discarding the input.
+func (fleetPage *fleetPage) cancelMountHost() {
+	fleetPage.editFleet.editingMountHost = false
+	fleetPage.editFleet.mountHostErr = ""
+	fleetPage.mountHostInput.SetValue("")
+	fleetPage.mountHostInput.Blur()
+}
+
+// commitMountHost gives the focused custom mount the typed host folder (an
+// empty one: back to its .mnt folder) and persists (instant-save). A folder
+// that is not absolute keeps the input open with the error; one the daemon
+// refuses (fleet's own state) is reverted, the daemon's reason shown. The
+// folder is the daemon host's, which only the daemon can look at: a missing
+// one fails the next create there, naming it.
+func (fleetPage *fleetPage) commitMountHost(m *model) tea.Cmd {
+	idx := fleetPage.dlg.row - editFleetRowCustomMountBase
+	if idx < 0 || idx >= len(fleetPage.editFleet.customMounts) {
+		fleetPage.cancelMountHost()
+		return nil
+	}
+	path := fleetPage.editFleet.customMounts[idx]
+	folder := strings.TrimSpace(fleetPage.mountHostInput.Value())
+	if folder != "" {
+		norm, err := fleet.NormalizeCustomMountHostFolder(folder)
+		if err != nil {
+			fleetPage.editFleet.mountHostErr = err.Error()
+			return nil
+		}
+		folder = norm
+	}
+	prev := fleetPage.editFleet.customMountHosts
+	next := maps.Clone(prev)
+	if folder == "" {
+		delete(next, path)
+	} else {
+		if next == nil {
+			next = map[string]string{}
+		}
+		next[path] = folder
+	}
+	fleetPage.editFleet.customMountHosts = next
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.editFleet.customMountHosts = prev
+		fleetPage.editFleet.mountHostErr = fmt.Sprintf("not saved: %v", err)
+		return nil
+	}
+	fleetPage.cancelMountHost()
 	return nil
 }
 
@@ -1122,10 +1210,12 @@ func (fleetPage *fleetPage) removeCustomMount(m *model, idx int) tea.Cmd {
 	if idx < 0 || idx >= len(fleetPage.editFleet.customMounts) {
 		return nil
 	}
-	prev := fleetPage.editFleet.customMounts
+	prev, prevHosts := fleetPage.editFleet.customMounts, fleetPage.editFleet.customMountHosts
 	fleetPage.editFleet.customMounts = slices.Delete(slices.Clone(prev), idx, idx+1)
+	fleetPage.editFleet.customMountHosts = maps.Clone(prevHosts)
+	delete(fleetPage.editFleet.customMountHosts, prev[idx])
 	if err := fleetPage.persistFleetSettings(m); err != nil {
-		fleetPage.editFleet.customMounts = prev
+		fleetPage.editFleet.customMounts, fleetPage.editFleet.customMountHosts = prev, prevHosts
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
@@ -1509,6 +1599,10 @@ func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
 	f.Settings.FleetMCP = fleetPage.editFleet.fleetMCP
 	f.Settings.BuildkitServer = fleetPage.editFleet.buildkitServer
 	f.Settings.CustomMounts = fleetPage.editFleet.customMounts
+	f.Settings.CustomMountHostFolders = nil
+	if len(fleetPage.editFleet.customMountHosts) > 0 {
+		f.Settings.CustomMountHostFolders = fleetPage.editFleet.customMountHosts
+	}
 	f.Settings.LayoutPresets = fleetPage.editFleet.layoutPresets
 	f.Settings.DebCacheServer = fleetPage.editFleet.debCache
 	f.Settings.ImageCacheServer = fleetPage.editFleet.imageCache
@@ -1609,6 +1703,11 @@ type editFleetState struct {
 	addingMount          bool     // true while the "+ Add mount" text input is active
 	customMountErr       string   // inline validation error shown under the add-mount input
 	mountRemoveConfirm   bool     // inline "[remove?]" confirm armed on the focused custom-mount row (mirrors the Caching [Delete cache] flow)
+	// customMountHosts is the working copy of each custom mount's host
+	// folder (FleetSettings.CustomMountHostFolders; instant-save).
+	customMountHosts map[string]string
+	editingMountHost bool   // true while the focused mount's host-folder input is active
+	mountHostErr     string // inline validation error under the host-folder input
 
 	// Layouts section.
 	layoutsExpanded     bool                 // ▼ Layouts expanded, revealing per-preset rows + the add row
@@ -1800,7 +1899,15 @@ func (fleetPage *fleetPage) renderCustomMountRow(row int, marker func(int) strin
 		}
 		return marker(row) + "  " + dialogLabel.Render("+ Add mount")
 	}
-	return marker(row) + "  " + fleetPage.editFleet.customMounts[idx] + "   " + fleetPage.renderRemoveMountButton(row)
+	path := fleetPage.editFleet.customMounts[idx]
+	if fleetPage.editFleet.editingMountHost && fleetPage.dlg.row == row {
+		return marker(row) + "  " + path + "  " + dialogLabel.Render("Host folder: ") + fleetPage.mountHostInput.View()
+	}
+	line := marker(row) + "  " + path
+	if host := fleetPage.editFleet.customMountHosts[path]; host != "" {
+		line += dimStyle.Render(" → " + host)
+	}
+	return line + "   " + fleetPage.renderRemoveMountButton(row)
 }
 
 // renderLayoutPresetRow renders one dynamic layout-preset child row: an
@@ -1920,7 +2027,17 @@ func (fleetPage *fleetPage) customMountFooter(synced string) string {
 	}
 	idx := fleetPage.dlg.row - editFleetRowCustomMountBase
 	if idx < len(fleetPage.editFleet.customMounts) {
-		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, fleetPage.editFleet.customMounts[idx]) + synced)
+		path := fleetPage.editFleet.customMounts[idx]
+		if fleetPage.editFleet.editingMountHost {
+			if fleetPage.editFleet.mountHostErr != "" {
+				return errorStyle.Render("✗ " + fleetPage.editFleet.mountHostErr)
+			}
+			return dimStyle.Render("a folder on the daemon host, bound as it is; empty: the .mnt folder")
+		}
+		if host := fleetPage.editFleet.customMountHosts[path]; host != "" {
+			return dimStyle.Render("host: " + host + synced)
+		}
+		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, path) + synced)
 	}
 	// The add row.
 	if !fleetPage.editFleet.addingMount {
@@ -1987,6 +2104,9 @@ func (fleetPage *fleetPage) editFleetHint() string {
 	if fleetPage.editFleet.addingMount {
 		return "[enter] Add mount  [esc] Cancel"
 	}
+	if fleetPage.editFleet.editingMountHost {
+		return "[enter] Save  [esc] Cancel"
+	}
 	if isCustomMountChildRow(fleetPage.dlg.row) {
 		if fleetPage.dlg.row == fleetPage.customMountAddRow() {
 			return "[enter] Add mount  [j/k] Select  [q/esc] Save & Close"
@@ -1994,7 +2114,7 @@ func (fleetPage *fleetPage) editFleetHint() string {
 		if fleetPage.editFleet.mountRemoveConfirm {
 			return "[enter] Confirm remove  [esc] Cancel"
 		}
-		return "[enter/d] Remove  [j/k] Select  [q/esc] Save & Close"
+		return "[f] Host folder  [enter/d] Remove  [j/k] Select  [q/esc] Save & Close"
 	}
 	if isCoderParamChildRow(fleetPage.dlg.row) {
 		return "[enter] Edit  [j/k] Select  [q/esc] Save & Close"

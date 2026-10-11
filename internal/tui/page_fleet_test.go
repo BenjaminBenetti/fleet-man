@@ -2432,3 +2432,91 @@ func TestDeleteCacheCmdDispatchesByKind(t *testing.T) {
 		}
 	}
 }
+
+// TestEditFleetMountHostFolder: [f] on a custom mount opens its host-folder
+// input; Enter saves the folder (cleaned) to the fleet's settings and the
+// row and footer show it; a relative one keeps the input open with the
+// error; an empty one goes back to the .mnt folder; removing the mount drops
+// its folder; a save the daemon refuses is reverted, its reason shown.
+func TestEditFleetMountHostFolder(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var saved fleet.FleetSettings
+	fail := error(nil)
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(_ string, s fleet.FleetSettings) error {
+		if fail != nil {
+			return fail
+		}
+		saved = s
+		return nil
+	}
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+
+	f := &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{CustomMounts: []string{"/opt/data", "/srv"}}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp, width: 120, height: 50}
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToCustomMountRow(t, fp, m, 0)
+	if hint := fp.editFleetHint(); !strings.Contains(hint, "[f] Host folder") {
+		t.Errorf("hint %q does not offer the host folder", hint)
+	}
+	typeIn := func(s string) {
+		for _, r := range s {
+			fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if !fp.editFleet.editingMountHost {
+		t.Fatal("[f] did not open the host-folder input")
+	}
+	typeIn("data")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !fp.editFleet.editingMountHost || !strings.Contains(fp.customMountFooter(""), "absolute") {
+		t.Fatalf("a relative folder: editing %v, footer %q", fp.editFleet.editingMountHost, fp.customMountFooter(""))
+	}
+	fp.mountHostInput.SetValue("/data/big/")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if fp.editFleet.editingMountHost || saved.CustomMountHostFolders["/opt/data"] != "/data/big" {
+		t.Fatalf("saved %+v (editing %v)", saved.CustomMountHostFolders, fp.editFleet.editingMountHost)
+	}
+	if footer := fp.customMountFooter(""); !strings.Contains(footer, "host: /data/big") {
+		t.Errorf("footer %q does not name the host folder", footer)
+	}
+	if view := fp.renderEditFleet(m); !strings.Contains(view, "→ /data/big") {
+		t.Errorf("the row does not show its host folder:\n%s", view)
+	}
+
+	// The daemon refuses one (fleet's own state): reverted, reason shown.
+	fail = errors.New("invalid custom mount: overlaps fleet's own state")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	fp.mountHostInput.SetValue("/home/u/.fleet")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if fp.editFleet.customMountHosts["/opt/data"] != "/data/big" || !strings.Contains(fp.customMountFooter(""), "fleet's own state") {
+		t.Errorf("a refused save: hosts %v, footer %q", fp.editFleet.customMountHosts, fp.customMountFooter(""))
+	}
+	fail = nil
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if fp.editFleet.editingMountHost || fp.mode != viewEditFleet {
+		t.Fatal("esc should leave the input, not the dialog")
+	}
+
+	// Empty: back to the .mnt folder.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	fp.mountHostInput.SetValue("")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(saved.CustomMountHostFolders) != 0 || !strings.Contains(fp.customMountFooter(""), ".mnt") {
+		t.Errorf("cleared: saved %v, footer %q", saved.CustomMountHostFolders, fp.customMountFooter(""))
+	}
+
+	// Removing a mount takes its folder with it.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	fp.mountHostInput.SetValue("/data/big")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(saved.CustomMounts) != 1 || len(saved.CustomMountHostFolders) != 0 {
+		t.Errorf("after remove: %+v", saved)
+	}
+}
