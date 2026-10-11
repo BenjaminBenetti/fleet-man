@@ -35,6 +35,10 @@ func TestWriteFileReplacesAtomically(t *testing.T) {
 			t.Fatalf("WriteFile(a/f): %v", err)
 		}
 		assertFile(t, fx.path("a/f"), "two", 0o755)
+		if _, err := fx.r.WriteFile("a/sticky", strings.NewReader("three"), fs.ModeSticky|0o644); err != nil {
+			t.Fatalf("WriteFile(a/sticky): %v", err)
+		}
+		assertFile(t, fx.path("a/sticky"), "three", 0o644)
 
 		if _, err := fx.r.WriteFile("a/b", strings.NewReader("x"), 0o644); !errors.Is(err, syscall.EISDIR) {
 			t.Errorf("WriteFile over a folder: %v, want EISDIR", err)
@@ -94,6 +98,11 @@ func TestOpenFileFlags(t *testing.T) {
 		f.WriteString("new")
 		f.Close()
 		assertFile(t, fx.path("a/new"), "new", 0o600)
+
+		f, err = fx.r.OpenFile("a/sticky", os.O_WRONLY|os.O_CREATE|os.O_EXCL, fs.ModeSticky|fs.ModeSetgid|0o600)
+		must(t, err)
+		f.Close()
+		assertFile(t, fx.path("a/sticky"), "", 0o600)
 
 		f, err = fx.r.OpenFile("a/new", os.O_RDONLY|os.O_CREATE, 0o644)
 		must(t, err)
@@ -157,6 +166,12 @@ func TestMkdirAll(t *testing.T) {
 		}
 		must(t, fx.r.MkdirAll("a/setgid", 0o777|fs.ModeSetgid))
 		assertMode(t, fx.path("a/setgid"), fs.ModeDir|0o755)
+		// os.Root refuses a sticky bit at creation; it is dropped (Chmod sets it).
+		must(t, fx.r.MkdirAll("a/sticky/x", 0o777|fs.ModeSticky))
+		must(t, fx.r.Mkdir("a/sticky/y", 0o777|fs.ModeSticky|fs.ModeSetuid))
+		for _, folder := range []string{"a/sticky", "a/sticky/x", "a/sticky/y"} {
+			assertMode(t, fx.path(folder), fs.ModeDir|0o755)
+		}
 
 		var wg sync.WaitGroup
 		errs := make([]error, 16)
@@ -210,6 +225,9 @@ func TestChmodChtimesLchown(t *testing.T) {
 		assertMode(t, fx.path("a/f"), 0o600)
 		must(t, fx.r.Chmod("a/b", fs.ModeSticky|0o700))
 		assertMode(t, fx.path("a/b"), fs.ModeDir|fs.ModeSticky|0o700)
+		// A sticky bit means nothing on a file (macOS and the BSDs refuse it).
+		must(t, fx.r.Chmod("a/f", fs.ModeSticky|0o640))
+		assertMode(t, fx.path("a/f"), 0o640)
 		must(t, fx.r.Chmod(".", 0o750))
 		assertMode(t, fx.root, fs.ModeDir|0o750)
 
@@ -337,6 +355,56 @@ func TestReservedPaths(t *testing.T) {
 	if sub.Name() != filepath.Join(base, ".mnt") {
 		t.Errorf("sub-root Name() = %q", sub.Name())
 	}
+}
+
+// TestReservedPathsByIdentity checks the guard knows a reserved entry by what
+// it is, not only by how it is spelled: a hard link to a reserved file is the
+// file, and where the filesystem ignores case (macOS by default) so is any
+// spelling of a reserved path.
+func TestReservedPathsByIdentity(t *testing.T) {
+	base := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(base, ".mnt", "opt", "data"), 0o755))
+	must(t, os.WriteFile(filepath.Join(base, ".mnt", "opt", "data", "keep"), []byte("keep"), 0o644))
+	must(t, os.MkdirAll(filepath.Join(base, "files"), 0o755))
+	must(t, os.WriteFile(filepath.Join(base, "files", ".claude.json"), []byte("{}"), 0o644))
+	must(t, os.Link(filepath.Join(base, "files", ".claude.json"), filepath.Join(base, "files", "alias")))
+	must(t, os.WriteFile(filepath.Join(base, "x"), []byte("x"), 0o644))
+	r := openTest(t, base, Options{Reserved: []string{".mnt/opt/data", "files/.claude.json"}}, true)
+
+	refused := map[string]func() error{
+		"Remove the link":      func() error { return r.Remove("files/alias") },
+		"RemoveAll the link":   func() error { return r.RemoveAll("files/alias") },
+		"Rename the link away": func() error { return r.Rename("files/alias", "moved") },
+		"Rename over the link": func() error { return r.Rename("x", "files/alias") },
+	}
+	if caseInsensitive(t, base) {
+		for name, other := range map[string]string{"opt/data": ".mnt/OPT/Data", "opt": ".MNT/Opt", "the file": "files/.Claude.JSON"} {
+			refused["RemoveAll "+name+" as "+other] = func() error { return r.RemoveAll(other) }
+			refused["Rename "+name+" away as "+other] = func() error { return r.Rename(other, "moved") }
+			refused["Rename over "+name+" as "+other] = func() error { return r.Rename("x", other) }
+		}
+	} else {
+		t.Log("case-sensitive filesystem: only the hard link is checked")
+	}
+	for name, op := range refused {
+		if err := op(); !errors.Is(err, ErrReserved) {
+			t.Errorf("%s: %v, want ErrReserved", name, err)
+		}
+	}
+	assertFile(t, filepath.Join(base, ".mnt", "opt", "data", "keep"), "keep", 0o644)
+	assertFile(t, filepath.Join(base, "files", ".claude.json"), "{}", 0o644)
+	must(t, r.Remove("x"))
+	must(t, r.RemoveAll("files/missing"))
+}
+
+// caseInsensitive reports whether the folder dir ignores case.
+func caseInsensitive(t *testing.T, dir string) bool {
+	t.Helper()
+	probe := filepath.Join(dir, "case-probe")
+	must(t, os.WriteFile(probe, nil, 0o644))
+	defer os.Remove(probe)
+	_, err := os.Lstat(filepath.Join(dir, "CASE-PROBE"))
+	return err == nil
 }
 
 // TestOpenRootFollowsTheRootItself pins the boundary: the root folder belongs

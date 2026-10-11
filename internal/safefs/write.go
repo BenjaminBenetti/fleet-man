@@ -29,17 +29,17 @@ func tempName() string {
 	return fmt.Sprintf("%s%016x%s", TempPrefix, rand.Uint64(), tempSuffix)
 }
 
-// WriteFile replaces the regular file name with the content of data and the
-// mode perm (no set-ID bits), atomically: it writes a temp file created
-// O_CREAT|O_EXCL in name's folder and renames it over name there, so a reader
-// sees the old file or the new one, never part of either. What name held (a
-// file, or a symlink, which is replaced and never followed) is gone; a folder
-// at name is refused. The parent folder must exist. Like internal/atomicfile
-// it does not fsync.
+// WriteFile replaces the regular file name with the content of data and
+// perm's permission bits (not masked by the umask), atomically: it writes a
+// temp file created O_CREAT|O_EXCL in name's folder and renames it over name
+// there, so a reader sees the old file or the new one, never part of either.
+// What name held (a file, or a symlink, which is replaced and never followed)
+// is gone; a folder at name is refused. The parent folder must exist. Like
+// internal/atomicfile it does not fsync.
 //
 // It returns the Lstat of the file it wrote. ErrChanged means another party
-// replaced the temp file or the result meanwhile; nothing it put there is
-// renamed into place, and a retry writes again.
+// replaced the temp file before the rename (nothing is renamed into place)
+// or the result right after it; a retry writes again.
 func (r *Root) WriteFile(name string, data io.Reader, perm fs.FileMode) (fs.FileInfo, error) {
 	if err := r.checkAboveReserved("write", name); err != nil {
 		return nil, err
@@ -105,7 +105,7 @@ func createTemp(d *dir) (string, *os.File, error) {
 func fillTemp(f *os.File, data io.Reader, perm fs.FileMode) (fs.FileInfo, error) {
 	_, err := io.Copy(f, data)
 	if err == nil {
-		err = f.Chmod(safeMode(perm))
+		err = f.Chmod(createMode(perm))
 	}
 	var info fs.FileInfo
 	if err == nil {

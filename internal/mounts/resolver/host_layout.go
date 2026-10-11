@@ -71,7 +71,14 @@ func (l *hostLayout) ensureDir(rel string) error {
 	if err := l.root.MkdirAll(name, 0777); err != nil {
 		return refusal(err)
 	}
-	return refusal(l.root.Chmod(name, layoutDirMode))
+	// Chmod the folder the walk opened ("." of its own Root), never whatever
+	// sits at the name by the time a second walk gets there.
+	dir, err := l.root.OpenRoot(name)
+	if err != nil {
+		return refusal(err)
+	}
+	defer dir.Close()
+	return refusal(dir.Chmod(".", layoutDirMode))
 }
 
 // ensureFile creates an empty file at rel (relative to the mount root) when

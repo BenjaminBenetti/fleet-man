@@ -34,8 +34,12 @@ const openFlags = os.O_RDONLY | os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CRE
 // OpenFile opens the regular file name like os.OpenFile, with the flags
 // O_RDONLY, O_WRONLY, O_RDWR, O_APPEND, O_CREATE, O_EXCL and O_TRUNC. It
 // never follows a symlink and refuses anything but a regular file. A file it
-// creates gets perm without set-ID bits, before the umask. An existing file
-// is opened O_NONBLOCK (which regular files ignore) and O_NOCTTY.
+// creates gets perm's permission bits, before the umask. An existing file
+// is opened O_NONBLOCK (which regular files ignore) and O_NOCTTY. O_CREATE
+// without O_EXCL is a create and then an open of what the create found, each
+// tried again a few times when the other finds nothing; a file that keeps
+// being removed or replaced meanwhile still fails with ErrNotExist or
+// ErrChanged, and a later retry sees what is there then.
 func (r *Root) OpenFile(name string, flag int, perm fs.FileMode) (*os.File, error) {
 	if flag&^openFlags != 0 {
 		return nil, &fs.PathError{Op: "open", Path: r.host(name), Err: fs.ErrInvalid}
@@ -50,14 +54,22 @@ func (r *Root) OpenFile(name string, flag int, perm fs.FileMode) (*os.File, erro
 		return nil, err
 	}
 	defer d.close()
-	if flag&os.O_CREATE != 0 {
+	if flag&os.O_CREATE == 0 {
+		return d.openExisting(leaf, flag)
+	}
+	for attempt := 0; ; attempt++ {
 		// O_CREATE|O_EXCL never follows a link: it fails on any entry.
-		f, err := d.root.OpenFile(leaf, flag|os.O_EXCL, safeMode(perm))
+		f, err := d.root.OpenFile(leaf, flag|os.O_EXCL, createMode(perm))
 		if err == nil || flag&os.O_EXCL != 0 || !errors.Is(err, fs.ErrExist) {
 			return f, pathError("open", d.host(leaf), err)
 		}
+		f, err = d.openExisting(leaf, flag&^(os.O_CREATE|os.O_EXCL))
+		// Removed since the create found it: create again, as os.OpenFile's
+		// single open would.
+		if !errors.Is(err, fs.ErrNotExist) || attempt == 2 {
+			return f, err
+		}
 	}
-	return d.openExisting(leaf, flag&^(os.O_CREATE|os.O_EXCL))
 }
 
 // Open opens the regular file name for reading.
@@ -75,21 +87,21 @@ func (r *Root) ReadFile(name string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
-// Mkdir creates the folder name with perm (no set-ID bits, before the umask;
-// as with mkdir(2), macOS and the BSDs ignore a sticky bit here, which Chmod
-// sets).
+// Mkdir creates the folder name with perm's permission bits, before the
+// umask. Other bits are dropped: set-ID ones always, and a sticky bit, which
+// Chmod sets.
 func (r *Root) Mkdir(name string, perm fs.FileMode) error {
 	d, leaf, err := r.parent("mkdir", name)
 	if err != nil {
 		return err
 	}
 	defer d.close()
-	return pathError("mkdir", d.host(leaf), d.root.Mkdir(leaf, safeMode(perm)))
+	return pathError("mkdir", d.host(leaf), d.root.Mkdir(leaf, createMode(perm)))
 }
 
 // MkdirAll creates the folder name and any missing folder above it, each with
-// perm (no set-ID bits, before the umask), refusing a symlink or a non-folder
-// at any element. Existing folders are left as they are.
+// perm's permission bits as Mkdir does, refusing a symlink or a non-folder at
+// any element. Existing folders are left as they are.
 func (r *Root) MkdirAll(name string, perm fs.FileMode) error {
 	if err := r.check("mkdir", name, true); err != nil {
 		return err
@@ -105,7 +117,7 @@ func (r *Root) MkdirAll(name string, perm fs.FileMode) error {
 // Remove removes the file, symlink or empty folder name. A symlink is removed
 // itself, never its target.
 func (r *Root) Remove(name string) error {
-	if err := r.checkReserved("remove", name); err != nil {
+	if err := r.guardReserved("remove", name); err != nil {
 		return err
 	}
 	d, leaf, err := r.parent("remove", name)
@@ -120,7 +132,7 @@ func (r *Root) Remove(name string) error {
 // symlink. Like os.RemoveAll, a missing name is not an error; a symlink at a
 // folder above name is.
 func (r *Root) RemoveAll(name string) error {
-	if err := r.checkReserved("removeall", name); err != nil {
+	if err := r.guardReserved("removeall", name); err != nil {
 		return err
 	}
 	d, leaf, err := r.parent("removeall", name)
@@ -141,10 +153,7 @@ func (r *Root) RemoveAll(name string) error {
 // followed: a symlink is renamed itself, and one at newname is replaced.
 func (r *Root) Rename(oldname, newname string) error {
 	for _, name := range []string{oldname, newname} {
-		if err := r.check("rename", name, false); err != nil {
-			return err
-		}
-		if err := r.checkReserved("rename", name); err != nil {
+		if err := r.guardReserved("rename", name); err != nil {
 			return err
 		}
 	}
@@ -189,18 +198,24 @@ func (r *Root) Readlink(name string) (string, error) {
 	return target, pathError("readlink", d.host(leaf), err)
 }
 
-// Chmod sets the mode of name (permissions and sticky; set-ID bits are
-// dropped), refusing a symlink. "." is the root.
+// Chmod sets the mode of name, refusing a symlink: its permissions, and the
+// sticky bit on a folder. Set-ID bits are dropped, as is a sticky bit on
+// anything else. "." is the root.
 func (r *Root) Chmod(name string, mode fs.FileMode) error {
 	d, leaf, err := r.leafOrRoot("chmod", name)
 	if err != nil {
 		return err
 	}
 	defer d.close()
-	if _, err := d.lstatNoLink("chmod", leaf); err != nil {
+	info, err := d.lstatNoLink("chmod", leaf)
+	if err != nil {
 		return err
 	}
-	return pathError("chmod", d.host(leaf), chmodAt(d, leaf, safeMode(mode)))
+	mode = safeMode(mode)
+	if !info.IsDir() {
+		mode = createMode(mode)
+	}
+	return pathError("chmod", d.host(leaf), chmodAt(d, leaf, mode))
 }
 
 // Chtimes sets the access and modification times of name, refusing a

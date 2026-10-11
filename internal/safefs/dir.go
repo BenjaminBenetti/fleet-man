@@ -60,7 +60,7 @@ func (d *dir) openChild(name string, create bool, perm fs.FileMode) (*dir, error
 	info, err := d.root.Lstat(name)
 	if create && errors.Is(err, fs.ErrNotExist) {
 		// ErrExist: a concurrent creator won; the Lstat below sees its folder.
-		if err := d.root.Mkdir(name, safeMode(perm)); err != nil && !errors.Is(err, fs.ErrExist) {
+		if err := d.root.Mkdir(name, createMode(perm)); err != nil && !errors.Is(err, fs.ErrExist) {
 			return nil, pathError("mkdir", d.host(name), err)
 		}
 		info, err = d.root.Lstat(name)
@@ -219,8 +219,16 @@ func regular(info fs.FileInfo) error {
 	return nil
 }
 
-// safeMode keeps the mode bits safefs lets an entry have: permissions and
+// safeMode keeps the mode bits safefs lets a folder have: permissions and
 // sticky, never set-user-ID or set-group-ID.
 func safeMode(mode fs.FileMode) fs.FileMode {
 	return mode & (fs.ModePerm | fs.ModeSticky)
+}
+
+// createMode keeps the mode bits safefs creates an entry with, and gives a
+// file: permissions only. os.Root refuses any other bit at creation, and a
+// sticky bit means nothing on a file (macOS and the BSDs refuse to set one
+// there); Chmod sets it on a folder.
+func createMode(mode fs.FileMode) fs.FileMode {
+	return mode & fs.ModePerm
 }

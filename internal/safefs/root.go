@@ -21,6 +21,7 @@
 //     content arriving from a pod must not plant a set-ID program on the
 //     daemon host. (A folder made inside a set-group-ID folder still
 //     inherits that bit from the kernel, which only steers group ownership.)
+//     Only Chmod sets a sticky bit, and only on a folder.
 //
 // The walk to an element's folder is portable: one os.Root per folder, each
 // element Lstat-ed and refused when it is a symlink or not a folder, and each
@@ -43,6 +44,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -55,6 +57,9 @@ type Options struct {
 	// renames or replaces one, or a folder above one, never creates a
 	// symlink there, and never creates a file where a folder above one
 	// belongs (ErrReserved). Writing a reserved file's content is allowed.
+	// An entry that exists is recognised under any name the filesystem
+	// gives it (another case, on a case-insensitive one) when it would be
+	// removed, renamed or renamed over.
 	Reserved []string
 }
 
@@ -141,8 +146,56 @@ func (r *Root) check(op, name string, allowRoot bool) error {
 	return nil
 }
 
+// guardReserved refuses an operation that would remove name, rename it or
+// rename over it when name is reserved or a folder above a reserved path.
+// Names are compared as given and then, when name exists, by identity with
+// each reserved path or folder above one of the same depth: on a
+// case-insensitive filesystem (macOS's by default) ".mnt/OPT/Data" is the
+// entry ".mnt/opt/data" names. A hard link to a reserved file is refused too.
+func (r *Root) guardReserved(op, name string) error {
+	if err := r.check(op, name, false); err != nil {
+		return err
+	}
+	if err := r.checkReserved(op, name); err != nil {
+		return err
+	}
+	var target fs.FileInfo
+	for _, guarded := range r.guardedAt(strings.Count(name, "/") + 1) {
+		if target == nil {
+			info, err := r.Lstat(name)
+			if err != nil {
+				// Nothing there to be a reserved entry; the operation
+				// itself reports what is wrong.
+				return nil
+			}
+			target = info
+		}
+		if info, err := r.Lstat(guarded); err == nil && os.SameFile(info, target) {
+			return &fs.PathError{Op: op, Path: r.host(name), Err: ErrReserved}
+		}
+	}
+	return nil
+}
+
+// guardedAt returns, once each, the reserved paths and folders above them
+// that have depth elements.
+func (r *Root) guardedAt(depth int) []string {
+	var guarded []string
+	for _, reserved := range r.reserved {
+		elems := strings.Split(reserved, "/")
+		if len(elems) < depth {
+			continue
+		}
+		if p := strings.Join(elems[:depth], "/"); !slices.Contains(guarded, p) {
+			guarded = append(guarded, p)
+		}
+	}
+	return guarded
+}
+
 // checkReserved refuses an operation that would remove, rename over or put a
-// symlink at name when name is reserved or a folder above a reserved path.
+// symlink at name when name is reserved or a folder above a reserved path,
+// comparing the names as given.
 func (r *Root) checkReserved(op, name string) error {
 	for _, reserved := range r.reserved {
 		if reserved == name || strings.HasPrefix(reserved, name+"/") {
