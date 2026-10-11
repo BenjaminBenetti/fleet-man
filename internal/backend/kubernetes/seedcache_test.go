@@ -63,14 +63,19 @@ func TestSeedCacheIDCoversTheRootsInputs(t *testing.T) {
 	mounts.MountDirs = append(mounts.MountDirs, "/data")
 	remap := cacheSeedSpec()
 	remap.Remap.UID = 1001
+	origBinary := seedCacheBinary
+	seedCacheBinary = func() string { return "v9.9.9" }
+	otherBuild := seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), false, "", "50Gi")
+	seedCacheBinary = origBinary
 	for name, id := range map[string]string{
-		"image":    seedCacheID("d", "c", "sha256:bb", cacheSeedSpec(), false, "", "50Gi"),
-		"mounts":   seedCacheID("d", "c", "sha256:aa", mounts, false, "", "50Gi"),
-		"remap":    seedCacheID("d", "c", "sha256:aa", remap, false, "", "50Gi"),
-		"non-root": seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), true, "", "50Gi"),
-		"class":    seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), false, "csi-hostpath-sc", "50Gi"),
-		"size":     seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), false, "", "20Gi"),
-		"cluster":  seedCacheID("d", "other", "sha256:aa", cacheSeedSpec(), false, "", "50Gi"),
+		"fleet build": otherBuild,
+		"image":       seedCacheID("d", "c", "sha256:bb", cacheSeedSpec(), false, "", "50Gi"),
+		"mounts":      seedCacheID("d", "c", "sha256:aa", mounts, false, "", "50Gi"),
+		"remap":       seedCacheID("d", "c", "sha256:aa", remap, false, "", "50Gi"),
+		"non-root":    seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), true, "", "50Gi"),
+		"class":       seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), false, "csi-hostpath-sc", "50Gi"),
+		"size":        seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), false, "", "20Gi"),
+		"cluster":     seedCacheID("d", "other", "sha256:aa", cacheSeedSpec(), false, "", "50Gi"),
 	} {
 		if id == base {
 			t.Errorf("another %s kept the id %s", name, id)

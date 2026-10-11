@@ -20,6 +20,7 @@ import (
 	kclient "k8s.io/client-go/kubernetes"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/binstore"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -130,8 +131,13 @@ type seedCachePlan struct {
 	clone, build bool
 }
 
+// seedCacheBinary names the fleet build whose pod binary seeds the root (a
+// var for tests): a seed of another build may make another root, so its
+// caches are its own (the old ones go with the TTL).
+var seedCacheBinary = func() string { return binstore.Self().String() }
+
 // seedCacheID is the id12 of the cache a seed of spec (with nonRoot, onto a
-// disk of class and size) from image would use.
+// disk of class and size) from image would use, by this fleet build.
 func seedCacheID(daemonID, cluster, image string, spec *podseed.SeedSpec, nonRoot bool, class, size string) string {
 	exclude := slices.Clone(spec.Exclude)
 	slices.Sort(exclude)
@@ -141,7 +147,7 @@ func seedCacheID(daemonID, cluster, image string, spec *podseed.SeedSpec, nonRoo
 	if r := spec.Remap; r != nil {
 		remap = r.User + ":" + strconv.Itoa(r.UID) + ":" + strconv.Itoa(r.GID)
 	}
-	return names.SeedCacheID(daemonID, cluster, "v"+strconv.Itoa(podseed.ManifestVersion), image, spec.Source,
+	return names.SeedCacheID(daemonID, cluster, "v"+strconv.Itoa(podseed.ManifestVersion), seedCacheBinary(), image, spec.Source,
 		strings.Join(exclude, "\x00"), strings.Join(mounts, "\x00"), remap, strconv.FormatBool(nonRoot), class, size)
 }
 
