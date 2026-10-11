@@ -143,9 +143,12 @@ info "spawned instance: ${inst}"
 # Wait for the instance to provision + the agent to launch + write the marker.
 # This implicitly waits for the instance to reach 'running' ('fleet exec' fails
 # until then) and for launchAutomationCommand to have run the agent.
+# A cluster's first create also delivers the image to the node, so the
+# budget is generous.
 info "waiting for the agent to launch and receive the prompt"
 out=""
-for _ in $(seq 1 "$(_scale_timeout 80)"); do
+deadline=$(( $(date +%s) + $(_scale_timeout 600) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
   out=$("${FLEET_BIN}" exec "${FLEET}/${inst}" -- cat /tmp/automation_agent_out 2>/dev/null || true)
   [ -n "${out}" ] && break
   sleep 3
@@ -307,7 +310,7 @@ while read -r stamp; do
     fail "two runs of the burst started $(( t - prev ))s apart, under the ${INTERVAL}s fire interval"
   fi
   prev="${t}"
-done < <(printf '%s\n' "${logs}" | sed -nE 's/^# outcome: ([^ ]+) burster: instance burster-.*/\1/p' | sort)
+done < <(printf '%s\n' "${logs}" | sed -nE 's/^# outcome: ([^ ]+) burster: instance burster-[0-9]+-[0-9]+ \(☸ itest\)$/\1/p' | sort)
 
 # A full queue: with an hour between runs every delivery waits, the queue
 # holds 20 firings, and the next is refused with 429 and Retry-After,

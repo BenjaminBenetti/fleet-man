@@ -779,7 +779,7 @@ func TestServiceWatchedDestroysAnOverdueClusterCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "# outcome: 2026-10-11T09:20:00Z builder: create of k8s-1 did not finish within 20m0s (FLEET_AUTOMATION_CREATE_TIMEOUT); the instance is destroyed"
+	want := "# outcome: 2026-10-11T09:20:00Z builder: create of k8s-1 did not finish within 20m0s (FLEET_AUTOMATION_CREATE_TIMEOUT); it is being destroyed"
 	if !strings.Contains(logs, want) {
 		t.Fatalf("trigger log lacks the outcome %q:\n%s", want, logs)
 	}

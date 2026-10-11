@@ -74,7 +74,7 @@ func TestFiringOutcomesAreLogged(t *testing.T) {
 	}
 	assertLogHas(t, triggerLog(t, "alpha", "nightly"),
 		"# outcome: 2026-10-11T09:01:00Z a: create of inst-a failed: devcontainer up: exit status 1",
-		"b: instance inst-b reaped after 2m0s idle; the instance is destroyed",
+		"b: instance inst-b reaped after 2m0s idle; it is being destroyed",
 	)
 	if _, running := sched.lim.counts(); len(running) != 0 {
 		t.Fatalf("runs still hold slots: %v", running)
@@ -117,7 +117,7 @@ func TestFailedRunsOnAClusterLetGo(t *testing.T) {
 	}
 	assertLogHas(t, triggerLog(t, "alpha", "t"),
 		"a-k-failed: create of k-failed failed: kubernetes:image_pull: no such image; the record is kept, its pod and disk are released",
-		"a-k-interrupted: create of k-interrupted was interrupted by a daemon restart; the instance is destroyed",
+		"a-k-interrupted: create of k-interrupted was interrupted by a daemon restart; it is being destroyed",
 		"a-d-interrupted: create of d-interrupted was interrupted by a daemon restart; the record is kept",
 	)
 }

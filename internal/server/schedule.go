@@ -751,9 +751,9 @@ func (s *service) abandonOverdueCreate(w *watchedAgent, inst *fleet.Instance, no
 // error), for its outcome line.
 func destroyWords(err error) string {
 	if err != nil {
-		return "destroying the instance failed: " + status.Convert(err).Message()
+		return "destroying it failed: " + status.Convert(err).Message()
 	}
-	return "the instance is destroyed"
+	return "it is being destroyed"
 }
 
 // interruptedCreate reports whether a FAILED record's error is a create a
