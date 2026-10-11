@@ -31,7 +31,19 @@ const (
 	// OpCommit deletes every trashed generation older than Gen once a
 	// rebuild to Gen has succeeded.
 	OpCommit Op = "commit"
+	// OpTool reports the instance disk's space (ToolResult) and holds the
+	// Job's pod, the disk mounted, until fleetd collects that result:
+	// fleetd runs what it needs in the pod meanwhile (a stopped instance's
+	// workspace export, `fleet pod-job ws-export`). Gen is the generation
+	// the disk holds.
+	OpTool Op = "tool"
 )
+
+// ToolResult is an OpTool job's result document.
+type ToolResult struct {
+	// Disk is the instance disk's size and free room.
+	Disk DiskSpace `json:"disk"`
+}
 
 // JobSpec is job.json, what fleetd stages for `fleet pod-job`. Unknown fields
 // are ignored, so an older pod binary still runs a newer daemon's spec; a
@@ -183,7 +195,7 @@ func (s JobSpec) Validate() error {
 			return errors.New("a seed job needs its seed spec")
 		}
 		return s.Seed.validate(s.Gen)
-	case OpRollback, OpCommit:
+	case OpRollback, OpCommit, OpTool:
 		if s.Seed != nil {
 			return fmt.Errorf("a %s job takes no seed spec", s.Op)
 		}

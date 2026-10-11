@@ -28,7 +28,7 @@ func TestJobSpecValidate(t *testing.T) {
 	if err := validSeedSpec().Validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, op := range []Op{OpRollback, OpCommit} {
+	for _, op := range []Op{OpRollback, OpCommit, OpTool} {
 		if err := (JobSpec{V: 1, Op: op, Gen: 2, PVC: "/p"}).Validate(); err != nil {
 			t.Errorf("%s: %v", op, err)
 		}
@@ -50,6 +50,7 @@ func TestJobSpecValidate(t *testing.T) {
 		"hold":            func(s *JobSpec) { s.ResultHold = "-1s" },
 		"no seed":         func(s *JobSpec) { s.Seed = nil },
 		"seed on commit":  func(s *JobSpec) { s.Op = OpCommit },
+		"seed on tool":    func(s *JobSpec) { s.Op = OpTool },
 		"reset no prev":   func(s *JobSpec) { s.Seed.Reset = true },
 		"reset same gen":  func(s *JobSpec) { s.Seed.Reset, s.Seed.PrevGen = true, 1 },
 		"source":          func(s *JobSpec) { s.Seed.Source = "image" },
