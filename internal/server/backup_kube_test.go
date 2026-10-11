@@ -259,7 +259,7 @@ func TestMcpRestoreBackupDocumentsKubernetes(t *testing.T) {
 // Every documented file is a backup source and every source is documented.
 func TestMcpRestoreBackupContentsMatchSources(t *testing.T) {
 	home := writeFleetState(t, nil)
-	for _, rel := range []string{"kube/jobs/abcd2345.json", "kube/c-abc234/images.json", "kube/c-abc234/seedcaches.json", "kube/c-abc234/instances/abcd2345.json"} {
+	for _, rel := range []string{"kube/jobs/abcd2345.json", "kube/c-abc234/images.json", "kube/c-abc234/seedcaches.json", "kube/c-abc234/instances/abcd2345.json", "kube/c-abc234/buildkit/tv5vpl4q.json"} {
 		path := filepath.Join(home, ".fleet", filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
@@ -273,7 +273,7 @@ func TestMcpRestoreBackupContentsMatchSources(t *testing.T) {
 	for _, c := range out.Contents {
 		documented[c.Name] = true
 	}
-	generic := strings.NewReplacer("abcd2345", "<key>", "c-abc234", "<cluster>")
+	generic := strings.NewReplacer("abcd2345", "<key>", "c-abc234", "<cluster>", "tv5vpl4q", "<fleet>")
 	sources := map[string]bool{}
 	for _, src := range backupSources() {
 		name := generic.Replace(backupEntryName(src))

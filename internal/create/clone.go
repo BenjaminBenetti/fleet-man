@@ -191,11 +191,12 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 	}
 
 	// Re-point the clone's docker buildx at the fleet's shared buildkit server.
-	// The committed image may carry the source's builder config; the
-	// remove-then-create in ConfigureInstanceBuildx makes this idempotent.
-	// Non-fatal, and a silent no-op without docker/buildx.
+	// The committed image may carry the source's builder config (on a
+	// cluster, the source's certificate too, which the clone's own
+	// replaces); the remove-then-create in ConfigureInstanceBuildx makes
+	// this idempotent. Non-fatal, and a silent no-op without docker/buildx.
 	backend.ReportStep(ctx, fleet.StepConfigureCaches, "")
-	if err := configureBuildkit(services, instanceBackend, fleetName, destWorkspaceDir); err != nil {
+	if err := configureBuildkit(services, instanceBackend, fleetName, destInstance, destWorkspaceDir); err != nil {
 		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("configure buildkit buildx: %v", err))
 	}
 

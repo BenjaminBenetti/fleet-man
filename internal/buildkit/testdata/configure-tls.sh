@@ -1,0 +1,1 @@
+docker buildx rm fleet-shared >/dev/null 2>&1 || true; d="$HOME/.fleet/buildkit"; n='fs-fleet-man-tv5vpl4q-buildkit'; docker buildx create --name fleet-shared --driver remote --driver-opt "cacert=$d/ca.pem,cert=$d/cert.pem,key=$d/key.pem,servername=$n" 'tcp://fs-fleet-man-tv5vpl4q-buildkit:1234' && docker buildx use fleet-shared

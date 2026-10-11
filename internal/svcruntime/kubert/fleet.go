@@ -30,8 +30,8 @@ import (
 // anchor, a ConfigMap, after what it owns), and those of one service's
 // server (its volume aside).
 var (
-	fleetKinds  = []string{kubernetes.KindDeployment, kubernetes.KindService, kubernetes.KindNetworkPolicy, kubernetes.KindConfigMap}
-	serverKinds = []string{kubernetes.KindDeployment, kubernetes.KindService, kubernetes.KindConfigMap}
+	fleetKinds  = []string{kubernetes.KindDeployment, kubernetes.KindService, kubernetes.KindNetworkPolicy, kubernetes.KindSecret, kubernetes.KindConfigMap}
+	serverKinds = []string{kubernetes.KindDeployment, kubernetes.KindService, kubernetes.KindSecret, kubernetes.KindConfigMap}
 )
 
 // fleetLabel selects the fleet's objects (with the connection's own labels,
@@ -108,14 +108,24 @@ func (c *conn) ensureService(ctx context.Context, m fleetMeta, svc fleet.SharedS
 	if err := c.ensureVolume(ctx, m, svc); err != nil {
 		return err
 	}
+	in := deploymentInput{Rec: &c.rec}
 	if svc == fleet.ServiceBuildkit {
+		// Its config, and its certificate with the CA it takes instances'
+		// certificates of; rootful where the connection allows privileged
+		// pods, else rootless.
 		if _, err := c.apply(ctx, buildkitConfig(m, owner)); err != nil {
 			return err
 		}
+		ca, _, err := ensureCA(c.cluster, m, now())
+		if err != nil {
+			return err
+		}
+		if _, err := c.apply(ctx, buildkitSecret(m, owner, ca)); err != nil {
+			return err
+		}
+		in.Rootful, in.TLSHash = c.buildkitRootful(ctx, m), ca.tlsHash()
 	}
-	// Buildkit, the one service with a rootful shape, is not served on a
-	// cluster yet: the rest run as their images do.
-	dep, err := cacheDeployment(m, svc, owner, deploymentInput{Rec: &c.rec})
+	dep, err := cacheDeployment(m, svc, owner, in)
 	if err != nil {
 		return err
 	}
@@ -191,8 +201,11 @@ func (c *conn) wipe(ctx context.Context, m fleetMeta, svc fleet.SharedService) e
 		return fmt.Errorf("deleting the cache volume: %w", err)
 	}
 	flog.Info("kube caches: cache volume deleted", "cluster", c.cluster, "fleet", m.Fleet, "service", svc)
-	if svc == fleet.ServiceBuildkit {
-		return nil // not served on a cluster: nothing to bring back
+	if svc == fleet.ServiceBuildkit && c.buildkitRefusal(ctx) != nil {
+		// Not run on this connection: nothing to bring back, and the
+		// stopped server goes.
+		c.stopRefusedBuildkit(ctx, m)
+		return nil
 	}
 	if err := c.ensureService(ctx, m, svc); err != nil {
 		return err
@@ -346,6 +359,10 @@ func (r *Runtime) teardown(fleetName string, gone bool) error {
 	if !gone && fleetUsesCluster(fleetName, r.cluster) {
 		return nil
 	}
+	// The fleet left the connection: its shared Buildkit there takes no
+	// certificate of its instances' again, whether its objects go now or
+	// later.
+	r.rotate(fleetName)
 	c, err := r.connect()
 	if errors.Is(err, kubernetes.ErrClusterNotFound) {
 		// The connection was removed: nothing can reach what is left.
@@ -433,6 +450,7 @@ func (r *Runtime) finishPending(ctx context.Context, p kubernetes.FleetPresence)
 	if fleetUsesCluster(p.Fleet, r.cluster) {
 		return kubernetes.SettleFleetTeardown(r.cluster, p.Fleet, false)
 	}
+	r.rotate(p.Fleet)
 	c, err := r.connect()
 	if err != nil {
 		return err
@@ -476,6 +494,7 @@ func (r *Runtime) purge(ctx context.Context, fleetName string) error {
 	if fleetUsesCluster(fleetName, r.cluster) {
 		return nil
 	}
+	r.rotate(fleetName)
 	c, err := r.connect()
 	if err != nil {
 		return err
@@ -490,6 +509,23 @@ func (r *Runtime) purge(ctx context.Context, fleetName string) error {
 	forgetFleetReady(r.cluster, m)
 	flog.Info("kube caches: deleted a fleet's objects on a connection being removed", "cluster", r.cluster, "fleet", fleetName, "deleted", len(td.Deleted))
 	return kubernetes.SettleFleetTeardown(r.cluster, fleetName, true)
+}
+
+// rotate forgets fleetName's Buildkit CA on the connection (tls.go), under
+// the fleet's lock.
+func (r *Runtime) rotate(fleetName string) {
+	id, err := daemonID()
+	if err != nil {
+		flog.Warn("kube buildkit: the daemon's identity, to rotate a fleet's CA", "cluster", r.cluster, "fleet", fleetName, "err", err)
+		return
+	}
+	removed, err := rotateCA(r.cluster, names.FleetHash(id, r.cluster, fleetName))
+	switch {
+	case err != nil:
+		flog.Warn("kube buildkit: rotating the fleet's CA", "cluster", r.cluster, "fleet", fleetName, "err", err)
+	case removed:
+		flog.Info("kube buildkit: the fleet's CA on the connection is rotated: no certificate it signed is taken there again", "cluster", r.cluster, "fleet", fleetName)
+	}
 }
 
 // PendingTeardowns counts the fleet teardowns owed on connection clusterID.

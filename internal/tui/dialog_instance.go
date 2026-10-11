@@ -652,6 +652,9 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 		if st := m.kubeStatus(target.KubeCluster); st != nil {
 			deployField += "  " + kubeBadgeShort(st, 40)
 		}
+		if note := deployBuildkitNote(m, fleetPage.dlg.fleet, target); note != "" {
+			deployField += "\n          " + warnTextStyle.Render("⚠ "+note)
+		}
 		for _, option := range fleetPage.addInst.unavailable {
 			deployField += "\n            " + dimStyle.Render(deployTargetLabel(m, option.Target)+"  ") +
 				kubeErrStyle.Render(kubeGlyphFailed+" "+option.Reason)

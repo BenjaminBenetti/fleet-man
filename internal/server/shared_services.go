@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -206,7 +207,11 @@ func (s *sharedServiceSweep) run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			if err := s.runtime.EnsureService(f.name, svc); err != nil {
+			if err := s.runtime.EnsureService(f.name, svc); errors.Is(err, svcruntime.ErrNoEndpoint) {
+				// The runtime does not run it for the fleet (a cluster
+				// that does not allow shared Buildkit): no failure.
+				flog.Info("shared services reconcile: not run here", "runtime", key, "fleet", f.name, "service", svc, "reason", err)
+			} else if err != nil {
 				flog.Warn("shared services reconcile: ensure failed", "runtime", key, "fleet", f.name, "service", svc, "err", err)
 			}
 		}
@@ -271,14 +276,50 @@ func prepareClusterFleets(clusterID string) {
 	if rt == nil {
 		return
 	}
+	for _, name := range clusterFleets(clusterID, nil) {
+		if err := rt.PrepareFleet(name); err != nil {
+			flog.Warn("shared services: re-preparing a fleet on a connection failed", "runtime", rt.Key(), "fleet", name, "err", err)
+			continue
+		}
+		flog.Info("shared services: re-prepared a fleet on a connection", "runtime", rt.Key(), "fleet", name)
+	}
+}
+
+// reensureClusterBuildkit re-ensures the shared Buildkit of every fleet with
+// it on and an instance on Kubernetes connection clusterID, so a change of
+// whether the connection runs it (its Allow shared Buildkit) reaches the
+// server now: turned off, the server goes; turned on, it comes back, and the
+// fleet's running instances there get their credentials at the next check
+// (renewSharedServiceCredentials, run right after). Best-effort, logged.
+func reensureClusterBuildkit(ctx context.Context, clusterID string) {
+	rt := clusterSharedServices(clusterID)
+	if rt == nil {
+		return
+	}
+	for _, name := range clusterFleets(clusterID, func(f *fleet.Fleet) bool { return f.Settings.BuildkitServer }) {
+		switch err := rt.EnsureService(name, fleet.ServiceBuildkit); {
+		case errors.Is(err, svcruntime.ErrNoEndpoint):
+			flog.Info("shared services: the connection no longer runs the fleet's Buildkit", "runtime", rt.Key(), "fleet", name, "reason", err)
+		case err != nil:
+			flog.Warn("shared services: re-ensuring a fleet's Buildkit on a connection failed", "runtime", rt.Key(), "fleet", name, "err", err)
+		default:
+			flog.Info("shared services: re-ensured a fleet's Buildkit on a connection", "runtime", rt.Key(), "fleet", name)
+		}
+	}
+	renewSharedServiceCredentials(ctx)
+}
+
+// clusterFleets are the fleets, by name, with an instance on Kubernetes
+// connection clusterID (and that want, when given).
+func clusterFleets(clusterID string, want func(*fleet.Fleet) bool) []string {
 	st, err := state.Load()
 	if err != nil {
 		flog.Warn("shared services: load state failed", "err", err)
-		return
+		return nil
 	}
-	names := make([]string, 0, len(st.Fleets))
+	var names []string
 	for name, f := range st.Fleets {
-		if f == nil {
+		if f == nil || (want != nil && !want(f)) {
 			continue
 		}
 		for _, inst := range f.Instances {
@@ -289,13 +330,7 @@ func prepareClusterFleets(clusterID string) {
 		}
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		if err := rt.PrepareFleet(name); err != nil {
-			flog.Warn("shared services: re-preparing a fleet on a connection failed", "runtime", rt.Key(), "fleet", name, "err", err)
-			continue
-		}
-		flog.Info("shared services: re-prepared a fleet on a connection", "runtime", rt.Key(), "fleet", name)
-	}
+	return names
 }
 
 // releaseFleetRuntimes runs after a single-instance destroy removed the
@@ -467,18 +502,31 @@ func sharedServiceUpkeepEvery() time.Duration {
 	return sharedServiceUpkeepInterval
 }
 
+// credentialCheckInterval paces the check of the instances' shared Buildkit
+// credentials (renewSharedServiceCredentials, which renews only those due),
+// so a daemon back from a long outage renews them minutes after its
+// clusters are usable again.
+var credentialCheckInterval = 5 * time.Minute
+
 // runSharedServiceUpkeep runs maintainSharedServices every
-// sharedServiceUpkeepEvery until ctx ends.
+// sharedServiceUpkeepEvery, and renewSharedServiceCredentials at once and
+// then at least every credentialCheckInterval, until ctx ends.
 func runSharedServiceUpkeep(ctx context.Context) {
-	t := time.NewTicker(sharedServiceUpkeepEvery())
+	every := sharedServiceUpkeepEvery()
+	t := time.NewTicker(every)
 	defer t.Stop()
+	c := time.NewTicker(min(every, credentialCheckInterval))
+	defer c.Stop()
+	renewSharedServiceCredentials(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-c.C:
+			renewSharedServiceCredentials(ctx)
 		case <-t.C:
+			maintainSharedServices(ctx)
 		}
-		maintainSharedServices(ctx)
 	}
 }
 

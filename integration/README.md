@@ -39,6 +39,8 @@ integration/
 │                               # feature with an option, containerEnv/remoteEnv
 ├── fixture-go-feature/         # the published Go feature (debug grants, init)
 ├── fixture-dind/               # the published docker-in-docker feature
+├── fixture-buildx/             # the docker CLI + buildx and no daemon: builds go
+│                               # to the fleet's shared buildkit server
 ├── fixture-hostbind/           # a read-write dir and a read-only file host bind
 ├── poison-docker/docker        # docker stand-in that logs or refuses calls (itest_poison_docker)
 └── tests/

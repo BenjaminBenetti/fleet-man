@@ -12,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -170,6 +173,85 @@ type conn struct {
 	scope   kubernetes.Scope
 	rec     fleet.KubeCluster
 	daemon  string
+
+	// The connection's last preflight's findings, once read (capabilities);
+	// factsKnown says there were some to read.
+	factsRead, factsKnown bool
+	caps                  *fleetgrpc.KubeCapabilities
+	local                 bool
+}
+
+// factsWait bounds a wait for the connection's first preflight, when none
+// has finished yet (the daemon just started).
+var factsWait = 10 * time.Second
+
+// capabilities are the connection's last preflight's findings and whether it
+// is a local cluster (nil and false when there are none to read).
+func (c *conn) capabilities(ctx context.Context) (*fleetgrpc.KubeCapabilities, bool) {
+	if !c.factsRead {
+		c.factsRead = true
+		fctx, cancel := context.WithTimeout(ctx, factsWait)
+		defer cancel()
+		if f, err := connectionFacts(fctx, c.cluster); err == nil {
+			c.factsKnown = true
+			c.caps = f.Capabilities
+			c.local = f.Local.Local() || f.Capabilities.GetLocalCluster()
+		}
+	}
+	return c.caps, c.local
+}
+
+// buildkitRootful reports whether the fleet's shared Buildkit runs rootful on
+// the connection: where it allows privileged pods (auto on a local cluster).
+// Elsewhere it runs rootless. While no preflight has said whether the
+// connection is local (the daemon just started), a server already there
+// keeps the shape it has: a guess would replace its pod, and the other shape
+// writes the same cache volume as another user.
+func (c *conn) buildkitRootful(ctx context.Context, m fleetMeta) bool {
+	_, local := c.capabilities(ctx)
+	if c.factsKnown || c.rec.AllowPrivileged != nil {
+		return c.rec.AllowsPrivileged(local)
+	}
+	dep, err := c.scope.Client.AppsV1().Deployments(m.Namespace).Get(ctx, m.name(names.SuffixBuildkit), metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	for _, ctr := range dep.Spec.Template.Spec.Containers {
+		if ctr.Name == string(fleet.ServiceBuildkit) {
+			sc := ctr.SecurityContext
+			return sc != nil && sc.Privileged != nil && *sc.Privileged
+		}
+	}
+	return false
+}
+
+// BuildkitRefusedError is a connection that does not run the fleets' shared
+// Buildkit: its Allow shared Buildkit setting is off, or its namespace's
+// admission denies the server's pod (as its last preflight found). The
+// fleets' instances there build without it: it is
+// fleet.ErrNoServiceEndpoint.
+type BuildkitRefusedError struct{ Why string }
+
+func (e *BuildkitRefusedError) Error() string { return e.Why }
+
+func (e *BuildkitRefusedError) Is(target error) bool { return target == fleet.ErrNoServiceEndpoint }
+
+// buildkitNotAllowed is the refusal of a connection whose Allow shared
+// Buildkit setting is off.
+func buildkitNotAllowed(rec *fleet.KubeCluster) error {
+	return &BuildkitRefusedError{Why: fmt.Sprintf("shared Buildkit is not allowed on %s (its Allow shared Buildkit setting, allow_shared_buildkit, is off): the fleet's instances there build without it", rec.GetDisplayName())}
+}
+
+// buildkitRefusal is why the connection does not run the fleets' shared
+// Buildkit (nil when it does).
+func (c *conn) buildkitRefusal(ctx context.Context) error {
+	if !c.rec.AllowsSharedBuildkit() {
+		return buildkitNotAllowed(&c.rec)
+	}
+	if caps, _ := c.capabilities(ctx); caps != nil && !caps.GetBuildkitAdmitted() && caps.GetBuildkitReason() != "" {
+		return &BuildkitRefusedError{Why: caps.GetBuildkitReason()}
+	}
+	return nil
 }
 
 func (r *Runtime) connect() (*conn, error) {
@@ -234,15 +316,14 @@ func (r *Runtime) PrepareFleet(fleetName string) error {
 // EnsureService applies svc's volume, Deployment and Service for fleetName
 // (and the anchor they hang off, when it is missing) and returns without
 // waiting for the server to be up: watchReady follows it, and CacheUsage
-// says how it went. Shared Buildkit is not served on a cluster yet: it needs
-// per-instance TLS. Like PrepareFleet, it makes nothing for a fleet no
-// record names on the connection.
+// says how it went. Like PrepareFleet, it makes nothing for a fleet no
+// record names on the connection. Shared Buildkit also gets its TLS Secret
+// (tls.go); on a connection that does not run it (BuildkitRefusedError) a
+// server left from before goes (its volume stays) and the refusal comes
+// back.
 func (r *Runtime) EnsureService(fleetName string, svc fleet.SharedService) error {
 	if _, err := lookup(svc); err != nil {
 		return err
-	}
-	if svc == fleet.ServiceBuildkit {
-		return errBuildkitNotServed
 	}
 	unlock := r.lock(fleetName)
 	defer unlock()
@@ -256,6 +337,12 @@ func (r *Runtime) EnsureService(fleetName string, svc fleet.SharedService) error
 	ctx, cancel := opContext()
 	defer cancel()
 	m := c.meta(fleetName)
+	if svc == fleet.ServiceBuildkit {
+		if refused := c.buildkitRefusal(ctx); refused != nil {
+			c.stopRefusedBuildkit(ctx, m)
+			return refused
+		}
+	}
 	if err := c.ensureService(ctx, m, svc); err != nil {
 		return fmt.Errorf("the %s on %s: %w", serviceText(svc), c.rec.GetDisplayName(), err)
 	}
@@ -263,10 +350,20 @@ func (r *Runtime) EnsureService(fleetName string, svc fleet.SharedService) error
 	return nil
 }
 
-// errBuildkitNotServed refuses shared Buildkit on a cluster: an instance
-// reaches it over the network, which takes a per-instance client
-// certificate fleet does not issue yet.
-var errBuildkitNotServed = errors.New("shared Buildkit does not run on a cluster yet: it needs a per-instance client certificate, which this version of fleet does not issue; builds use the instance's own builder")
+// stopRefusedBuildkit removes a shared Buildkit server the connection no
+// longer runs (its setting turned off, or admission now denying it),
+// keeping its volume. Best-effort, logged.
+func (c *conn) stopRefusedBuildkit(ctx context.Context, m fleetMeta) {
+	forgetReady(c.cluster, m, fleet.ServiceBuildkit)
+	td, err := c.scope.DeleteSelected(ctx, m.serviceSelector(fleet.ServiceBuildkit), serverKinds)
+	if err != nil {
+		flog.Warn("kube buildkit: removing a server the connection does not run", "cluster", c.cluster, "fleet", m.Fleet, "err", err)
+		return
+	}
+	if len(td.Deleted) > 0 {
+		flog.Info("kube buildkit: removed a server the connection does not run (its volume stays)", "cluster", c.cluster, "fleet", m.Fleet, "deleted", len(td.Deleted))
+	}
+}
 
 // InstanceMounts is nil: a pod reaches its fleet's services over the
 // network.
@@ -278,16 +375,24 @@ func (r *Runtime) InstanceMounts(string, fleet.SharedService) []backend.Mount { 
 // 3142, the image cache's mirror on 5000. Its server comes up on the
 // cluster's time after an ensure (watchReady) and no start revives it, so
 // the endpoint is a Fallback one: apt checks it answers first, and dockerd
-// falls back from a mirror that does not by itself. Shared Buildkit has none
-// (ErrNoEndpoint) until it is served. It reads only the daemon's id, which
-// the fleet's object names hash.
+// falls back from a mirror that does not by itself. Shared Buildkit is its
+// Service's TCP port, which takes only mutual TLS (each instance gets its
+// certificate from IssueCredential); a connection whose Allow shared
+// Buildkit is off answers BuildkitRefusedError. It reads only the daemon's
+// id, which the fleet's object names hash, and the connection's record.
 func (r *Runtime) Endpoint(fleetName string, svc fleet.SharedService) (fleet.ServiceEndpoint, error) {
 	s, err := lookup(svc)
 	if err != nil {
 		return fleet.ServiceEndpoint{}, err
 	}
 	if svc == fleet.ServiceBuildkit {
-		return fleet.ServiceEndpoint{}, noEndpoint{}
+		rec, err := pool().Record(r.cluster)
+		if err != nil {
+			return fleet.ServiceEndpoint{}, err
+		}
+		if !rec.AllowsSharedBuildkit() {
+			return fleet.ServiceEndpoint{}, buildkitNotAllowed(&rec)
+		}
 	}
 	id, err := daemonID()
 	if err != nil {
@@ -295,16 +400,11 @@ func (r *Runtime) Endpoint(fleetName string, svc fleet.SharedService) (fleet.Ser
 	}
 	host := names.FleetObject(fleetName, names.FleetHash(id, r.cluster, fleetName), s.suffix)
 	hostPort := net.JoinHostPort(host, strconv.Itoa(int(s.port)))
+	if svc == fleet.ServiceBuildkit {
+		return fleet.ServiceEndpoint{URL: "tcp://" + hostPort, HostPort: hostPort}, nil
+	}
 	return fleet.ServiceEndpoint{URL: "http://" + hostPort, HostPort: hostPort, Fallback: true}, nil
 }
-
-// noEndpoint is shared Buildkit, which the connection does not point its
-// instances at yet (fleet.ErrNoServiceEndpoint).
-type noEndpoint struct{}
-
-func (noEndpoint) Error() string { return errBuildkitNotServed.Error() }
-
-func (noEndpoint) Is(target error) bool { return target == fleet.ErrNoServiceEndpoint }
 
 // ConnectInstance does nothing: the fleet's NetworkPolicies already admit
 // every instance of the fleet to its caches.
@@ -333,8 +433,8 @@ func (r *Runtime) StopService(fleetName string, svc fleet.SharedService) error {
 
 // WipeService empties svc's cache: its server is scaled to nothing, its
 // volume deleted and made again, and the server brought back on it; it
-// returns once the server is up (within wipeTimeout). Buildkit, which does
-// not run on a cluster yet, only loses a volume left from before.
+// returns once the server is up (within wipeTimeout). Shared Buildkit on a
+// connection that does not run it only loses a volume left from before.
 func (r *Runtime) WipeService(fleetName string, svc fleet.SharedService) error {
 	if _, err := lookup(svc); err != nil {
 		return err

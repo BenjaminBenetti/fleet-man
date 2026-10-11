@@ -3,6 +3,8 @@ package create
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -40,9 +42,10 @@ func (channelBackend) RemoveControlFile(string) error                     { retu
 // each configure step's probe finds what it looks for and its write succeeds.
 type execBackend struct {
 	mountBackend
-	mu   sync.Mutex
-	runs int
-	cmds []string
+	mu     sync.Mutex
+	runs   int
+	cmds   []string
+	copies []string
 }
 
 func (b *execBackend) ExecCommand(_ string, command []string) *backend.Cmd {
@@ -51,6 +54,24 @@ func (b *execBackend) ExecCommand(_ string, command []string) *backend.Cmd {
 	b.cmds = append(b.cmds, strings.Join(command, " "))
 	b.mu.Unlock()
 	return backend.NewCmd(exec.Command("echo", "PRESENT"), nil)
+}
+
+// ExecCommandQuiet counts with ExecCommand, and names the user's buildkit
+// credential folder (what a credential install asks first).
+func (b *execBackend) ExecCommandQuiet(_ string, command []string) *backend.Cmd {
+	b.mu.Lock()
+	b.runs++
+	b.cmds = append(b.cmds, strings.Join(command, " "))
+	b.mu.Unlock()
+	return backend.NewCmd(exec.Command("echo", "FLEET_CREDENTIAL_DIR=/home/u/.fleet/buildkit"), nil)
+}
+
+// CopyFile records the path of each file copied in.
+func (b *execBackend) CopyFile(_ string, _ io.Reader, remotePath string, _ int) error {
+	b.mu.Lock()
+	b.copies = append(b.copies, remotePath)
+	b.mu.Unlock()
+	return nil
 }
 
 func (b *execBackend) execs() int {
@@ -245,7 +266,7 @@ func TestCacheSetupLeavesTheInstanceAloneWithoutAnEndpoint(t *testing.T) {
 	rec := svcruntimetest.New("kubernetes:c1")
 	rec.Endpoints = nil
 	b := &execBackend{mountBackend: mountBackend{shared: true}}
-	if err := configureBuildkit(rec, b, "alpha", "/ws"); err != nil || b.execs() != 0 {
+	if err := configureBuildkit(rec, b, "alpha", "i1", "/ws"); err != nil || b.execs() != 0 {
 		t.Fatalf("configureBuildkit = %v with %d commands, want nothing done and no error", err, b.execs())
 	}
 }
@@ -262,7 +283,9 @@ func TestSharedServiceStepsNeedARuntimeAndTheSetting(t *testing.T) {
 			}
 			return err
 		},
-		"buildkit buildx": func(rt svcruntime.Runtime, b backend.Backend) error { return configureBuildkit(rt, b, "alpha", "/ws") },
+		"buildkit buildx": func(rt svcruntime.Runtime, b backend.Backend) error {
+			return configureBuildkit(rt, b, "alpha", "i1", "/ws")
+		},
 		"deb cache": func(rt svcruntime.Runtime, b backend.Backend) error {
 			return setupDebCache(rt, b, "alpha", "cid", "/ws")
 		},
@@ -380,7 +403,7 @@ func TestConfigureBuildkitPointsBuildxAtTheServer(t *testing.T) {
 	rec := svcruntimetest.New("docker")
 	b := &execBackend{mountBackend: mountBackend{shared: true}}
 
-	if err := configureBuildkit(rec, b, "alpha", "/ws"); err != nil {
+	if err := configureBuildkit(rec, b, "alpha", "i1", "/ws"); err != nil {
 		t.Fatal(err)
 	}
 	if b.execs() != 2 {
@@ -388,6 +411,38 @@ func TestConfigureBuildkitPointsBuildxAtTheServer(t *testing.T) {
 	}
 	if calls := rec.Calls(); len(calls) != 0 {
 		t.Fatalf("runtime calls = %+v, want none", calls)
+	}
+}
+
+// TestConfigureBuildkitGivesAClusterInstanceItsCredential: on a runtime that
+// authenticates each instance to its shared Buildkit, the instance gets its
+// own credential (issued for it, installed, recorded) before its buildx is
+// pointed at the server; where the runtime does not serve it, nothing is
+// done and nothing is said (the server's own step said why).
+func TestConfigureBuildkitGivesAClusterInstanceItsCredential(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	seedSettings(t, fleet.FleetSettings{BuildkitServer: true})
+	rec := svcruntimetest.NewIssuer("kubernetes:c1")
+	b := &execBackend{mountBackend: mountBackend{shared: true}}
+	if err := configureBuildkit(rec, b, "alpha", "i1", "/ws"); err != nil {
+		t.Fatal(err)
+	}
+	if b.execs() != 4 || len(b.copies) != 3 {
+		t.Fatalf("instance commands = %d and copies %v, want the credential's folder, its three files copied and moved in, the probe and the write", b.execs(), b.copies)
+	}
+	want := []svcruntimetest.Call{
+		{Method: "IssueCredential", Fleet: "alpha", Service: fleet.ServiceBuildkit, Instance: "i1"},
+		{Method: "CredentialInstalled", Fleet: "alpha", Service: fleet.ServiceBuildkit, Instance: "i1"},
+	}
+	if calls := rec.Calls(); !reflect.DeepEqual(calls, want) {
+		t.Fatalf("runtime calls = %+v, want %+v", calls, want)
+	}
+
+	refused := svcruntimetest.NewIssuer("kubernetes:c1")
+	refused.FailOn("Endpoint", fmt.Errorf("%w: shared Buildkit is not allowed on c1", svcruntime.ErrNoEndpoint))
+	b = &execBackend{mountBackend: mountBackend{shared: true}}
+	if err := configureBuildkit(refused, b, "alpha", "i1", "/ws"); err != nil || b.execs() != 0 || len(refused.Calls()) != 0 {
+		t.Fatalf("a refused server: %v, %d commands, calls %+v", err, b.execs(), refused.Calls())
 	}
 }
 

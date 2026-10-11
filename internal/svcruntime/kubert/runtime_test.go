@@ -101,7 +101,7 @@ func useFake(t *testing.T, objs ...runtime.Object) *fakePool {
 	t.Setenv("HOME", t.TempDir())
 	f := &fakePool{cs: fake.NewClientset(objs...), rec: fleet.KubeCluster{ID: testCluster, Namespace: "fleet", DisplayName: "minikube"}}
 	giveUIDs(f.cs)
-	origPool, origDaemon, origFacts, origUses, origExists := pool, daemonID, connectionFacts, fleetUsesCluster, fleetExists
+	origPool, origDaemon, origFacts, origUses, origExists, origKeys := pool, daemonID, connectionFacts, fleetUsesCluster, fleetExists, fleetInstanceKeys
 	pool = func() access { return f }
 	daemonID = func() (string, error) { return testDaemon, nil }
 	connectionFacts = func(context.Context, string) (kubernetes.Facts, error) {
@@ -111,6 +111,11 @@ func useFake(t *testing.T, objs ...runtime.Object) *fakePool {
 	// otherwise (a release, a pending teardown, a purge).
 	fleetUsesCluster = func(string, string) bool { return true }
 	fleetExists = func(string) bool { return false }
+	// Each fleet's instances "i1" and "i2" are on the connection, keyed
+	// "key-<fleet>-<instance>".
+	fleetInstanceKeys = func(fleetName, _ string) (map[string]string, error) {
+		return map[string]string{"i1": "key-" + fleetName + "-i1", "i2": "key-" + fleetName + "-i2"}, nil
+	}
 	fp := filepath.Join(t.TempDir(), "footprint.json")
 	origFP := kubernetes.FootprintPath
 	kubernetes.FootprintPath = func() string { return fp }
@@ -120,7 +125,7 @@ func useFake(t *testing.T, objs ...runtime.Object) *fakePool {
 	stopWatches := watchFor(t)
 	t.Cleanup(func() {
 		stopWatches()
-		pool, daemonID, connectionFacts, fleetUsesCluster, fleetExists = origPool, origDaemon, origFacts, origUses, origExists
+		pool, daemonID, connectionFacts, fleetUsesCluster, fleetExists, fleetInstanceKeys = origPool, origDaemon, origFacts, origUses, origExists, origKeys
 		kubernetes.FootprintPath = origFP
 		pollInterval, goneTimeout = origPoll, origGone
 		SetHooks(Hooks{})
@@ -200,6 +205,10 @@ func (f *fakePool) objects(t *testing.T) []string {
 	nps, _ := f.cs.NetworkingV1().NetworkPolicies("fleet").List(ctx, metav1.ListOptions{})
 	for _, o := range nps.Items {
 		out = append(out, "netpol/"+o.Name)
+	}
+	secrets, _ := f.cs.CoreV1().Secrets("fleet").List(ctx, metav1.ListOptions{})
+	for _, o := range secrets.Items {
+		out = append(out, "secret/"+o.Name)
 	}
 	deps, _ := f.cs.AppsV1().Deployments("fleet").List(ctx, metav1.ListOptions{})
 	for _, o := range deps.Items {
@@ -316,7 +325,7 @@ func TestApplyReplacesADependentOfAnEarlierAnchor(t *testing.T) {
 }
 
 // TestEnsureService: a cache's volume, server and Service, after the anchor;
-// an ensure does not wait for the server. Buildkit is refused on a cluster.
+// an ensure does not wait for the server.
 func TestEnsureService(t *testing.T) {
 	f := useFake(t)
 	rt := For(testCluster)
@@ -329,9 +338,6 @@ func TestEnsureService(t *testing.T) {
 	if q := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; q.String() != "10Gi" || len(pvc.OwnerReferences) != 0 {
 		t.Fatalf("volume %v owners %v", q.String(), pvc.OwnerReferences)
 	}
-	if err := rt.EnsureService("alpha", fleet.ServiceBuildkit); !errors.Is(err, errBuildkitNotServed) {
-		t.Fatalf("buildkit = %v", err)
-	}
 	if err := rt.EnsureService("alpha", "nope"); err == nil {
 		t.Fatal("an unknown service was ensured")
 	}
@@ -340,7 +346,7 @@ func TestEnsureService(t *testing.T) {
 // TestEndpoint: a cluster's instances reach the deb and image caches at
 // their Services, by the short name their namespace resolves, on the
 // Services' ports; checking first that the server answers (Fallback). Shared
-// Buildkit has no endpoint yet.
+// Buildkit is at its Service's TLS port where the connection allows it.
 func TestEndpoint(t *testing.T) {
 	f := useFake(t)
 	rt := For(testCluster)
@@ -372,8 +378,16 @@ func TestEndpoint(t *testing.T) {
 	if other, _ := rt.Endpoint("beta", fleet.ServiceDebCache); !strings.Contains(other.URL, meta("beta").name(names.SuffixAptCache)) {
 		t.Errorf("fleet beta's deb cache at %q", other.URL)
 	}
-	if _, err := rt.Endpoint("alpha", fleet.ServiceBuildkit); !errors.Is(err, fleet.ErrNoServiceEndpoint) || !strings.Contains(err.Error(), "per-instance client certificate") {
-		t.Errorf("buildkit endpoint = %v, want ErrNoEndpoint naming why", err)
+	// Shared Buildkit is at its Service's TCP port (mutual TLS, no
+	// fallback), unless the connection does not allow it.
+	bk := m.name(names.SuffixBuildkit) + ":1234"
+	if got, err := rt.Endpoint("alpha", fleet.ServiceBuildkit); err != nil || got != (fleet.ServiceEndpoint{URL: "tcp://" + bk, HostPort: bk}) {
+		t.Errorf("buildkit endpoint = %+v, %v", got, err)
+	}
+	off := false
+	f.rec.AllowSharedBuildkit = &off
+	if _, err := rt.Endpoint("alpha", fleet.ServiceBuildkit); !errors.Is(err, fleet.ErrNoServiceEndpoint) || !strings.Contains(err.Error(), "allow_shared_buildkit") {
+		t.Errorf("buildkit endpoint where not allowed = %v, want ErrNoEndpoint naming the setting", err)
 	}
 	if _, err := rt.Endpoint("alpha", "nope"); err == nil || errors.Is(err, fleet.ErrNoServiceEndpoint) {
 		t.Errorf("unknown service endpoint = %v", err)
@@ -457,9 +471,23 @@ func TestWipeService(t *testing.T) {
 	if st := readyState(testCluster, m, fleet.ServiceDebCache); st != stateReady {
 		t.Fatalf("state %q", st)
 	}
-	// Buildkit, not served on a cluster, only loses a volume.
+	// Shared Buildkit is wiped and back the same way, its TLS with it; on a
+	// connection that does not run it, a volume left from before only goes.
+	if err := rt.EnsureService("alpha", fleet.ServiceBuildkit); err != nil {
+		t.Fatal(err)
+	}
 	if err := rt.WipeService("alpha", fleet.ServiceBuildkit); err != nil {
 		t.Fatal(err)
+	}
+	sameList(t, "objects after a buildkit wipe", f.objects(t), want(m, "configmap/anchor", "pvc/aptcache", "deploy/aptcache", "svc/aptcache",
+		"pvc/buildkit", "configmap/buildkit", "secret/buildkit", "deploy/buildkit", "svc/buildkit"))
+	off := false
+	f.rec.AllowSharedBuildkit = &off
+	if err := rt.WipeService("alpha", fleet.ServiceBuildkit); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.objects(t); strings.Contains(strings.Join(got, " "), "pvc/"+m.name(names.SuffixBuildkit)) {
+		t.Fatalf("a refused buildkit's volume was made again: %v", got)
 	}
 }
 

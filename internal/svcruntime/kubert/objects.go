@@ -344,7 +344,13 @@ type deploymentInput struct {
 	// Rootful runs buildkit privileged (the connection allows privileged
 	// pods); otherwise rootless.
 	Rootful bool
+	// TLSHash names buildkit's server certificate and CA (buildkitCA's
+	// tlsHash): a new one replaces its pod.
+	TLSHash string
 }
+
+// annotationBuildkitTLS on buildkit's pod template is its TLSHash.
+const annotationBuildkitTLS = "fleet.dev/buildkit-tls"
 
 // cacheDeployment is svc's Deployment: one pod, replaced (Recreate) rather
 // than rolled, since its volume mounts on one node at a time; placed like
@@ -379,6 +385,14 @@ func cacheDeployment(m fleetMeta, svc fleet.SharedService, owner metav1.OwnerRef
 		})
 	}
 	template := corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: m.serviceLabels(svc)}, Spec: spec}
+	if svc == fleet.ServiceBuildkit {
+		template.Annotations = map[string]string{annotationBuildkitTLS: in.TLSHash}
+		if !in.Rootful {
+			// The rootless server's user owns its volume and reads its
+			// Secret through the pod's group.
+			template.Spec.SecurityContext = &corev1.PodSecurityContext{FSGroup: ptr(rootlessBuildkitUID)}
+		}
+	}
 	if err := podspec.HardenTemplate(&template, podspec.HardenOptions{PinnedImages: true}); err != nil {
 		return nil, fmt.Errorf("the %s server: %w", svc, err)
 	}
@@ -399,7 +413,32 @@ func cacheDeployment(m fleetMeta, svc fleet.SharedService, owner metav1.OwnerRef
 const (
 	volumeData   = "data"
 	volumeConfig = "config"
+	volumeTLS    = "tls"
 )
+
+// How the shared Buildkit server runs: its user when rootless, where its pod
+// mounts its TLS Secret, and the unix sockets it also listens on in the pod
+// (buildctl's defaults there, for what is run in the pod itself: the live
+// tests' checks), besides its TCP port, which takes only mutual TLS.
+const (
+	rootlessBuildkitUID    = int64(1000)
+	buildkitTLSDir         = "/etc/fleet-buildkit-tls"
+	buildkitRootfulSocket  = "unix:///run/buildkit/buildkitd.sock"
+	buildkitRootlessSocket = "unix:///run/user/1000/buildkit/buildkitd.sock"
+)
+
+// buildkitArgs are buildkitd's flags: TCP with mutual TLS (a client must
+// present a certificate the fleet's CA signed), its socket in the pod, and
+// its config.
+func buildkitArgs(port int32, socket, config string) []string {
+	return []string{
+		"--addr", fmt.Sprintf("tcp://0.0.0.0:%d", port), "--addr", socket,
+		"--tlscacert", buildkitTLSDir + "/" + tlsCAFile,
+		"--tlscert", buildkitTLSDir + "/" + tlsCertFile,
+		"--tlskey", buildkitTLSDir + "/" + tlsKeyFile,
+		"--config", config,
+	}
+}
 
 // serviceContainer is svc's one container and the pod's volumes.
 func serviceContainer(m fleetMeta, svc fleet.SharedService, s cacheSpec, rec *fleet.KubeCluster, rootful bool) (corev1.Container, []corev1.Volume) {
@@ -443,26 +482,37 @@ func serviceContainer(m fleetMeta, svc fleet.SharedService, s cacheSpec, rec *fl
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		}
 	case fleet.ServiceBuildkit:
-		volumes = append(volumes, corev1.Volume{Name: volumeConfig, VolumeSource: corev1.VolumeSource{
-			ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: m.name(s.suffix)}},
-		}})
+		// The Secret is read by the server alone: root's when rootful, the
+		// pod's group's (its fsGroup) when rootless.
+		mode := int32(0o400)
+		if !rootful {
+			mode = 0o440
+		}
+		volumes = append(volumes,
+			corev1.Volume{Name: volumeConfig, VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: m.name(s.suffix)}},
+			}},
+			corev1.Volume{Name: volumeTLS, VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: m.name(s.suffix), DefaultMode: &mode},
+			}})
+		tlsMount := corev1.VolumeMount{Name: volumeTLS, MountPath: buildkitTLSDir, ReadOnly: true}
 		c.Resources = corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("256Mi")},
 		}
 		if q, err := resource.ParseQuantity(orDefault(rec.MemoryLimit, fleet.DefaultKubeMemoryLimit)); err == nil {
 			c.Resources.Limits = corev1.ResourceList{corev1.ResourceMemory: q}
 		}
-		c.ReadinessProbe = nil
 		if rootful {
-			c.Args = []string{"--config", "/etc/buildkit/buildkitd.toml"}
+			c.Args = buildkitArgs(s.port, buildkitRootfulSocket, "/etc/buildkit/buildkitd.toml")
 			c.SecurityContext = &corev1.SecurityContext{Privileged: ptr(true)}
-			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: volumeConfig, MountPath: "/etc/buildkit", ReadOnly: true})
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: volumeConfig, MountPath: "/etc/buildkit", ReadOnly: true}, tlsMount)
 		} else {
-			uid := int64(1000)
-			c.Args = []string{"--oci-worker-no-process-sandbox", "--config", "/home/user/.config/buildkit/buildkitd.toml"}
+			uid := rootlessBuildkitUID
+			c.Args = append([]string{"--oci-worker-no-process-sandbox"}, buildkitArgs(s.port, buildkitRootlessSocket, "/home/user/.config/buildkit/buildkitd.toml")...)
 			c.VolumeMounts = []corev1.VolumeMount{
 				{Name: volumeData, MountPath: rootlessBuildkitData},
 				{Name: volumeConfig, MountPath: "/home/user/.config/buildkit", ReadOnly: true},
+				tlsMount,
 			}
 			// rootlesskit needs the user namespaces seccomp and AppArmor
 			// would deny it.

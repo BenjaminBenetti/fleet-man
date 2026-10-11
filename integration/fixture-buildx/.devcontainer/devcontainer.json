@@ -1,0 +1,5 @@
+{
+  "name": "fleet-man buildx fixture",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "vscode"
+}

@@ -183,3 +183,38 @@ func PrependWarn(fleetName, instanceName, warning string) {
 func WriteWarnQuiet(fleetName, instanceName, warning string) {
 	writeWarnFile(fleetName, instanceName, warning)
 }
+
+// ReplaceWarnLine keeps one line of the instance's banner up to date: every
+// line starting with prefix goes, and line (when not empty) goes in front,
+// the rest kept in their order. It reports whether the banner changed; a new
+// or changed line is recorded to the event log like WriteWarn, a line taken
+// off is not. For a warning a periodic check puts on and takes off again
+// (one whose text moves, say a count down to a deadline).
+func ReplaceWarnLine(fleetName, instanceName, prefix, line string) bool {
+	existing, _ := os.ReadFile(WarnPath(fleetName, instanceName))
+	var kept []string
+	old := ""
+	for _, l := range strings.Split(string(existing), "\n") {
+		switch {
+		case strings.HasPrefix(l, prefix):
+			old = l
+		case l != "":
+			kept = append(kept, l)
+		}
+	}
+	if old == line {
+		return false
+	}
+	if line != "" {
+		kept = append([]string{line}, kept...)
+	}
+	if len(kept) == 0 {
+		_ = os.Remove(WarnPath(fleetName, instanceName))
+	} else {
+		writeWarnFile(fleetName, instanceName, strings.Join(kept, "\n"))
+	}
+	if line != "" {
+		flog.Warn("instance warning", "fleet", fleetName, "instance", instanceName, "warn", line)
+	}
+	return true
+}

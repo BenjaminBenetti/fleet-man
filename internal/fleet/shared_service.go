@@ -1,6 +1,9 @@
 package fleet
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // SharedService names one of a fleet's shared services: a per-fleet server
 // that every instance of the fleet uses, switched on by its own FleetSettings
@@ -109,3 +112,23 @@ type ServiceEndpoint struct {
 // ErrNoServiceEndpoint is a shared service a runtime runs but does not point
 // instances at (svcruntime.ErrNoEndpoint).
 var ErrNoServiceEndpoint = errors.New("instances are not pointed at this shared service here")
+
+// ServiceCredential is what an instance presents to one of its fleet's shared
+// services that takes a credential of each instance's own, and what it checks
+// the service by (a cluster's shared Buildkit: mutual TLS, with a short-lived
+// client certificate whose subject is the instance's key).
+type ServiceCredential struct {
+	// CA is the certificate (PEM) the service's certificate and the
+	// instance's are signed by.
+	CA []byte
+	// Cert and Key are the instance's client certificate and its private key
+	// (PEM).
+	Cert, Key []byte
+	// ServerName is the name the service's certificate carries, which the
+	// instance checks it by.
+	ServerName string
+	// Serial is the client certificate's serial number (hex), NotBefore and
+	// NotAfter its validity.
+	Serial              string
+	NotBefore, NotAfter time.Time
+}

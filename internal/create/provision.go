@@ -129,7 +129,7 @@ func finishProvision(ctx context.Context, instanceBackend backend.Backend, servi
 	// (when enabled). A silent no-op for images without docker/buildx, and
 	// non-fatal otherwise — the instance is usable regardless of buildx wiring.
 	backend.ReportStep(ctx, fleet.StepConfigureCaches, "")
-	if err := configureBuildkit(services, instanceBackend, fleetName, wsDir); err != nil {
+	if err := configureBuildkit(services, instanceBackend, fleetName, instanceName, wsDir); err != nil {
 		provisionWarning(ctx, fleetName, instanceName, fmt.Sprintf("configure buildkit buildx: %v", err))
 	}
 

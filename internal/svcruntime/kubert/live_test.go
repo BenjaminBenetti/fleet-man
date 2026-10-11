@@ -3,7 +3,6 @@
 package kubert
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -49,6 +48,10 @@ const liveImage = probeImageForTests
 // probeImageForTests is busybox, pinned (the deep test's probe image).
 const probeImageForTests = "docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 
+// liveNamespacePrefix starts the name of a live test's namespace (the
+// rest is random).
+var liveNamespacePrefix = "fleet-it-p5-00-kubert-objects-ensure-wipe-"
+
 type liveRig struct {
 	t    *testing.T
 	ns   string
@@ -65,7 +68,7 @@ func newLiveRig(t *testing.T, kctx string) *liveRig {
 	t.Setenv("HOME", t.TempDir())
 	var suffix [3]byte
 	_, _ = rand.Read(suffix[:])
-	r := &liveRig{t: t, ns: "fleet-it-p5-00-kubert-objects-ensure-wipe-" + hex.EncodeToString(suffix[:])}
+	r := &liveRig{t: t, ns: liveNamespacePrefix + hex.EncodeToString(suffix[:])}
 	r.rec = fleet.KubeCluster{ID: "live-" + hex.EncodeToString(suffix[:]), DisplayName: "live", Context: kctx,
 		KubeconfigPaths: paths, Namespace: r.ns}
 	conn, err := kubeexec.Load(r.rec, kubeexec.Options{})
@@ -189,7 +192,7 @@ func (r *liveRig) waitRunning(pod string) *corev1.Pod {
 // sh runs script in pod's one container and returns its output and code.
 func (r *liveRig) sh(pod, container, script string) (string, int) {
 	r.t.Helper()
-	var out bytes.Buffer
+	var out lockedBuffer
 	code, err := r.pool.ExecService(context.Background(), r.rec.ID, pod, container, []string{"sh", "-c", script}, &out, &out)
 	if err != nil {
 		r.t.Fatalf("exec in %s: %v", pod, err)
@@ -361,7 +364,7 @@ func TestLiveKubert(t *testing.T) {
 		var out string
 		for i := 0; i < 30; i++ {
 			var code int
-			out, code = r.sh(pod, string(fleet.ServiceBuildkit), "buildctl debug workers --verbose")
+			out, code = r.sh(pod.Name, string(fleet.ServiceBuildkit), "buildctl debug workers --verbose")
 			if code == 0 {
 				break
 			}
