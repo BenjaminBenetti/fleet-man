@@ -56,6 +56,7 @@ func NewRootCmd() *cobra.Command {
 		newReadSessionCmd(),
 		newLandingPageCmd(),
 		newBrowserProxyCmd(),
+		newNetProbeCmd(),
 		newMCPBridgeCmd(),
 		newMCPEnvCmd(),
 		newClaudeModEnvCmd(),
