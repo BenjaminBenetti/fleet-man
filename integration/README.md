@@ -31,6 +31,9 @@ integration/
 │                               # portsAttributes
 ├── net/                        # net.sh (itest_net_* helpers) + client.py, the host end
 │                               # of the forwarding / browser-proxy tests
+├── editor/                     # editor.sh (itest_editor_* helpers): ssh -F through
+│                               # ~/.ssh/fleet_config, a gateway as the remote daemon,
+│                               # a fake VS Code server for the Remote-SSH tests
 ├── fixture-lifecycle/          # every lifecycle hook logs its name (hook counts)
 ├── fixture-dockerfile/         # Dockerfile build (args, repo-root context) + a local
 │                               # feature with an option, containerEnv/remoteEnv
@@ -138,6 +141,14 @@ helpers in `common.sh`, which dispatch to `backends/<backend>.sh`:
 `<ref>` is `<fleet>/<instance>`, as `fleet exec` takes it. A step that only
 makes sense on one backend goes inside `if itest_backend_is devcontainer`, with
 a comment saying why.
+
+The VS Code Remote-SSH tests source `editor/editor.sh`: `itest_editor_ssh`
+and `itest_editor_sftp` connect through the `~/.ssh/fleet_config` that `fleet
+code` writes (`ssh -F`, no remote-daemon variables), with `~/.ssh` set aside
+for the test (`itest_editor_isolate_ssh`); `itest_editor_gateway_start` /
+`_url` make the test's daemon a remote one behind a local gateway; and
+`itest_editor_fake_vscode` / `_vscode_attach` stand in for VS Code's server
+and a window's connection to it.
 
 To drive the daemon's MCP tools, `itest_mcp_call <tool> <arguments-json>
 [<field>]` calls one tool on the local MCP endpoint and prints its result (or

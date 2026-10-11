@@ -28,8 +28,9 @@ done
 # it would invite users to call it directly, breaking the TUI contract.
 assert_not_contains "${root_help}" "_create-instance" "internal command should remain hidden"
 # So must the in-pod commands (a pod's PID 1, its Jobs' process and its agent,
-# and the in-instance browser proxy and landing page).
-for internal in exec-as pod-init pod-job pod-agent kube-exec browser-proxy landing-page; do
+# the in-instance browser proxy and landing page, and the editor's
+# Remote-SSH plumbing: ssh's ProxyCommand and the in-instance ssh server).
+for internal in exec-as pod-init pod-job pod-agent kube-exec browser-proxy landing-page ssh-proxy ssh-server; do
   assert_not_contains "${root_help}" "${internal}" "in-pod command ${internal} should remain hidden"
 done
 
