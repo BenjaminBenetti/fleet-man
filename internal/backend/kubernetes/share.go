@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +28,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/topology"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
+	"github.com/BenjaminBenetti/fleet-man/internal/mounts/hostbind"
 	"github.com/BenjaminBenetti/fleet-man/internal/mounts/syncpolicy"
 	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
 )
@@ -77,17 +80,32 @@ type shareState struct {
 }
 
 // seedClaims are the disks the seed mounts beside the instance's: the share
-// when it binds it.
-func (s *shareState) seedClaims() []podspec.JobClaim {
-	if s == nil || !s.bind {
+// when it binds it, or fills the fleet's named volumes there
+// (sharedVolumes); never on the copy tier, whose tree is on the disk.
+func (s *shareState) seedClaims(sharedVolumes bool) []podspec.JobClaim {
+	if s == nil || s.mode == topology.Copy || !s.bind && !sharedVolumes {
 		return nil
 	}
 	return []podspec.JobClaim{{ClaimName: s.claim, Path: shareSeedPath}}
 }
 
-// shareSeedPath is where a binding seed mounts the share (it never writes
-// there).
+// shareSeedPath is where a seed mounts the share: one that binds it never
+// writes there; one that fills the fleet's named volumes writes in its
+// volumes folder alone.
 const shareSeedPath = "/fleet-share"
+
+// seedPath is where the share's tree is in the seed's pod, for the fleet's
+// named volumes: the share mounted whole, or on the copy tier the tree on
+// the instance disk ("" without a share).
+func (s *shareState) seedPath() string {
+	switch {
+	case s == nil:
+		return ""
+	case s.mode == topology.Copy:
+		return path.Join(podspec.JobDiskPath, podshare.DiskDir)
+	}
+	return shareSeedPath
+}
 
 // input is the render's view of the share.
 func (s *shareState) input() *podspec.Share {
@@ -118,16 +136,51 @@ func (s *shareState) done() {
 	}
 }
 
-// record is the share as the instance record keeps it.
-func (s *shareState) record() *ShareRecord {
+// record is the share as the instance record keeps it, for the instance pod
+// pod: the fleet's folders, the named volumes, and the host folders and files
+// whose copies are on the share, each its own synced root at its real path
+// on the daemon host (a bound file's root holds only it).
+func (s *shareState) record(pod *podspec.PodSpec) *ShareRecord {
 	if s == nil {
 		return nil
 	}
-	return &ShareRecord{
-		Mode: string(s.mode), Claim: s.input().Claim,
-		Roots: podshare.LayoutRoots(s.layout.Entries, syncpolicy.Defaults().Root),
-		UID:   s.layout.UID, GID: s.layout.GID,
+	l := podspec.ShareLayout(pod, s.input())
+	var fleetEntries []podshare.Entry
+	for _, e := range l.Entries {
+		if !hostbind.Is(e.Path) {
+			fleetEntries = append(fleetEntries, e)
+		}
 	}
+	rec := &ShareRecord{
+		Mode: string(s.mode), Claim: s.input().Claim,
+		Roots: podshare.LayoutRoots(fleetEntries, syncpolicy.Defaults().Root),
+		UID:   s.layout.UID, GID: s.layout.GID,
+		Volumes: l.Volumes, HostBinds: hostBindsOf(pod),
+	}
+	for _, hb := range rec.HostBinds {
+		rec.Roots = append(rec.Roots, hb.root())
+	}
+	return rec
+}
+
+// hostBindsOf are the host binds of instance pod pod, one per bound path
+// (read-only when every mount of it is), in name order.
+func hostBindsOf(pod *podspec.PodSpec) []HostBind {
+	var out []HostBind
+	at := map[string]int{}
+	for _, m := range pod.Mounts {
+		if m.Kind != podspec.MountHostDir && m.Kind != podspec.MountHostFile {
+			continue
+		}
+		if i, ok := at[m.SubPath]; ok {
+			out[i].ReadOnly = out[i].ReadOnly && m.ReadOnly
+			continue
+		}
+		at[m.SubPath] = len(out)
+		out = append(out, HostBind{Name: m.SubPath, Path: m.Source, File: m.Kind == podspec.MountHostFile, ReadOnly: m.ReadOnly})
+	}
+	slices.SortFunc(out, func(a, b HostBind) int { return strings.Compare(a.Name, b.Name) })
+	return out
 }
 
 // ShareClaim is the name of fleetName's share PVC on the connection whose
@@ -221,12 +274,30 @@ func lockShareBind(ctx context.Context, key string) (func(), error) {
 // prepareShare decides where the instance's fleet mounts live, and makes
 // the fleet's share ready for its render: ensured, and placed when it is
 // bound; otherwise this create's seed binds it (holding the fleet's bind
-// lock until finishShare). A request without fleet mounts has no share.
+// lock until finishShare). A request without fleet mounts has no share
+// yet: needShare makes one for a run that keeps something else there.
 func (c *creation) prepareShare(ctx context.Context) error {
 	entries := layoutOf(c.req)
 	if len(entries) == 0 {
 		return nil
 	}
+	return c.prepareShareFor(ctx, entries)
+}
+
+// needShare prepares the fleet's share, with no fleet folders of its own,
+// for a run without fleet mounts that keeps something on it (the fleet's
+// named volumes, bound host folders and files): known only once the run is
+// translated.
+func (c *creation) needShare(ctx context.Context, pod *podspec.PodSpec) error {
+	if c.share != nil || !podspec.NeedsShare(pod) {
+		return nil
+	}
+	return c.prepareShareFor(ctx, nil)
+}
+
+// prepareShareFor is prepareShare of a share whose fleet folders are
+// entries.
+func (c *creation) prepareShareFor(ctx context.Context, entries []backend.LayoutEntry) error {
 	uid, gid := shareIDs()
 	if c.identity.NonRoot {
 		uid, gid = -1, -1

@@ -43,6 +43,11 @@ type Input struct {
 	// SSHAuthSock is the agent socket devcontainer-exec-class processes get
 	// as SSH_AUTH_SOCK in the pod (exec.json); "" gives them none.
 	SSHAuthSock string
+	// FleetDir is fleet's own state on the daemon host (~/.fleet): a bind of
+	// a folder or file that is it, holds it or is in it is refused, as the
+	// fleet's sync would copy the daemon's own files into pods. "" checks
+	// nothing.
+	FleetDir string
 	// LookupGroup resolves a --group-add group name to its gid in the image;
 	// nil (or a name it does not know) refuses names, which a pod spec cannot
 	// carry.

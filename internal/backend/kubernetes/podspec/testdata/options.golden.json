@@ -1475,12 +1475,17 @@
     },
     "changes": {
       "/mounts/1/kind": "host-dir",
+      "/mounts/1/mode": 448,
       "/mounts/1/source": "/home/dev/host/aws",
+      "/mounts/1/subPath": ".hostbind/e59cefee",
       "/mounts/1/target": "/home/vscode/.aws",
       "/mounts/2/kind": "host-file",
       "/mounts/2/readOnly": true,
       "/mounts/2/source": "/home/dev/host/gitconfig",
-      "/mounts/2/target": "/home/vscode/.gitconfig"
+      "/mounts/2/subPath": ".hostbind/88857567",
+      "/mounts/2/target": "/home/vscode/.gitconfig",
+      "/pid1/links/0/path": "/home/vscode/.gitconfig",
+      "/pid1/links/0/target": "/fleet-mounts/hostbind/88857567/gitconfig"
     }
   },
   "mount/bind-empty-dir": {
@@ -1493,7 +1498,9 @@
     },
     "changes": {
       "/mounts/1/kind": "host-dir",
+      "/mounts/1/mode": 493,
       "/mounts/1/source": "/home/dev/host/empty-dir",
+      "/mounts/1/subPath": ".hostbind/8bf2b1bd",
       "/mounts/1/target": "/empty"
     }
   },
@@ -2831,8 +2838,10 @@
     },
     "changes": {
       "/mounts/1/kind": "host-dir",
+      "/mounts/1/mode": 448,
       "/mounts/1/readOnly": true,
       "/mounts/1/source": "/home/dev/host/aws",
+      "/mounts/1/subPath": ".hostbind/e59cefee",
       "/mounts/1/target": "/home/vscode/.aws"
     }
   },
@@ -2891,7 +2900,9 @@
     },
     "changes": {
       "/mounts/1/kind": "host-dir",
+      "/mounts/1/mode": 493,
       "/mounts/1/source": "/home/dev/host/new",
+      "/mounts/1/subPath": ".hostbind/0d72ff2f",
       "/mounts/1/target": "/new"
     }
   },

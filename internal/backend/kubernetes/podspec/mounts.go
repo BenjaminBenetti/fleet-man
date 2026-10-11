@@ -16,6 +16,8 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
+	"github.com/BenjaminBenetti/fleet-man/internal/mounts/hostbind"
+	"github.com/BenjaminBenetti/fleet-man/internal/podinit"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 )
 
@@ -24,15 +26,17 @@ import (
 //
 //	bind of the workspace (or a folder in it)  → MountWorkspace (ws/)
 //	${devcontainerId}, anonymous, image volume → MountVolume (vol/, copy-up)
-//	any other named volume                     → MountSharedVolume (share)
+//	any other named volume                     → MountSharedVolume (share .vol/, copy-up)
 //	tmpfs, --shm-size                          → MountTmpfs
 //	bind of the user's ssh-agent socket        → MountSSHAgent
 //	bind of docker.sock, --use-api-socket      → MountDockerSocket (DooD)
 //	bind of another socket / socket directory  → MountHostSocket(Dir)
-//	bind of another host directory / file      → MountHostDir / MountHostFile
+//	bind of another host directory / file      → MountHostDir / MountHostFile (share .hostbind/, synced)
 //	bind of a device or FIFO                   → refused
 //
-// Each bind source is stat-ed on the daemon host (Input.Host).
+// Each bind source is stat-ed on the daemon host (Input.Host). A fleet mount
+// of a custom mount's chosen host folder (MountScopeHostFolder) is a
+// MountHostDir too.
 
 // reservedTargets are the container paths fleet's own mounts own; a run
 // mount at or below one is refused.
@@ -341,7 +345,7 @@ func (t *translation) addVolume(m rawMount, target string) {
 		mt.SubPath = podseed.VolumeSubPath(m.source) + sub
 	default:
 		mt.Kind = MountSharedVolume
-		mt.SubPath = ".vol/" + sha8(m.source) + sub
+		mt.SubPath = SharedVolumeSubPath(m.source) + sub
 	}
 	t.runMounts = append(t.runMounts, runMount{mt, optionOf(m)})
 }
@@ -384,7 +388,7 @@ func (t *translation) addBind(m rawMount, target string) {
 	switch {
 	case errors.Is(err, fs.ErrNotExist) && m.fromVolumeFlag:
 		// docker creates a missing -v source as an empty directory.
-		mt.Kind = MountHostDir
+		mt.Kind, mt.Mode = MountHostDir, 0o755
 	case errors.Is(err, fs.ErrNotExist):
 		t.refuse(refuseOption(optionOf(m), fmt.Sprintf("%s: bind source path does not exist: %s", m.option, source)))
 		return
@@ -397,8 +401,49 @@ func (t *translation) addBind(m rawMount, target string) {
 			t.refuse(&Refusal{Code: CodeHostSpecialFile, Reason: fmt.Sprintf("%s: %v", m.option, err)})
 			return
 		}
+		if mt.Kind == MountHostDir {
+			mt.Mode = uint32(info.Mode().Perm())
+		}
+	}
+	if mt.Kind == MountHostDir || mt.Kind == MountHostFile {
+		if !t.hostBindable(m.option, source) {
+			return
+		}
+		mt.SubPath = hostbind.Name(source)
 	}
 	t.runMounts = append(t.runMounts, runMount{mt, optionOf(m)})
+}
+
+// hostBindable reports whether a daemon-host folder or file can be bound
+// into a pod, whose copy of it fleet's sync keeps: never fleet's own state
+// (the daemon's files would be copied into the pod, and the pod's back over
+// them), refused naming the option.
+func (t *translation) hostBindable(option, source string) bool {
+	if own := t.in.FleetDir; own != "" && hostbind.Overlaps(source, own) {
+		t.refuse(&Refusal{Code: CodeHostMount, Reason: fmt.Sprintf("%s: %s overlaps fleet's own state on the daemon host (%s), which never syncs into a pod", option, source, own)})
+		return false
+	}
+	return true
+}
+
+// SharedVolumeSubPath is the folder on the fleet's share of the named volume
+// called name: podshare.VolumeSubPath of a hash of the name, which may not
+// be a valid path component everywhere.
+func SharedVolumeSubPath(name string) string {
+	return path.Join(podseed.SharedVolumesDir, sha8(name))
+}
+
+// sharedVolumeID is the folder name a MountSharedVolume's SubPath names in
+// the share's volumes folder.
+func sharedVolumeID(subPath string) string {
+	id, _, _ := strings.Cut(strings.TrimPrefix(subPath, podseed.SharedVolumesDir+"/"), "/")
+	return id
+}
+
+// hostFileLink is the link a host file bind's target becomes: to the file in
+// its copy's folder, as the pod mounts it.
+func hostFileLink(m Mount) podinit.Link {
+	return podinit.Link{Path: m.Target, Target: path.Join(hostbind.FileDir(m.SubPath), filepath.Base(m.Source))}
 }
 
 // dockerSocketPath reports a bind source that is the docker engine's socket
@@ -470,12 +515,26 @@ func (t *translation) finishMounts() {
 	var fleetMounts []Mount
 	for _, fm := range t.in.FleetMounts {
 		target := cleanTarget(fm.ContainerPath)
-		if fm.Scope != backend.MountScopeFleetShared {
+		switch fm.Scope {
+		case backend.MountScopeFleetShared:
+			fleetMounts = append(fleetMounts, Mount{Kind: MountFleet, Target: target, ReadOnly: fm.ReadOnly, SubPath: fm.SubPath})
+		case backend.MountScopeHostFolder:
+			// A custom mount's chosen host folder: its copy on the share,
+			// kept in step with it as a host bind's is.
+			source := filepath.Clean(fm.LocalPath)
+			if !t.hostBindable("custom mount "+target, source) {
+				continue
+			}
+			mode := uint32(0o755)
+			if info, err := t.host.Stat(source); err == nil && info.IsDir() {
+				mode = uint32(info.Mode().Perm())
+			}
+			fleetMounts = append(fleetMounts, Mount{Kind: MountHostDir, Target: target, ReadOnly: fm.ReadOnly, Source: source, SubPath: hostbind.Name(source), Mode: mode})
+		default:
 			t.refuse(&Refusal{Code: CodeHostMount, Reason: fmt.Sprintf("fleet mount %s is a daemon-host path (%s), which a pod cannot bind", target, fm.LocalPath)})
 			continue
 		}
 		fleetTargets[target] = true
-		fleetMounts = append(fleetMounts, Mount{Kind: MountFleet, Target: target, ReadOnly: fm.ReadOnly, SubPath: fm.SubPath})
 	}
 
 	seen := map[string]bool{}
@@ -516,6 +575,11 @@ func (t *translation) finishMounts() {
 		mounts = append(mounts, Mount{Kind: MountVolume, Target: target, SubPath: podseed.VolumeSubPath("anon-" + sha8(target)), CopyUp: true, Anonymous: true})
 	}
 	t.spec.Mounts = mounts
+	for _, m := range mounts {
+		if m.Kind == MountHostFile {
+			t.spec.PID1.Links = append(t.spec.PID1.Links, hostFileLink(m))
+		}
+	}
 }
 
 // sortedKeys is m's keys, sorted.

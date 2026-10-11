@@ -195,6 +195,10 @@ type Volume struct {
 	// CopyUp fills a new volume from the image's content at Target, as
 	// docker does for a named volume (false: nocopy, or a bind).
 	CopyUp bool `json:"copy_up,omitempty"`
+	// Fresh (a shared volume) says its last instance was destroyed and its
+	// content goes: what the share holds there is removed first, and the
+	// volume filled as a new one, as docker makes a removed volume anew.
+	Fresh bool `json:"fresh,omitempty"`
 }
 
 // Workspace is how the job takes the workspace.

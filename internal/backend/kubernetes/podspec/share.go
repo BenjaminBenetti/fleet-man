@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/mounts/hostbind"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
 )
@@ -70,9 +72,26 @@ func (s *Share) treeMount() corev1.VolumeMount {
 	return m
 }
 
-// fleetMount is the dev container's mount of fleet mount m.
+// fleetMount is the dev container's mount of fleet mount m (or a host
+// folder's copy).
 func (s *Share) fleetMount(m Mount) corev1.VolumeMount {
 	return corev1.VolumeMount{Name: s.volume(), MountPath: m.Target, SubPath: s.shareSubPath(m.SubPath), ReadOnly: m.ReadOnly}
+}
+
+// hostFileMount is the dev container's mount of the folder holding a host
+// file bind's copy.
+func (s *Share) hostFileMount(m Mount) corev1.VolumeMount {
+	return corev1.VolumeMount{Name: s.volume(), MountPath: hostbind.FileDir(m.SubPath), SubPath: s.shareSubPath(m.SubPath), ReadOnly: m.ReadOnly}
+}
+
+// volumeMount is the dev container's mount of a named volume of the fleet's,
+// in the tree's volumes folder (beside its roots: never synced).
+func (s *Share) volumeMount(m Mount) corev1.VolumeMount {
+	sub := m.SubPath
+	if s.Claim == "" {
+		sub = path.Join(podshare.DiskDir, sub)
+	}
+	return corev1.VolumeMount{Name: s.volume(), MountPath: m.Target, SubPath: sub, ReadOnly: m.ReadOnly}
 }
 
 // shareVolumes are the pod volumes the share needs (none on the copy tier,
@@ -84,14 +103,49 @@ func (s *Share) shareVolumes() []corev1.Volume {
 	return []corev1.Volume{{Name: volumeShare, VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: s.Claim}}}}
 }
 
-// layoutFile is the layout as the spec Secret holds it.
-func (s *Share) layoutFile() ([]byte, error) {
-	l := s.Layout
-	l.V = podshare.LayoutVersion
+// layoutFile is the layout as the spec Secret holds it, for pod p.
+func (s *Share) layoutFile(p *PodSpec) ([]byte, error) {
+	l := ShareLayout(p, s)
 	if err := l.Validate(); err != nil {
 		return nil, fmt.Errorf("podspec: the fleet's share layout: %w", err)
 	}
 	return json.Marshal(l)
+}
+
+// ShareLayout is the tree pod p's share-layout init container lays out: the
+// fleet's Layout, and what the run itself keeps on the share: a folder for
+// each bound host folder or file's copy (a folder's with its host mode), and
+// each named volume's folder.
+func ShareLayout(p *PodSpec, s *Share) podshare.Layout {
+	l := s.Layout
+	l.V = podshare.LayoutVersion
+	l.Entries = slices.Clone(l.Entries)
+	have := map[string]bool{}
+	for _, e := range l.Entries {
+		have[e.Path] = true
+	}
+	var volumes []string
+	for _, m := range p.Mounts {
+		switch m.Kind {
+		case MountHostDir, MountHostFile:
+			if have[m.SubPath] {
+				continue
+			}
+			have[m.SubPath] = true
+			mode := uint32(0o755)
+			if m.Kind == MountHostDir && m.Mode != 0 {
+				mode = m.Mode
+			}
+			l.Entries = append(l.Entries, podshare.Entry{Path: m.SubPath, Dir: true, Mode: mode})
+		case MountSharedVolume:
+			if id := sharedVolumeID(m.SubPath); !slices.Contains(volumes, id) {
+				volumes = append(volumes, id)
+			}
+		}
+	}
+	slices.Sort(volumes)
+	l.Volumes = volumes
+	return l
 }
 
 // shareInitResources are the init container's: it touches a handful of
@@ -149,12 +203,21 @@ func shareInitSecurity(id Identity) Security {
 	return Security{CapAdd: []string{"CHOWN", "DAC_OVERRIDE", "FOWNER"}, CapDrop: []string{"ALL"}}
 }
 
-// fleetMountsWithoutShare are the fleet mounts of a run that has no share
-// to put them on.
-func (r *renderer) fleetMountsWithoutShare() []string {
+// NeedsShare reports whether pod p keeps anything on the fleet's share: a
+// fleet mount, a named volume of the fleet's, a bound host folder or file.
+func NeedsShare(p *PodSpec) bool {
+	return slices.ContainsFunc(p.Mounts, func(m Mount) bool { return onShare[m.Kind] })
+}
+
+// onShare are the mount kinds whose data is on the fleet's share.
+var onShare = map[MountKind]bool{MountFleet: true, MountSharedVolume: true, MountHostDir: true, MountHostFile: true}
+
+// shareMounts are the targets of the run's mounts that live on the fleet's
+// share (a render without one refuses them).
+func (r *renderer) shareMounts() []string {
 	var out []string
 	for _, m := range r.pod.Mounts {
-		if m.Kind == MountFleet {
+		if onShare[m.Kind] {
 			out = append(out, m.Target)
 		}
 	}

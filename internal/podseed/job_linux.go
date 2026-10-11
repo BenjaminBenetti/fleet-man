@@ -515,6 +515,12 @@ func (r *seedRun) copySharedVolumes(ctx context.Context, mounts, mountpoints map
 	removeStalePartials(dir, time.Now().Add(-sharedPartialAge))
 	for _, v := range r.seed.SharedVolumes {
 		dst := filepath.Join(dir, v.Name)
+		if v.Fresh {
+			// Its last instance went: what it held goes with it.
+			if err := discard(dst, filepath.Join(dir, fmt.Sprintf(".%s.partial-gone-%d", v.Name, time.Now().UnixNano()))); err != nil {
+				return fmt.Errorf("shared volume %s: %w", v.Name, err)
+			}
+		}
 		empty := false
 		switch fi, err := os.Lstat(dst); {
 		case err == nil && fi.Mode()&fs.ModeSymlink != 0:

@@ -238,6 +238,13 @@ func (b *Backend) teardown() error {
 	ctx, cancel := context.WithTimeout(context.Background(), downTimeout)
 	defer cancel()
 	p := b.p()
+	if rec, err := LoadInstanceRecord(cluster, key); err == nil {
+		// While its pod may still run: the last instance to mount one of the
+		// fleet's named volumes takes it with it, as docker's Down does.
+		vctx, vcancel := context.WithTimeout(ctx, volumeRetireTimeout)
+		p.RetireVolumes(vctx, rec)
+		vcancel()
+	}
 	td, err := p.DownByKey(ctx, Tombstone{Cluster: cluster, Key: key, Fleet: fleetName, Instance: b.inst.Name, DestroyedAt: time.Now().UTC()})
 	if fleetName != "" {
 		p.Forget(PodTarget{Cluster: cluster, StatefulSet: names.Instance(fleetName, b.inst.Name, key)})

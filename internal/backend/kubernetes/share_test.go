@@ -21,6 +21,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/topology"
@@ -110,8 +111,8 @@ func TestPrepareShareBindsTheFleetsShareOnce(t *testing.T) {
 		t.Fatalf("the share is %+v", pvc)
 	}
 	s := first.share
-	if !s.bind || len(first.seedJob(ctx, "").Claims) != 1 || first.seedJob(ctx, "").Claims[0].ClaimName != claim {
-		t.Fatalf("the first instance's seed does not bind the share: bind %v claims %+v", s.bind, first.seedJob(ctx, "").Claims)
+	if !s.bind || len(first.seedJob(ctx, "", false).Claims) != 1 || first.seedJob(ctx, "", false).Claims[0].ClaimName != claim {
+		t.Fatalf("the first instance's seed does not bind the share: bind %v claims %+v", s.bind, first.seedJob(ctx, "", false).Claims)
 	}
 	if in := s.input(); in.Claim != claim || in.Layout.UID < 0 || len(in.Layout.Entries) != 3 || in.Layout.Entries[2].Seed != "{}" {
 		t.Fatalf("the render's share is %+v", in)
@@ -154,7 +155,7 @@ func TestPrepareShareBindsTheFleetsShareOnce(t *testing.T) {
 	if a := p.Affinity(true); a == nil || a.PodAffinity == nil || a.NodeAffinity == nil {
 		t.Fatalf("an instance pod's affinity %+v", a)
 	}
-	rec := second.share.record()
+	rec := second.share.record(&podspec.PodSpec{})
 	if rec.Mode != "single-node" || rec.Claim != claim || len(rec.Roots) != 2 || rec.Roots[1].Name != "files" || !reflect.DeepEqual(rec.Roots[1].Reserved, []string{".claude.json"}) {
 		t.Fatalf("the instance record's share %+v", rec)
 	}
@@ -200,7 +201,7 @@ func TestPrepareShareOnTheCopyTier(t *testing.T) {
 	if in := c.share.input(); in.Claim != "" || c.share.placementFor() != nil || c.share.bind {
 		t.Fatalf("copy tier: input %+v placement %+v bind %v", in, c.share.placementFor(), c.share.bind)
 	}
-	if rec := c.share.record(); rec.Mode != "copy" || rec.Claim != "" {
+	if rec := c.share.record(&podspec.PodSpec{}); rec.Mode != "copy" || rec.Claim != "" {
 		t.Fatalf("copy tier record %+v", rec)
 	}
 }

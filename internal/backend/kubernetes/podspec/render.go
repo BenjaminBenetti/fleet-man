@@ -245,7 +245,7 @@ func Render(res *Result, in RenderInput) (*Objects, error) {
 	}
 	spec := res.Secrets.Spec
 	if in.Share != nil {
-		layout, err := in.Share.layoutFile()
+		layout, err := in.Share.layoutFile(&res.Pod)
 		if err != nil {
 			return nil, err
 		}
@@ -323,26 +323,9 @@ func (r *renderer) refuse(code, format string, args ...any) {
 	r.refusals = append(r.refusals, &Refusal{Code: code, Reason: fmt.Sprintf(format, args...)})
 }
 
-// What fleet cannot provide on a cluster yet. Each is refused by name, never
-// dropped: the run would be missing what it asked for.
-var unsupportedMounts = map[MountKind]string{
-	MountHostDir:      "a bind of a daemon-host directory needs fleet's host-bind sync",
-	MountHostFile:     "a bind of a daemon-host file needs fleet's host-bind sync",
-	MountSharedVolume: "a named volume other containers share lives on the fleet's share",
-}
-
 // checkSupported refuses what the run asks for that this version of fleet
 // cannot render, and connection settings it does not apply.
 func (r *renderer) checkSupported() {
-	for _, m := range r.pod.Mounts {
-		if why, ok := unsupportedMounts[m.Kind]; ok {
-			what := m.Target
-			if m.Source != "" {
-				what = m.Source + " at " + m.Target
-			}
-			r.refuse(CodeUnsupportedMount, "%s (%s): %s, which fleet does not provide on Kubernetes yet", what, m.Kind, why)
-		}
-	}
 	for _, m := range r.pod.Mounts {
 		// The translator refuses run mounts there; an image VOLUME is not
 		// checked against them.
@@ -352,8 +335,8 @@ func (r *renderer) checkSupported() {
 			}
 		}
 	}
-	if shared := r.fleetMountsWithoutShare(); len(shared) > 0 && r.in.Share == nil {
-		r.refuse(CodeUnsupportedMount, "fleet's shared mounts (%s) live on the fleet's share, which this render was given none of", strings.Join(shared, ", "))
+	if shared := r.shareMounts(); len(shared) > 0 && r.in.Share == nil {
+		r.refuse(CodeUnsupportedMount, "the instance's shared mounts (%s) live on the fleet's share, which this render was given none of", strings.Join(shared, ", "))
 	}
 	if r.in.Identity.NonRoot && r.pod.DooD != nil {
 		// The engine runs as root, which a pod without root never has.
@@ -846,6 +829,7 @@ func (r *renderer) instanceMounts() ([]corev1.VolumeMount, []corev1.Volume, erro
 		add(sh.treeMount())
 	}
 
+	seenHostFiles := map[string]bool{}
 	for _, m := range p.Mounts {
 		switch m.Kind {
 		case MountWorkspace:
@@ -879,9 +863,18 @@ func (r *renderer) instanceMounts() ([]corev1.VolumeMount, []corev1.Volume, erro
 			if p.DooD == nil {
 				return nil, nil, fmt.Errorf("podspec: a docker socket mount at %s without the docker engine's sidecar", m.Target)
 			}
-		case MountFleet:
+		case MountFleet, MountHostDir:
 			// checkSupported refused one without a share.
 			add(r.in.Share.fleetMount(m))
+		case MountHostFile:
+			// The folder holding the file's copy, which the target links
+			// into (PID1.Links); one per bound file, whatever its targets.
+			if mount := r.in.Share.hostFileMount(m); !seenHostFiles[mount.MountPath] {
+				seenHostFiles[mount.MountPath] = true
+				add(mount)
+			}
+		case MountSharedVolume:
+			add(r.in.Share.volumeMount(m))
 		case MountSSHAgent, MountHostSocket, MountHostSocketDir:
 			// No volume: pod-init links an ssh-agent bind's target to the
 			// agent relay (pid1.json links), and the pod agent binds the
