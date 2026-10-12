@@ -162,10 +162,19 @@ func (rb *rebuilding) exportStopped(ctx context.Context, export bool) error {
 
 	want := job.Job.Spec.Template.Spec
 	del := &kubeimage.Delivery{Strategy: kubeimage.Strategy(rb.prev.Strategy)}
+	redelivered := false
 	res, err := rb.p.RunJob(ctx, JobRun{
 		Cluster: rb.id.cluster, Job: name,
 		Spec: podseed.JobSpec{Op: podseed.OpTool, Gen: rb.prevGen, PVC: podspec.JobDiskPath, ResultHold: exportHold.String()},
 		PVC:  rb.sts.Name,
+		// The instance's image the node lost while it was stopped (a
+		// node-loaded one the kubelet's image GC collected) is delivered
+		// again, as a start does.
+		Waiting: func(ctx context.Context, pod *corev1.Pod) {
+			if !redelivered && rb.b.redeliverFor(ctx, rb.prev, containerStatus(pod, podspec.JobContainer), "rebuild") {
+				redelivered = true
+			}
+		},
 		Check: func(pod *corev1.Pod) error {
 			_, err := checkJobPod(pod, &want, del, rb.prev.ImageDigests)
 			return err

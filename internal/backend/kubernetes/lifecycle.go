@@ -182,8 +182,7 @@ func (b *Backend) startHooks(ctx context.Context, sess *AgentSession, pod *corev
 // pod on its own. Only fleetd can (the delivery needs the connection's facts).
 // It reports whether it delivered.
 func (b *Backend) redeliver(ctx context.Context, rec InstanceRecord) bool {
-	env := currentEnvironment()
-	if env.Facts == nil {
+	if currentEnvironment().Facts == nil {
 		return false
 	}
 	p := b.p()
@@ -199,26 +198,38 @@ func (b *Backend) redeliver(ctx context.Context, rec InstanceRecord) bool {
 	if err != nil {
 		return false
 	}
-	st := containerStatus(pod, DevContainer)
-	if st == nil || st.State.Waiting == nil || !kubeimage.NeedsRedelivery(kubeimage.Strategy(rec.Strategy), st.State.Waiting.Reason, st.State.Waiting.Message) {
+	return b.redeliverFor(ctx, rec, containerStatus(pod, DevContainer), "start")
+}
+
+// redeliverFor delivers the instance's image again when st, a container that
+// runs it (the dev container, a tool Job's), waits on an image its node no
+// longer has. what names the operation in fleet.log. It reports whether it
+// delivered.
+func (b *Backend) redeliverFor(ctx context.Context, rec InstanceRecord, st *corev1.ContainerStatus, what string) bool {
+	env := currentEnvironment()
+	if env.Facts == nil || st == nil || st.State.Waiting == nil || !kubeimage.NeedsRedelivery(kubeimage.Strategy(rec.Strategy), st.State.Waiting.Reason, st.State.Waiting.Message) {
+		return false
+	}
+	c, err := b.p().Cluster(rec.Cluster)
+	if err != nil {
 		return false
 	}
 	images := env.images()
 	d, err := images.Lookup(rec.Cluster, rec.Key)
 	if err != nil || d == nil {
-		flog.Warn("kube start: the instance's image is gone from its node, and fleet has no delivery of it to repeat", "cluster", rec.Cluster, "key", rec.Key, "err", err)
+		flog.Warn("kube "+what+": the instance's image is gone from its node, and fleet has no delivery of it to repeat", "cluster", rec.Cluster, "key", rec.Key, "err", err)
 		return false
 	}
 	t, err := b.imageTarget(ctx, c)
 	if err != nil {
-		flog.Warn("kube start: re-delivering the instance's image", "cluster", rec.Cluster, "key", rec.Key, "err", err)
+		flog.Warn("kube "+what+": re-delivering the instance's image", "cluster", rec.Cluster, "key", rec.Key, "err", err)
 		return false
 	}
 	if _, err := images.Redeliver(ctx, t, *d); err != nil {
-		flog.Warn("kube start: re-delivering the instance's image", "cluster", rec.Cluster, "key", rec.Key, "err", err)
+		flog.Warn("kube "+what+": re-delivering the instance's image", "cluster", rec.Cluster, "key", rec.Key, "err", err)
 		return false
 	}
-	flog.Info("kube start: delivered the instance's image again", "cluster", rec.Cluster, "key", rec.Key, "reason", st.State.Waiting.Reason)
+	flog.Info("kube "+what+": delivered the instance's image again", "cluster", rec.Cluster, "key", rec.Key, "reason", st.State.Waiting.Reason)
 	return true
 }
 

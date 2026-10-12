@@ -19,7 +19,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/localcluster"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
@@ -56,6 +58,45 @@ func TestLiveRebuild(t *testing.T) {
 	t.Run("stopped", func(t *testing.T) { lb.rebuild(t, lv, "rbstop", image, true) })
 	t.Run("rollback", func(t *testing.T) { lb.rebuildRollback(t, lv, image) })
 	t.Run("retry", func(t *testing.T) { lb.retryFailedCreate(t, lv, image) })
+	t.Run("stopped, image gone from the node", func(t *testing.T) { lb.rebuildStoppedImageGone(t, lv, image) })
+}
+
+// rebuildStoppedImageGone: a stopped instance whose node-loaded image the
+// node lost (the kubelet's image GC) is rebuilt all the same: the export's
+// tool Job runs that image, which is delivered again, as a start does. A
+// minikube connection only (the node's image is removed with minikube).
+func (lb *liveBackend) rebuildStoppedImageGone(t *testing.T, lv *live, image string) {
+	local := lv.facts(t).Local
+	if local.Kind != localcluster.Minikube {
+		t.Skipf("needs a minikube connection to remove a node's image (this one is %q)", local.String())
+	}
+	r := lb.rebuildRig(t, lv, "rbgone", map[string]any{"build": map[string]any{"dockerfile": "Dockerfile"}})
+	dockerfile := func(gen string) string { return "FROM " + image + "\nRUN echo " + gen + " > /etc/fleet-live-gen\n" }
+	if err := os.WriteFile(filepath.Join(r.inst.WorkspaceDir, ".devcontainer", "Dockerfile"), []byte(dockerfile("gen1")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.create()
+	rec, err := LoadInstanceRecord(lv.rec.ID, r.inst.KubeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kubeimage.Strategy(rec.Strategy) != kubeimage.StrategyNodeLoad {
+		t.Skipf("the image was delivered by %s, not loaded onto the node", rec.Strategy)
+	}
+	folder := "/workspaces/" + filepath.Base(r.inst.WorkspaceDir)
+	r.sh("cat > " + folder + "/.devcontainer/Dockerfile <<'FLEET_EOF'\n" + dockerfile("gen2") + "FLEET_EOF")
+	if err := r.b().Stop(r.inst.ContainerID); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if out, err := exec.Command("minikube", "-p", local.Name, "image", "rm", rec.Image).CombinedOutput(); err != nil {
+		t.Fatalf("removing %s from the node: %v\n%s", rec.Image, err, out)
+	}
+	if _, err := r.rebuild(); err != nil {
+		t.Fatalf("the rebuild of a stopped instance whose image the node lost: %v", err)
+	}
+	if got := r.sh("cat /etc/fleet-live-gen"); got != "gen2" {
+		t.Errorf("the rebuilt instance's image says %q, want gen2 (the Dockerfile edited in the pod)", got)
+	}
 }
 
 // rebuildRig is one instance a rebuild test drives.
