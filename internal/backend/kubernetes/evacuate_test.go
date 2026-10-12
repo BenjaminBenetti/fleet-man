@@ -434,7 +434,7 @@ func TestEvacuateLeavesAPinnedFleet(t *testing.T) {
 			}
 		}, want: "its pods are pinned to the node"},
 		{name: "unreadable volumes of a node-local class", facts: true, react: func(r *evacRig) {
-			r.cs.PrependReactor("get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
+			prependReactor(r.cs, "get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "persistentvolumes"}, "", errors.New("cluster-scoped"))
 			})
 		}, want: "its share is node-local, class block"},
@@ -445,7 +445,7 @@ func TestEvacuateLeavesAPinnedFleet(t *testing.T) {
 		}}}}), want: "its share is node-local, class block"},
 		{name: "a node-local class's volume naming no node", facts: true, want: "its share is node-local, class block"},
 		{name: "unreadable volumes of a class preflight does not know", react: func(r *evacRig) {
-			r.cs.PrependReactor("get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
+			prependReactor(r.cs, "get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "persistentvolumes"}, "", errors.New("cluster-scoped"))
 			})
 		}, want: ""},
@@ -510,7 +510,7 @@ func TestWaitDetached(t *testing.T) {
 
 	// VolumeAttachments not readable: no wait.
 	r = newEvacRig(t, evacObjects("a")...)
-	r.cs.PrependReactor("list", "volumeattachments", func(k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(r.cs, "list", "volumeattachments", func(k8stesting.Action) (bool, kruntime.Object, error) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "storage.k8s.io", Resource: "volumeattachments"}, "", errors.New("cluster-scoped"))
 	})
 	if err := r.pool.waitDetached(ctx, r.cs, handleNS, "n1", claims); err != nil {

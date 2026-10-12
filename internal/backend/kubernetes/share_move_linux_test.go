@@ -110,7 +110,7 @@ func newMoveRig(t *testing.T, oldMode topology.Mode) *moveRig {
 		_, err := h.cs.Tracker().Get(corev1.SchemeGroupVersion.WithResource("pods"), jobNS, seedPod.Name)
 		return err == nil
 	}
-	h.cs.PrependReactor("delete", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+	prependReactor(h.cs, "delete", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if a.(k8stesting.DeleteAction).GetName() != r.claim || !seedThere() {
 			return false, nil, nil
 		}
@@ -119,7 +119,7 @@ func newMoveRig(t *testing.T, oldMode topology.Mode) *moveRig {
 		held.Unlock()
 		return true, nil, nil
 	})
-	h.cs.PrependReactor("get", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+	prependReactor(h.cs, "get", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		held.Lock()
 		defer held.Unlock()
 		if a.(k8stesting.GetAction).GetName() == r.claim && asked && !seedThere() {
@@ -492,7 +492,7 @@ func TestMoveShareWaitsForTheOldShareToGo(t *testing.T) {
 	}
 	// pvc-protection: the deleted share goes once no pod names it (the
 	// ended seed's pod does until a move deletes it).
-	r.cs.PrependReactor("get", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+	prependReactor(r.cs, "get", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if a.(k8stesting.GetAction).GetName() != r.claim {
 			return false, nil, nil
 		}

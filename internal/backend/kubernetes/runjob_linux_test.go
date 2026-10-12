@@ -75,7 +75,7 @@ func newJobHarness(t *testing.T) *jobHarness {
 	h := &jobHarness{t: t, cs: fake.NewClientset(), tools: tools, result: jobboot.Result{OK: true, Output: []byte(`{"gen":2}`)}}
 	// The API server gives every object it creates a UID, the fake one
 	// does not for a Job created by an apply.
-	h.cs.PrependReactor("patch", "jobs", func(a k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(h.cs, "patch", "jobs", func(a k8stesting.Action) (bool, kruntime.Object, error) {
 		handled, obj, err := k8stesting.ObjectReaction(h.cs.Tracker())(a)
 		if job, ok := obj.(*batchv1.Job); ok && err == nil && job.UID == "" {
 			h.mu.Lock()

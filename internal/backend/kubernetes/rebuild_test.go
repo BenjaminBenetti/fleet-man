@@ -171,7 +171,7 @@ func TestGrowDisk(t *testing.T) {
 			}
 			r := newHandleRig(t, objs...)
 			// The resizer: the claim's capacity follows its request.
-			r.cs.PrependReactor("patch", "persistentvolumeclaims", func(a k8stesting.Action) (bool, kruntime.Object, error) {
+			prependReactor(r.cs, "patch", "persistentvolumeclaims", func(a k8stesting.Action) (bool, kruntime.Object, error) {
 				handled, obj, err := k8stesting.ObjectReaction(r.cs.Tracker())(a)
 				if c, ok := obj.(*corev1.PersistentVolumeClaim); ok && err == nil {
 					c.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: c.Spec.Resources.Requests[corev1.ResourceStorage]}
@@ -462,7 +462,7 @@ func TestRebuildWhoseUndoFails(t *testing.T) {
 	r := newHandleRig(t)
 	rb := rebuildRigOn(t, r, fleet.KubeCluster{ID: handleCluster})
 	interruptedRebuildOn(t, r, rb)
-	r.cs.PrependReactor("patch", "statefulsets", func(a k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(r.cs, "patch", "statefulsets", func(a k8stesting.Action) (bool, kruntime.Object, error) {
 		if strings.Contains(string(a.(k8stesting.PatchAction).GetPatch()), `"replicas"`) {
 			return true, nil, errors.New("the API server is gone")
 		}
@@ -537,7 +537,7 @@ func reclaimedVolume(name string, policy corev1.PersistentVolumeReclaimPolicy, p
 func TestRetryCreateWaitsForTheFailedCreatesVolume(t *testing.T) {
 	r, b := retryRig(t, reclaimedVolume("pvc-old", corev1.PersistentVolumeReclaimDelete, corev1.VolumeReleased))
 	var reads atomic.Int32
-	r.cs.PrependReactor("get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(r.cs, "get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
 		// The provisioner reclaims the volume once the retry has seen it.
 		if reads.Add(1) == 2 {
 			if err := r.cs.Tracker().Delete(corev1.SchemeGroupVersion.WithResource("persistentvolumes"), "", "pvc-old"); err != nil {
@@ -569,7 +569,7 @@ func TestRetryCreateDoesNotWaitForAVolumeThatStays(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r, b := retryRig(t, tc.pv)
 			var reads atomic.Int32
-			r.cs.PrependReactor("get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
+			prependReactor(r.cs, "get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
 				reads.Add(1)
 				if tc.forbid {
 					return true, nil, apierrors.NewForbidden(corev1.Resource("persistentvolumes"), "pvc-old", errors.New("namespaced role"))

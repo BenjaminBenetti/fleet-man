@@ -303,7 +303,7 @@ func TestPoolObservesFromItsInformers(t *testing.T) {
 func TestPoolObservesARefusedList(t *testing.T) {
 	h := newHarness(t, PoolOptions{})
 	target := h.addPod("one")
-	h.cs.PrependReactor("list", "pods", func(k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(h.cs, "list", "pods", func(k8stesting.Action) (bool, kruntime.Object, error) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New("RBAC: access denied"))
 	})
 	h.pool.Track([]Tracked{{Cluster: testCluster, StatefulSet: target.StatefulSet}})

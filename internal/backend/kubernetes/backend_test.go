@@ -349,7 +349,7 @@ func TestStopScalesToZeroAndWaits(t *testing.T) {
 		&corev1.Pod{ObjectMeta: handleMeta(names.Pod(sts))},
 	)
 	// The controller: the pod goes a moment after the scale to 0.
-	r.cs.PrependReactor("patch", "statefulsets", func(a k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(r.cs, "patch", "statefulsets", func(a k8stesting.Action) (bool, kruntime.Object, error) {
 		p := a.(k8stesting.PatchAction)
 		if strings.Contains(string(p.GetPatch()), `"replicas":0`) {
 			go func() {
@@ -442,7 +442,7 @@ func TestTeardown(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeIndex(t, state.KubeImagesPath(handleCluster), idx)
-	r.cs.PrependReactor("list", "*", func(k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(r.cs, "list", "*", func(k8stesting.Action) (bool, kruntime.Object, error) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "statefulsets"}, "", errors.New("no"))
 	})
 	err = newHandle(inst, r.pool).Down(inst.ContainerID)
@@ -807,7 +807,7 @@ func TestStartThatFailsScalesBackDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The controller makes a pod that keeps crashing.
-	r.cs.PrependReactor("patch", "statefulsets", func(a k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(r.cs, "patch", "statefulsets", func(a k8stesting.Action) (bool, kruntime.Object, error) {
 		if strings.Contains(string(a.(k8stesting.PatchAction).GetPatch()), `"replicas":1`) {
 			pod := &corev1.Pod{ObjectMeta: handleMeta(names.Pod(sts)), Status: corev1.PodStatus{Phase: corev1.PodRunning,
 				ContainerStatuses: []corev1.ContainerStatus{{Name: DevContainer, RestartCount: 3,
@@ -906,7 +906,7 @@ func TestStartWarmsTheGateway(t *testing.T) {
 	SetEnvironment(Environment{Gateway: gw})
 	t.Cleanup(func() { SetEnvironment(Environment{}) })
 	// The scale is refused: the start ends right after the warm.
-	r.cs.PrependReactor("patch", "statefulsets", func(k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(r.cs, "patch", "statefulsets", func(k8stesting.Action) (bool, kruntime.Object, error) {
 		return true, nil, errors.New("refused")
 	})
 	for _, tc := range []struct {

@@ -548,7 +548,7 @@ func TestSeedFromCacheKeepsCachesOnAReadError(t *testing.T) {
 	}
 	// Every read of the clone fails while seedFromCache waits for it.
 	start := time.Now()
-	r.cs.PrependReactor("get", "persistentvolumeclaims", func(k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(r.cs, "get", "persistentvolumeclaims", func(k8stesting.Action) (bool, kruntime.Object, error) {
 		if time.Since(start) < 350*time.Millisecond {
 			return true, nil, errors.New("etcdserver: request timed out")
 		}
@@ -582,7 +582,7 @@ func TestBuildSeedCacheFailureLeavesNothing(t *testing.T) {
 	disk.Name, disk.Namespace = handleSTS(), handleNS
 	adm := &podspec.Admitted{Objects: &podspec.Objects{Disk: disk}}
 	var applied bool
-	r.cs.PrependReactor("patch", "persistentvolumeclaims", func(a k8stesting.Action) (bool, kruntime.Object, error) {
+	prependReactor(r.cs, "patch", "persistentvolumeclaims", func(a k8stesting.Action) (bool, kruntime.Object, error) {
 		if a.(k8stesting.PatchAction).GetName() == p.name {
 			applied = true
 		}
