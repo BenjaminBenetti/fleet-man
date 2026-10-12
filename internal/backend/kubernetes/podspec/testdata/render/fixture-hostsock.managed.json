@@ -50,10 +50,10 @@
       }
     },
     "data": {
-      "capture.json": "2194 bytes",
+      "capture.json": "2656 bytes",
       "exec.json": "217 bytes",
-      "inspect.json": "1542 bytes",
-      "merged.json": "1312 bytes",
+      "inspect.json": "1697 bytes",
+      "merged.json": "1458 bytes",
       "pid1.json": "274 bytes"
     }
   },

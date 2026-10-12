@@ -17,6 +17,10 @@
       "source=/home/dev/host/agent.sock,target=/run/itest-host-ssh-agent.sock,type=bind",
       "--mount",
       "source=/home/dev/host/gnupg/S.gpg-agent,target=/run/itest-host-gpg-agent.sock,type=bind",
+      "--mount",
+      "source=/home/dev/host/sockets,target=/run/itest-host-sockets,type=bind",
+      "--mount",
+      "source=/home/dev/host/log.sock,target=/dev/log,type=bind",
       "-l",
       "devcontainer.local_folder=/home/dev/src/fixture-hostsock",
       "-l",
@@ -24,7 +28,7 @@
       "--entrypoint",
       "/bin/sh",
       "-l",
-      "devcontainer.metadata=[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"},{\"mounts\":[\"source=${localEnv:SSH_AUTH_SOCK},target=/run/itest-host-ssh-agent.sock,type=bind\",\"source=${localEnv:FLEET_ITEST_GPG_SOCK},target=/run/itest-host-gpg-agent.sock,type=bind\"],\"remoteEnv\":{\"SSH_AUTH_SOCK\":\"/run/itest-host-ssh-agent.sock\"}}]",
+      "devcontainer.metadata=[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"},{\"mounts\":[\"source=${localEnv:SSH_AUTH_SOCK},target=/run/itest-host-ssh-agent.sock,type=bind\",\"source=${localEnv:FLEET_ITEST_GPG_SOCK},target=/run/itest-host-gpg-agent.sock,type=bind\",\"source=${localEnv:FLEET_ITEST_SOCK_DIR},target=/run/itest-host-sockets,type=bind\",\"source=${localEnv:FLEET_ITEST_LOG_SOCK},target=/dev/log,type=bind\"],\"remoteEnv\":{\"SSH_AUTH_SOCK\":\"/run/itest-host-ssh-agent.sock\"}}]",
       "mcr.microsoft.com/devcontainers/base:debian-12",
       "-c",
       "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
@@ -34,7 +38,7 @@
     "labels": {
       "devcontainer.config_file": "/home/dev/src/fixture-hostsock/.devcontainer/devcontainer.json",
       "devcontainer.local_folder": "/home/dev/src/fixture-hostsock",
-      "devcontainer.metadata": "[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"},{\"mounts\":[\"source=${localEnv:SSH_AUTH_SOCK},target=/run/itest-host-ssh-agent.sock,type=bind\",\"source=${localEnv:FLEET_ITEST_GPG_SOCK},target=/run/itest-host-gpg-agent.sock,type=bind\"],\"remoteEnv\":{\"SSH_AUTH_SOCK\":\"/run/itest-host-ssh-agent.sock\"}}]"
+      "devcontainer.metadata": "[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"},{\"mounts\":[\"source=${localEnv:SSH_AUTH_SOCK},target=/run/itest-host-ssh-agent.sock,type=bind\",\"source=${localEnv:FLEET_ITEST_GPG_SOCK},target=/run/itest-host-gpg-agent.sock,type=bind\",\"source=${localEnv:FLEET_ITEST_SOCK_DIR},target=/run/itest-host-sockets,type=bind\",\"source=${localEnv:FLEET_ITEST_LOG_SOCK},target=/dev/log,type=bind\"],\"remoteEnv\":{\"SSH_AUTH_SOCK\":\"/run/itest-host-ssh-agent.sock\"}}]"
     }
   },
   "image": {
@@ -71,7 +75,9 @@
     "image": "mcr.microsoft.com/devcontainers/base:debian-12",
     "mounts": [
       "source=/home/dev/host/agent.sock,target=/run/itest-host-ssh-agent.sock,type=bind",
-      "source=/home/dev/host/gnupg/S.gpg-agent,target=/run/itest-host-gpg-agent.sock,type=bind"
+      "source=/home/dev/host/gnupg/S.gpg-agent,target=/run/itest-host-gpg-agent.sock,type=bind",
+      "source=/home/dev/host/sockets,target=/run/itest-host-sockets,type=bind",
+      "source=/home/dev/host/log.sock,target=/dev/log,type=bind"
     ],
     "remoteEnv": {
       "SSH_AUTH_SOCK": "/run/itest-host-ssh-agent.sock"
