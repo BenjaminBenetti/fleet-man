@@ -137,7 +137,10 @@ func dockerImageOf(o *podspec.Objects) string {
 
 // dockerSidecarReasons are how pod's docker engine sidecar is not the one
 // fleet rendered with image want ("" checks nothing): another image named,
-// or (pinned by digest) another one running.
+// or (pinned by digest) another one running. A pinned image named by
+// another repository with the same digest is the one rendered: an admission
+// policy that sends pulls through a registry mirror rewrites the name, never
+// the digest.
 func dockerSidecarReasons(pod *corev1.Pod, want string) []string {
 	if want == "" {
 		return nil
@@ -148,13 +151,13 @@ func dockerSidecarReasons(pod *corev1.Pod, want string) []string {
 			spec = &pod.Spec.InitContainers[i]
 		}
 	}
+	pinned := imageDigest(want)
 	switch {
 	case spec == nil:
 		return []string{fmt.Sprintf("it has no %s container", podspec.DockerSidecar)}
-	case spec.Image != want:
+	case spec.Image != want && (pinned == "" || imageDigest(spec.Image) != pinned):
 		return []string{fmt.Sprintf("its %s container names image %s, not %s fleet rendered", podspec.DockerSidecar, spec.Image, want)}
 	}
-	pinned := imageDigest(want)
 	if s := initContainerStatus(pod, podspec.DockerSidecar); pinned != "" && s != nil && s.ImageID != "" && imageDigest(s.ImageID) != pinned {
 		return []string{fmt.Sprintf("its %s container runs %s, not %s", podspec.DockerSidecar, s.ImageID, pinned)}
 	}

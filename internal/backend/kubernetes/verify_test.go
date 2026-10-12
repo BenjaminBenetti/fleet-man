@@ -138,7 +138,6 @@ func TestVerifyPodRefusesASubstitutedPod(t *testing.T) {
 	}
 }
 
-// The annotation a pod carries is never what it is checked against.
 // The docker engine's sidecar (privileged root beside the dev container) and
 // the share's init container run what fleet rendered: the spec hash leaves
 // images out, so another image named or run there (a StatefulSet edited to
@@ -181,6 +180,9 @@ func TestVerifyPodChecksTheSidecarsImages(t *testing.T) {
 		{"the sidecar names another image", "not " + engine, func(p *corev1.Pod, _ *Expect) {
 			p.Spec.InitContainers[1].Image = "evil/dind:latest"
 		}},
+		{"the sidecar names another digest in a mirror", "not " + engine, func(p *corev1.Pod, _ *Expect) {
+			p.Spec.InitContainers[1].Image = "mirror.example.com/library/docker:29.9.0-dind@" + testDigest
+		}},
 		{"no sidecar", "no " + podspec.DockerSidecar, func(p *corev1.Pod, _ *Expect) {
 			p.Spec.InitContainers = p.Spec.InitContainers[:1]
 		}},
@@ -196,6 +198,15 @@ func TestVerifyPodChecksTheSidecarsImages(t *testing.T) {
 		if err := VerifyPod(pod, set, want, testHash); !errors.As(err, &te) || !strings.Contains(err.Error(), tt.mentions) {
 			t.Errorf("%s: %v, want it refused naming %q", tt.name, err, tt.mentions)
 		}
+	}
+
+	// A pinned image an admission policy sends through a registry mirror:
+	// another name, the same digest.
+	set, pod, want = withSidecars()
+	pod.Spec.InitContainers[1].Image = "mirror.example.com/library/docker:29.9.0-dind@" + otherImage
+	want.SpecHash = testHash(&pod.Spec)
+	if err := VerifyPod(pod, set, want, testHash); err != nil {
+		t.Errorf("the pinned sidecar image through a mirror: %v", err)
 	}
 
 	// An unpinned image (a connection's service_images.dind tag) is checked
@@ -215,6 +226,7 @@ func TestVerifyPodChecksTheSidecarsImages(t *testing.T) {
 	}
 }
 
+// The annotation a pod carries is never what it is checked against.
 func TestVerifyPodNeverTrustsTheAnnotation(t *testing.T) {
 	set, pod := instanceObjects("ns", "fi-a-b-key", "pod-1")
 	want := expectFor(set, pod)

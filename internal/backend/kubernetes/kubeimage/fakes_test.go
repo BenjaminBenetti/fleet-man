@@ -469,6 +469,9 @@ func (c *testClock) advance(d time.Duration) {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{tools: newFakeTools(t), reg: newFakeRegistry(t), secrets: &fakeSecrets{}, creds: staticCredentials{}}
+	// A minikube load or removal forgets the cached tarball under
+	// MINIKUBE_HOME: never the invoking user's ~/.minikube.
+	t.Setenv("MINIKUBE_HOME", filepath.Join(t.TempDir(), ".minikube"))
 	h.index = filepath.Join(t.TempDir(), "kube")
 	h.clock = &testClock{now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
 	h.m = &Manager{
