@@ -210,13 +210,22 @@ func (a *agent) handshake() (*yamux.Stream, *podwire.FrameReader, error) {
 		ProtoMin: lo, ProtoMax: hi, Role: a.opts.Role, Version: a.opts.Version, SHA: selfSHA(),
 		UID: os.Geteuid(), Arch: runtime.GOARCH, PodUID: a.opts.PodUID, CanSetuid: !a.host.SingleUID, PID: os.Getpid(),
 	}
-	if err := w.WriteJSON(podwire.FrameData, podwire.ControlMessage{Type: podwire.MsgHello, Hello: &hello}); err != nil {
-		return nil, nil, fmt.Errorf("send hello: %w", err)
+	werr := w.WriteJSON(podwire.FrameData, podwire.ControlMessage{Type: podwire.MsgHello, Hello: &hello})
+	if werr != nil {
+		// A hello that went out can still fail its write: fleetd refuses it
+		// and ends the session, which can end the write's wait for the send
+		// first. Its refusal is then already here to read; nothing else is
+		// waited for.
+		_ = st.SetReadDeadline(time.Now())
+	} else {
+		_ = st.SetReadDeadline(time.Now().Add(handshakeTimeout))
 	}
-	_ = st.SetReadDeadline(time.Now().Add(handshakeTimeout))
 	r := podwire.NewFrameReader(st)
 	for {
 		f, err := r.Next()
+		if werr != nil && err != nil {
+			return nil, nil, fmt.Errorf("send hello: %w", werr)
+		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("read hello ack: %w", err)
 		}
