@@ -23,19 +23,20 @@ concurrency:
 
 jobs:
   # The static tmux bundle shipped beside fleet-pod for pod images without a
-  # tmux, one per arch. arm64 builds under QEMU, so it gets its own runner.
+  # tmux, one per arch, each built and smoke-tested on its own hardware (under
+  # QEMU the arm64 build takes half an hour).
   pod-tmux:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        if: matrix.arch != 'amd64'
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

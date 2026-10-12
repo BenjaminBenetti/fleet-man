@@ -12,7 +12,7 @@
 #     --output type=local,dest=dist deploy/tmux
 #
 # writes dist/fleet-tmux-linux-arm64.tar.gz (`make pod-tmux` wraps this). A
-# foreign platform builds under QEMU (docker/setup-qemu-action in CI). The
+# foreign platform builds under QEMU (CI builds each arch on its own runner). The
 # tarball is reproducible: sorted entries, zero mtimes, root owner, gzip -n.
 #
 # Bumping tmux or a library: change its version and sha256 below. The verify

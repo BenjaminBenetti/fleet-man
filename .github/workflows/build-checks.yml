@@ -70,23 +70,24 @@ jobs:
 
   pod-tmux:
     name: pod tmux ${{ matrix.arch }}
-    runs-on: ubuntu-latest
-    # arm64 builds under QEMU; a cold cache takes a while.
-    timeout-minutes: 60
+    # Each arch builds and runs on its own hardware: under QEMU the arm64
+    # build took half an hour.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-
-      - name: Set up QEMU
-        if: matrix.arch != 'amd64'
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
