@@ -526,12 +526,20 @@ func (p *kubePicker) view(m *model, _ *settingsPage) string {
 		title = fmt.Sprintf("Re-point %s %s", kubeGlyphCluster, st.GetCluster().DisplayNameOrID())
 	}
 	head = append(head, dialogTitle.Render(title))
+	// The host and the files read share a line when they fit; otherwise the
+	// files get a line of their own, so a long host name never cuts into the
+	// path that was just typed.
 	where := "contexts on fleetd"
 	if p.host != "" {
 		where += " @ " + p.host
 	}
-	if len(p.paths) > 0 {
-		where += " · " + strings.Join(p.paths, ", ")
+	if paths := strings.Join(p.paths, ", "); paths != "" {
+		if line := where + " · " + paths; utf8.RuneCountInString(line) <= inner {
+			where = line
+		} else {
+			head = append(head, dimStyle.Render(kubeShortContext(where, inner)))
+			where = paths
+		}
 	}
 	head = append(head, dimStyle.Render(kubeShortContext(where, inner)))
 	switch {

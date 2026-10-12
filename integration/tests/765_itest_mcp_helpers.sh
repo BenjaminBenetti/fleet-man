@@ -78,7 +78,7 @@ log="${work}/requests.log"
 # daemon still starting: itest_mcp_call has to wait for it. It logs one line
 # per request: <http method> <json-rpc method or tool name> <session> <auth>.
 cat > "${work}/server.py" <<'PY'
-import http.server, json, sys, time
+import http.server, json, socketserver, sys, time
 port_file, log_file = sys.argv[1], sys.argv[2]
 time.sleep(1)
 
@@ -131,7 +131,15 @@ class H(http.server.BaseHTTPRequestHandler):
         return self.reply(200, ("event: message\ndata: %s\n\n" % json.dumps(out)).encode(),
                           [("Content-Type", "text/event-stream")])
 
-srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+# HTTPServer.server_bind looks up the bind address's name (socket.getfqdn),
+# which stalls for tens of seconds on GitHub's macOS runners. Nothing here
+# reads the name, so skip the lookup.
+class Server(http.server.HTTPServer):
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+srv = Server(("127.0.0.1", 0), H)
 with open(port_file + ".tmp", "w") as f:
     f.write(str(srv.server_address[1]))
 import os
