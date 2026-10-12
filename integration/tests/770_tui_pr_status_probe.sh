@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: PR status auto-tag — with a TUI connected, the daemon runs the gh probe inside the instance (cwd the workspace checkout, a gh stub on PATH answering for the checked-out feature branch) and the instance row shows the open PR's status, "PR  Accepted  Checks 2/3".
 set -euo pipefail
 
@@ -39,6 +40,13 @@ cat > "${FIXTURE_REPO_DIR}/.devcontainer/devcontainer.json" <<'JSON'
   "remoteEnv": { "PATH": "${containerWorkspaceFolder}/.itest-bin:${containerEnv:PATH}" }
 }
 JSON
+# The image has no tmux. A devcontainer installs it after create; a pod runs
+# the tmux fleet bundles, so it needs no package mirror.
+if itest_backend_is kubernetes; then
+  dc_json="${FIXTURE_REPO_DIR}/.devcontainer/devcontainer.json"
+  grep -v '"postCreateCommand"' "${dc_json}" > "${dc_json}.tmp"
+  mv "${dc_json}.tmp" "${dc_json}"
+fi
 ( cd "${FIXTURE_REPO_DIR}" && git add -A && git commit -q -m "fixture: gh stub" )
 
 fleet_up alpha
