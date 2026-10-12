@@ -299,7 +299,7 @@ the itest logs, failed tests' `FLEET_ITEST_ARTIFACTS` and cluster dumps in
 | `kind-nfs.sh` | kind, two nodes, csi-driver-nfs and an NFS server on a tmpfs | 817-827 onto `nfs-csi` (823: multi-node mode), 826 onto `fleet-shared-path` in multi-node mode; the NFS-safe teardown order |
 | `selinux-k3s.sh` | k3s `--selinux` on an enforcing AlmaLinux 9 VM (KVM) | 817, 824, 853 (one MCS level per fleet, siblings sharing files, the relabel time) |
 | `calico.sh` | minikube, calico at a 1450-byte MTU | 714-718 (DinD at that MTU, the deb and image caches), 808-815 (811: the metadata block calico enforces) |
-| `csi-hostpath.sh` | minikube, volumesnapshots + csi-hostpath | 700, 812, 391, 780 on `csi-hostpath-sc` (snapshot clones); the conformance suite on `standard` and `csi-hostpath-sc`; `TestLiveSeedCache` |
+| `csi-hostpath.sh` | minikube, volumesnapshots + csi-hostpath | 700, 808, 812, 391, 780 on `csi-hostpath-sc` (snapshot clones); the conformance suite on `standard` and `csi-hostpath-sc`; `TestLiveSeedCache` |
 | `attach-limit.sh` | minikube, csi-hostpath at 3 volumes per node | 825-826 |
 | `expand.sh` | minikube, OpenEBS LVM LocalPV on a loop-file volume group (`clusters/lvm-localpv.sh`): volumes that hold only their size and grow | 854: a share that fills, pauses the sync and grows with auto-expand on; a cache volume growing |
 | `runtime-docker.sh` | minikube `--container-runtime=docker` (the shards' minikube runs containerd) | 010-061, 800-807 |

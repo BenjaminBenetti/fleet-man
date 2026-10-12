@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # csi-hostpath.sh — snapshot clones and the backend conformance suite on two
 # storage classes: a throwaway minikube with the volumesnapshots and
-# csi-hostpath-driver addons; clones (700, 812) and automation (391, 780) on
-# csi-hostpath-sc, where clones are snapshots (T1); the conformance suite on
-# standard (copy clones, T2) and on csi-hostpath-sc; and the live seed-cache
-# test, which needs a snapshot class. The Go tests need Go and the tmux
-# bundle (FLEET_POD_TMUX_<ARCH>).
+# csi-hostpath-driver addons; clones (700, 812), DooD with its rebuild (808)
+# and automation (391, 780) on csi-hostpath-sc, where clones are snapshots
+# (T1); the conformance suite on standard (copy clones, T2) and on
+# csi-hostpath-sc; and the live seed-cache test, which needs a snapshot
+# class. The Go tests need Go and the tmux bundle (FLEET_POD_TMUX_<ARCH>).
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -17,6 +17,7 @@ trap 'nightly_minikube_delete "${profile}"' EXIT
 kubectl --context "${profile}" get storageclass,volumesnapshotclass >&2
 
 nightly_itests "${profile}" 700-701 FLEET_ITEST_CLUSTER_FIELDS=storage_class=csi-hostpath-sc || nightly_dump "${profile}" clone
+NIGHTLY_ITEST_LABEL=dood nightly_itests "${profile}" 808-809 FLEET_ITEST_CLUSTER_FIELDS=storage_class=csi-hostpath-sc || nightly_dump "${profile}" dood
 NIGHTLY_ITEST_LABEL=freeze nightly_itests "${profile}" 812-813 FLEET_ITEST_CLUSTER_FIELDS=storage_class=csi-hostpath-sc || nightly_dump "${profile}" freeze
 NIGHTLY_ITEST_LABEL=automation nightly_itests "${profile}" 391-392 FLEET_ITEST_CLUSTER_FIELDS=storage_class=csi-hostpath-sc || nightly_dump "${profile}" automation
 NIGHTLY_ITEST_LABEL=payloads nightly_itests "${profile}" 780-781 FLEET_ITEST_CLUSTER_FIELDS=storage_class=csi-hostpath-sc || nightly_dump "${profile}" payloads
