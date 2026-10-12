@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: on a cluster, a docker-outside-of-docker devcontainer gets the pod's own docker engine (the fleet-docker sidecar): the remote user runs containers through the bound socket, siblings see the workspace and are pod-local (the create says so once), the engine's images survive a stop and start and a rebuild, and a change to its shared daemon.json reloads it. With Allow privileged pods off, DooD and DinD creates fail before the build, naming the toggle, and leave nothing.
+# Description: on a cluster, a docker-outside-of-docker devcontainer gets the pod's own docker engine (the fleet-docker sidecar): the remote user runs containers through the bound socket, siblings see the workspace and are pod-local (the create says so once), the engine's images survive a stop and start and a rebuild, and a change to its shared daemon.json reloads it. With Allow privileged pods off, the TUI's New instance dialog warns on the cluster's Deploy row that the fleet's DooD (then DinD) devcontainer needs them, and DooD and DinD creates fail before the build, naming the toggle, and leave nothing.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
+itest_cleanup() { tui_kill; }
 itest_begin
 
 itest_backend_is kubernetes || pass "kubernetes only: the docker engine's sidecar"
@@ -87,10 +88,29 @@ wait_docker "after a rebuild"
 assert_equals "${image_id}" "$(in_instance docker image inspect --format '{{.Id}}' itest/kept:v1 2>&1)" \
   "the engine's image should survive a rebuild (vol/fleet-docker is not part of the root)"
 
-# refused_before_build <name> <code> — a create of <name> fails with <code>,
-# naming the toggle, before the build, and leaves no object.
+# deploy_row_warns <text> — the TUI's New instance dialog, opened on the
+# fleet, shows <text> under the cluster's Deploy row (the inspector's
+# check/kubernetes on the fleet's newest checkout).
+deploy_row_warns() {
+  local dialog
+  tui_spawn
+  tui_wait_for "alpha" 15 || fail "the TUI did not show the fleet"
+  tui_send a
+  tui_wait_for "instance-name" 5 || fail "the New instance dialog did not open"
+  sleep 1
+  # The dialog box wraps the warning; read it with the box's borders out.
+  dialog=$(tui_capture | perl -CS -Mutf8 -pe 's/[│╭╮╰╯─]//g' | tr -s ' \n' '  ')
+  assert_contains "${dialog}" "$1" "the Deploy row's warning"
+  tui_send Escape
+  sleep 0.3
+  tui_kill
+}
+
+# refused_before_build <name> <code> <warning> — a create of <name> fails with
+# <code>, naming the toggle, before the build, and leaves no object; with its
+# checkout the newest, the Deploy row warns with <warning>.
 refused_before_build() {
-  local name="$1" code="$2" rc=0 out key
+  local name="$1" code="$2" warning="$3" rc=0 out key
   info "fleet up ${name} (Allow privileged pods off)"
   out=$("${FLEET_BIN}" up "${name}" --repo "${FIXTURE_REPO_URL}" 2>&1) || rc=$?
   printf '%s\n' "${out}" | tail -n 3
@@ -102,14 +122,17 @@ refused_before_build() {
   key=$(itest_k8s_key "${FIXTURE_REPO_NAME}/${name}")
   [ -n "${key}" ] || fail "the refused record ${name} has no key"
   assert_equals "" "$(itest_k8s_key_objects "${key}")" "nothing is applied for a refused ${name}"
+  deploy_row_warns "${warning}"
   "${FLEET_BIN}" down "${FIXTURE_REPO_NAME}/${name}" >/dev/null
 }
 
 "${FLEET_BIN}" cluster set itest allow_privileged=false >/dev/null
-refused_before_build beta kubernetes:unsupported:dood-needs-privileged
+refused_before_build beta kubernetes:unsupported:dood-needs-privileged \
+  "gets a docker engine sidecar there, which needs privileged pods (Allow privileged pods, Settings → Kubernetes)"
 cp "${INTEGRATION_DIR}/fixture-dind/.devcontainer/devcontainer.json" "${FIXTURE_REPO_DIR}/.devcontainer/devcontainer.json"
 (cd "${FIXTURE_REPO_DIR}" && git commit -qam "fixture: docker-in-docker")
-refused_before_build gamma kubernetes:unsupported:privileged
+refused_before_build gamma kubernetes:unsupported:privileged \
+  "needs privileged pods, which are not allowed there (Allow privileged pods, Settings → Kubernetes)"
 
 info "fleet down alpha"
 alpha_key=$(itest_k8s_key "${inst}")
