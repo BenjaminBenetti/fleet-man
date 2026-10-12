@@ -890,8 +890,9 @@ with it on only when your ssh config says `ForwardAgent yes` (or
 
 The TUI streams agent requests over the fleet connection itself, so it works for
 SSH and gateway remotes alike and needs nothing from the remote's `sshd`.
-`fleet up`, `clone`, `rebuild` and `fleet shell` against that
-remote carry your agent the same way for their duration; they step aside for a
+`fleet up`, `clone`, `rebuild`, `fleet shell` and a VS Code connection
+(`fleet ssh-proxy`) against that remote carry your agent the same way for their
+duration; they step aside for a
 TUI that is also providing, rather than taking over from it. On the remote, the
 daemon listens on a relay socket in each instance's control directory
 (`/fleet-mounts/control/ssh-agent.sock` inside the instance) and points its own

@@ -161,12 +161,18 @@ health, version and the instances and agents that use it:
 - **enter** on a connection opens the cluster editor: every setting in
   [section 5](#5-connection-settings), grouped and folded. Its Status row has
   **[ test ]**, **[ deep test ]** and **[ login on fleetd ]**. Changes apply to
-  new instances; Rebuild applies them to existing ones.
+  new instances; Rebuild applies them to existing ones. The fleets' cache
+  servers there take a change of what they run with at once (service images,
+  cache storage class and sizes, node selector, tolerations, service account,
+  memory limit, Allow privileged pods).
 - **[ delete ]** disconnects. A connection instances or agents use is kept
   unless you pick **[ Destroy N instances, then disconnect ]** or **[ Forget
   (scale to 0, leave PVCs) ]**, which leaves them in the cluster and fails
   their records `kubernetes:cluster_missing` (you type the name first unless
-  the cluster is unreachable).
+  the cluster is unreachable). A removal deletes the fleets' objects and cache
+  volumes in the namespace only while this daemon holds the connection's owner
+  Lease; otherwise (the cluster not reached, another daemon holding it) it
+  deletes nothing and says what it left, with the labels to find it by.
 - The section's last line is the trust line: who can act inside your instances,
   and who can read your agent logins ([section
   14](#14-security-and-trust-model)).
@@ -277,12 +283,12 @@ again. **d** destroys it.
 | Error | What to do |
 |---|---|
 | `kubernetes:unreachable` | check the cluster is up and reachable from the daemon host |
-| `kubernetes:unauthorized` | log in again (Settings → Kubernetes → login on fleetd) |
+| `kubernetes:unauthorized` | the login expired or its plugin failed: log in again (Settings → Kubernetes → login on fleetd) |
 | `kubernetes:forbidden` | grant what `fleet cluster test` lists |
 | `kubernetes:admission_denied` | a namespace whose admission allows the pod, or change the devcontainer |
 | `kubernetes:quota` | room in the namespace quota or the connection's `max_instances` / `max_total_disk` |
 | `kubernetes:unsupported:*` | change the devcontainer, or run it on Docker |
-| `kubernetes:misconfigured` | fix the connection setting it names |
+| `kubernetes:misconfigured` | fix the connection setting it names (or the kubeconfig, when the API server's certificate did not verify) |
 | `kubernetes:image_build` / `image_push` / `image_pull` | the build, the delivery settings and registry login, the nodes' route to the image |
 | `kubernetes:pvc_pending` | the storage class; `kubectl describe pvc` says why |
 | `kubernetes:unschedulable` | a node that fits the instance, or smaller requests |
@@ -465,8 +471,9 @@ server.
   remote client is warned of one open on the daemon host's network.
 - **The browser** (`b`) uses `fleet browser-proxy`, fleet's own HTTP proxy,
   bound to the pod's loopback. It replaces the old privoxy install on every
-  instance that can run the daemon's fleet binary (privoxy is kept only for
-  Docker instances of a macOS daemon).
+  instance that can run the daemon's fleet binary; privoxy is kept only where
+  it cannot (Docker instances of a macOS daemon, a Coder or Codespaces
+  workspace of another architecture than the daemon's).
 - **Siblings.** A fleet's pods resolve each other by DNS:
   `<sts>-0.$FLEET_PEER_DOMAIN` (exported by `fleet.rc`). Ingress to an instance
   is allowed only from the same fleet's instances.
@@ -567,7 +574,8 @@ the nodes lost it, waits for the shared state, and runs `postStartCommand` and
 **Restarts the cluster makes.** A pod the cluster restarts or moves (a drain,
 an eviction, a crash, `kubectl delete pod`) comes back on its own, and its
 start hooks run again. Its row says `sessions reset: <cause>` until your next
-attach, with the setting that prevents it when there is one. Restarts while
+attach or until fleet stops, starts or rebuilds it, with the setting that
+prevents it when there is one. Restarts while
 fleetd was down are not reported. Three crashes in 5 minutes, or the kubelet's
 CrashLoopBackOff, park the instance as stopped (`kubernetes:crash_loop`, or
 `kubernetes:oomkilled` naming the memory limit).
@@ -642,7 +650,10 @@ Agents can run on a cluster: pick it as the agent's target (TUI agent dialog,
 - **Limits per connection:** a trigger fires at most once per
   `automation_fire_interval` (30s) and one agent holds at most
   `automation_max_per_agent` (4) runs there. A run over a limit waits in its
-  trigger's queue (20 firings, each kept an hour). A webhook delivery answers
+  trigger's queue (20 firings, each kept an hour); room that frees up goes to
+  the run waiting longest. `fleet agent list` (its STATUS column) and
+  `fleet_automation_list` (`queued`, `running`, `login`) say what each agent
+  waits on. A webhook delivery answers
   200 when everything fired, 202 when some of it queued (or a full queue dropped
   a trigger), 429 with `Retry-After` when every matching queue is full, and 503
   when the scheduler is busy (nothing fired). `max_instances` caps a runaway
@@ -651,7 +662,8 @@ Agents can run on a cluster: pick it as the agent's target (TUI agent dialog,
   it got, or why not (queued, refused, dropped, not created, failed, reaped),
   in `L`, `fleet trigger logs` and `fleet_trigger_logs`.
 - **Logins.** A cluster agent whose tool is not logged in there (and has no API
-  key variable in its command or the devcontainer env) is refused, with `⚠ log
+  key variable in its command, or one with a value in the devcontainer's env,
+  `${localEnv:…}` resolved in fleetd's environment) is refused, with `⚠ log
   in to Claude once for this fleet on ☸ <cluster> (L)` on its row; `L` on the
   agent logs its tool in where it runs. `FLEET_AUTOMATION_LOGIN_CHECK=off` turns
   the check off. An agent on a connection that was removed shows
@@ -677,7 +689,9 @@ instance through the daemon's authenticated Exec and starts `fleet ssh-server
 --stdio` there: no listener, no SSH authentication of its own. For a
 `FLEET_GATEWAY` / `FLEET_SSH` / `FLEET_SERVER` remote, the route (and a
 `FLEET_TOKEN`) is kept on your local daemon in `~/.fleet/editor_endpoints.json`
-(0600, never sent to the remote).
+(0600, never sent to the remote). To a remote fleet with `[ agent: on ]`,
+`fleet ssh-proxy` carries your ssh-agent for the editor's connection, as
+`fleet shell` does.
 
 `customizations.vscode` extensions and settings apply once VS Code's server
 runs in the instance; `postAttachCommand` runs once per VS Code connection. For

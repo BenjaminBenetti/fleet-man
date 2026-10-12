@@ -589,6 +589,8 @@ kubectl --context <ctx> -n <ns> describe pod <sts>-0   # <sts> is in the contain
 |---|---|
 | `kubernetes:unsupported:compose` | compose devcontainers do not run on clusters: use Docker for this fleet |
 | `kubernetes:unsupported:privileged`, `…:dood-needs-privileged` | see 17.4 |
+| `kubernetes:unauthorized` | the login expired or its plugin failed: see 17.1 |
+| `kubernetes:misconfigured` | the setting it names; or the API server's certificate did not verify (the kubeconfig's CA or server) |
 | `kubernetes:admission_denied` | a namespace whose admission allows the pod, or change the devcontainer |
 | `kubernetes:quota` | room in the namespace's ResourceQuota, or the connection's `max_instances` / `max_total_disk` |
 | `kubernetes:unschedulable` | a node that fits the pod, or smaller `resources.cpu_request` / `resources.memory_request` |

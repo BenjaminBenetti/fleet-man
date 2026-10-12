@@ -204,9 +204,10 @@ cron **schedule**, a gateway **webhook** event, or a cron-polled **bash** comman
 that exits zero — each firing spins up a fresh instance that runs the agent.
 These tools let you set that up for the user.
 
-- `fleet_automation_list {fleet}` returns the fleet's `{agents, triggers}`.
-  Read it first before an update — updates are field-merges, so you send only
-  what changes.
+- `fleet_automation_list {fleet}` returns the fleet's `{agents, triggers}`;
+  each agent also says what it waits on: `queued` and `running` runs, and
+  `login`, why the login check refuses its firings on a cluster. Read it first
+  before an update — updates are field-merges, so you send only what changes.
 - `fleet_agent_create {fleet, name, command?, system_prompt?, backend?, cluster?}` and
   `fleet_agent_update {fleet, name, new_name?, command?, system_prompt?,
   backend?, cluster?}` (omit a field to keep it; `new_name` renames and rewrites the
