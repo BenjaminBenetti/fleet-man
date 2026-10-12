@@ -386,8 +386,20 @@ teardown_test() {
   # Fallback: the backend removes whatever a crashed test left behind
   # (devcontainer: labelled containers and shared buildkit servers, and the
   # ownership of a root-written buildkit cache; kubernetes: the connection's
-  # labelled objects and the test's daemons).
+  # labelled objects).
   _be_teardown || true
+
+  # The test's daemons, before the wipe: one whose ~/.fleet is wiped has lost
+  # its socket and lifetime lock but keeps running, unseen by the next test's
+  # clients, which start a second daemon beside it — and both then write into
+  # the next test's instances (one marks the status mod's file not live as
+  # fast as the other marks it live). A SIGTERM runs their bounded shutdown.
+  pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
+  local deadline=$(( $(date +%s) + 25 ))
+  while [ "$(server_count)" != "0" ] && [ "$(date +%s)" -lt "${deadline}" ]; do
+    sleep 0.2
+  done
+  pkill -9 -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
 
   rm -rf "${HOME}/.fleet"
   rm -rf "${TEST_SCRATCH_DIR}"

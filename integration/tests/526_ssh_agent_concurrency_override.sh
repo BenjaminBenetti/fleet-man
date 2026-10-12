@@ -63,19 +63,25 @@ wait_for_key() {
 
 # sign25 <fingerprint> <pubkey> <what> — 25 signers at once in the instance,
 # each through its own agent connection; every one must succeed, and every
-# signature must verify on the host against the key the agent holds.
+# signature must verify on the host against the key the agent holds. Each
+# signer is waited for by its own pid: `jobs -p` stops listing a job bash has
+# already reaped, so a signer done before the last one started went uncounted.
 sign25() {
   local fp=$1 pub=$2 what=$3 out
   out="$("${FLEET_BIN}" exec "${inst}" -- bash -c '
     set -u
     d=$(mktemp -d) && cd "$d" || exit 1
     ssh-add -L | grep -F "'"$(awk '{print $2}' "${pub}")"'" > k.pub || { echo "NOKEY"; exit 1; }
+    pids=()
     for i in $(seq 1 25); do
       echo "message $i" > "m$i"
       ( ssh-keygen -q -Y sign -f k.pub -n fleet-itest "m$i" 2>"e$i" ) &
+      pids+=("$!")
     done
     ok=0
-    for job in $(jobs -p); do wait "$job" && ok=$((ok+1)); done
+    for i in $(seq 1 25); do
+      if wait "${pids[i-1]}"; then ok=$((ok+1)); else echo "FAILED $i: $(cat "e$i")"; fi
+    done
     echo "OK=$ok"
     for i in $(seq 1 25); do
       [ -s "m$i.sig" ] || { echo "MISSING $i: $(cat "e$i")"; continue; }
