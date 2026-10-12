@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -193,6 +194,10 @@ func TestAbortTerminatesThenKillsTheWholeSession(t *testing.T) {
 }
 
 func TestAbortHangsUpATTY(t *testing.T) {
+	if signal.Ignored(syscall.SIGHUP) {
+		// Inherited by the command (nohup): only the grace's SIGKILL ends it.
+		t.Skip("SIGHUP is ignored in this process")
+	}
 	old := abortGrace
 	abortGrace = time.Minute // the hangup alone must end it
 	defer func() { abortGrace = old }()

@@ -168,8 +168,16 @@ func TestClientLogsAgentRecords(t *testing.T) {
 	for _, msg := range []string{"one", "two", "three"} {
 		_ = fa.ctlW.WriteJSON(FrameData, ControlMessage{Type: MsgLog, Log: &LogRecord{Level: "error", Msg: msg}})
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for len(c.snapshot()) < 2 && time.Now().Before(deadline) {
+	// All three read before the close (two logged, one held back): two
+	// records alone do not say the third has reached the limiter, and the
+	// close's "suppressed" line needs it.
+	read := func() bool {
+		cl.logs.mu.Lock()
+		defer cl.logs.mu.Unlock()
+		return cl.logs.suppressed == 1
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for (len(c.snapshot()) < 2 || !read()) && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	_ = cl.Close()

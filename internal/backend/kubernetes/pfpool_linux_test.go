@@ -291,8 +291,11 @@ func TestPoolClosePortForwards(t *testing.T) {
 	r.pool.ClosePortForwards()
 	waitFor(t, "the cluster to see the connection closed", func() bool { return r.kubelet.Open() == 0 })
 	if _, err := conn.Write([]byte("x")); err == nil {
-		if _, err := io.ReadAll(conn); err == nil {
-			t.Fatal("a TCP connection outlived the closed pool")
+		// It ended either way: with an error, or with a clean EOF before any
+		// echo (the kubelet's end is gone). Only an answer means it outlived
+		// the pool.
+		if got, _ := io.ReadAll(conn); len(got) > 0 {
+			t.Fatalf("a TCP connection outlived the closed pool: it answered %q", got)
 		}
 	}
 	if _, err := r.pool.DialPort(context.Background(), a, 81); err == nil {

@@ -160,19 +160,33 @@ var (
 		}
 		return nil
 	}
-
-	// micSetting reads the global toggle. The error matters: "the config could
-	// not be read" (a config.json caught mid-write) is NOT "the microphone is
-	// off", and must neither tear the feature down nor tell the user to go and
-	// flip a toggle that is already on.
-	micSetting = func() (settings state.MicSettings, err error) {
-		config, err := state.LoadConfig()
-		if err != nil {
-			return state.MicSettings{}, err
-		}
-		return config.MicSettings, nil
-	}
 )
+
+// micSettingSeam, when set, is what micSetting reads the toggle with instead
+// of the config file: a test's stand-in. It is swapped atomically, since a
+// mic handler that a drained shutdown abandoned may still read it while the
+// next test swaps it.
+var micSettingSeam atomic.Pointer[func() (state.MicSettings, error)]
+
+// micSetting reads the global toggle. The error matters: "the config could
+// not be read" (a config.json caught mid-write) is NOT "the microphone is
+// off", and must neither tear the feature down nor tell the user to go and
+// flip a toggle that is already on.
+func micSetting() (state.MicSettings, error) {
+	if read := micSettingSeam.Load(); read != nil {
+		return (*read)()
+	}
+	return loadMicSetting()
+}
+
+// loadMicSetting is micSetting's read of the config file.
+func loadMicSetting() (state.MicSettings, error) {
+	config, err := state.LoadConfig()
+	if err != nil {
+		return state.MicSettings{}, err
+	}
+	return config.MicSettings, nil
+}
 
 // startMicSink starts inst's sink through b, its backend. A backend that runs
 // commands as streams of its own (StreamExecer) runs the sink in one, as the

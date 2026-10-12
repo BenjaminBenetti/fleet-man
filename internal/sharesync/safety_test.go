@@ -290,8 +290,14 @@ func TestRootFolderGoneIsNotADeleteOfEverything(t *testing.T) {
 	r.write("host", "user", "a", "keep")
 	r.write("host", "user", "d/b", "keep")
 	r.sync()
-	os.RemoveAll(r.path("c1", "user", "."))
-	os.MkdirAll(r.path("c1", "user", "."), 0o755)
+	// Renamed away before the new folder is made, so the new one cannot
+	// take the old one's inode number (tmpfs hands a freed one out again).
+	root := r.path("c1", "user", ".")
+	if err := os.Rename(root, root+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(root, 0o755)
+	os.RemoveAll(root + ".gone")
 	_, _, err := r.sides["c1"].tree.Scan(context.Background(), "user", nil)
 	if !errors.Is(err, ErrRootMoved) {
 		t.Fatalf("Scan of a folder made again: %v, want ErrRootMoved", err)

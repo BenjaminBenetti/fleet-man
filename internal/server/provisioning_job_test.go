@@ -138,7 +138,12 @@ func TestCreateJobStreamsStepsAndLogsAndWatchShowsTheStep(t *testing.T) {
 		t.Fatalf("final creation log:\n%s", log)
 	}
 
-	// Destroying the instance removes its creation log.
+	// Destroying the instance removes its creation log. Its fake container
+	// is never torn down for real: that would call the host's docker, whose
+	// load would then decide whether the test meets its deadline.
+	origDown := jobDownInstance
+	jobDownInstance = func(*fleet.Instance) error { return nil }
+	t.Cleanup(func() { jobDownInstance = origDown })
 	dstream, err := client.DestroyInstance(ctx, &fleetgrpc.DestroyInstanceRequest{Fleet: "alpha", Instance: ptr("i1")})
 	if err != nil {
 		t.Fatal(err)
