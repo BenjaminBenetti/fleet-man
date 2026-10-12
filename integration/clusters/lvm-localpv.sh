@@ -50,12 +50,15 @@ up() {
   k -n kube-system rollout status daemonset/openebs-lvm-node --timeout=300s >/dev/null
   k -n kube-system rollout status deployment/openebs-lvm-controller --timeout=300s >/dev/null
   plugin "vgs fleetvg >/dev/null 2>&1 || { pvcreate -q ${dev} && vgcreate -q fleetvg ${dev}; }" >&2
+  # shared: a volume's second pod on its node mounts it too, as a fleet's
+  # single-node share needs (and the deep test's two-pod probe checks):
+  # without it the driver refuses that mount ("device already mounted").
   k apply -f - >/dev/null <<'EOF'
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata: {name: fleet-lvm}
 provisioner: local.csi.openebs.io
-parameters: {storage: lvm, volgroup: fleetvg, fsType: ext4}
+parameters: {storage: lvm, volgroup: fleetvg, fsType: ext4, shared: "yes"}
 allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete

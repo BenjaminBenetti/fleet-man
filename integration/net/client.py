@@ -323,7 +323,20 @@ def cmd_pty_wait(args):
     print("%d" % ms)
 
 
+# The subcommands that run a command: everything after their first "--".
+RUNS_A_COMMAND = ("rate-cmd", "pty-wait")
+
+
 def main():
+    # The command is cut off before argparse sees it, so its own "--" stays:
+    # argparse of older Pythons (Debian 12's 3.11, Ubuntu 24.04's 3.12.3)
+    # drops every "--" of a positional, and `rate-cmd 8 -- fleet exec <ref>
+    # -- head -c ...` ran `fleet exec <ref> head -c ...`, whose -c fleet took
+    # for a flag of its own.
+    argv, command = sys.argv[1:], None
+    if argv and argv[0] in RUNS_A_COMMAND and "--" in argv:
+        at = argv.index("--")
+        argv, command = argv[:at], argv[at + 1:]
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("upload")
@@ -354,16 +367,18 @@ def main():
     p.add_argument("direction", choices=["down", "up"])
     p.add_argument("seconds", type=float)
     p.set_defaults(fn=cmd_rate)
-    p = sub.add_parser("rate-cmd")
+    p = sub.add_parser("rate-cmd", usage="%(prog)s seconds -- command...")
     p.add_argument("seconds", type=float)
-    p.add_argument("cmd", nargs="+")
     p.set_defaults(fn=cmd_rate_cmd)
-    p = sub.add_parser("pty-wait")
+    p = sub.add_parser("pty-wait", usage="%(prog)s seconds marker -- command...")
     p.add_argument("seconds", type=float)
     p.add_argument("marker")
-    p.add_argument("cmd", nargs="+")
     p.set_defaults(fn=cmd_pty_wait)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.cmd in RUNS_A_COMMAND:
+        if not command:
+            parser.error("%s: no command after --" % args.cmd)
+        args.cmd = command
     try:
         args.fn(args)
     except OSError as err:
