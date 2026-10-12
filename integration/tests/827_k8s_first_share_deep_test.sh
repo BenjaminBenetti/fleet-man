@@ -48,11 +48,13 @@ done_line=$(printf '%s\n' "${log}" | grep -m1 -E '^==> testing the cluster: done
 mode=${done_line##* }
 # The test's word decides the share: two pods on one node mounted one volume
 # (a pass) is single-node mode; they could not (a fail) is the copy tier,
-# with no share at all.
+# with no share at all. A probe that could not tell (its pod's image not
+# pulled, say) changes nothing: the share keeps the mode the preflight gave.
 case "${probe}" in
   *": share pods: pass") assert_equals "single-node" "${mode}" "the share mode after a passing two-pod probe" ;;
   *": share pods: fail"*) assert_equals "copy" "${mode}" "the share mode after a failing two-pod probe" ;;
-  *) fail "the two-pod probe could not tell: ${probe}" ;;
+  *"could not tell"*) info "the two-pod probe could not tell; the share keeps the preflight's ${mode} mode" ;;
+  *) fail "an unknown two-pod probe result: ${probe}" ;;
 esac
 assert_equals "$([ "${mode}" = copy ] || echo "${mode}")" "$(share_mode "${FIXTURE_REPO_NAME}")" "the fleet's share takes the deep test's mode"
 # The step comes before the share is made and the image built.
