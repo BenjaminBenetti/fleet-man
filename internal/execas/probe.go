@@ -15,12 +15,15 @@ const DefaultCacheDir = "/opt/fleet/run/execas"
 
 // DefaultProbeDeps are the files besides the startup files whose state a
 // probed environment depends on in a pod: the in-pod sockets the agent binds
-// in the control directory, which fleet.rc tests (it hands agents the fleet
-// MCP only while mcp.sock is there) as a user's rc files may test the agent
-// socket. A socket bound or unbound changes the fingerprint, so a cached
-// environment never outlives the socket state it was probed with.
+// in the control directory that a shell's startup tests, fleet.rc (it hands
+// agents the fleet MCP only while mcp.sock is there) or a user's rc files (the
+// agent socket). A socket bound or unbound changes the fingerprint, so a
+// cached environment never outlives the socket state it was probed with.
+// fleet.sock is not one: it is bound while a fleet client is attached, so it
+// comes and goes with every TUI attach and detach, and a dep on it would have
+// every pod probe its user's environment again each time; fleet.rc does not
+// test it.
 var DefaultProbeDeps = []string{
-	"/fleet-mounts/control/fleet.sock",
 	"/fleet-mounts/control/ssh-agent.sock",
 	"/fleet-mounts/control/mcp.sock",
 }
