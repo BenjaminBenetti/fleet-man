@@ -19,6 +19,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/serviceimages"
 )
 
 // canary.go asks the namespace's admission (Pod Security, policy webhooks,
@@ -32,10 +33,6 @@ import (
 // only has to be a valid reference; a registry allowlist policy may still
 // judge it.
 const canaryImage = "registry.k8s.io/pause:3.10"
-
-// buildkitImage is the shared Buildkit server's rootless image, as its
-// canary names it.
-const buildkitImage = "moby/buildkit:rootless"
 
 // shape is one way fleet's pods ask for privilege.
 type shape int
@@ -308,7 +305,9 @@ func (r *run) podSpec(s shape) corev1.PodSpec {
 		}
 	case shapeBuildkit:
 		uid := int64(1000)
-		container.Name, container.Image = "buildkitd", buildkitImage
+		// The image the server runs (a registry allowlist judges it):
+		// pinned, or the connection's own.
+		container.Name, container.Image = "buildkitd", serviceimages.For(&r.t.Cluster, fleet.ServiceBuildkit, false)
 		container.SecurityContext = &corev1.SecurityContext{
 			RunAsUser: &uid, RunAsGroup: &uid,
 			SeccompProfile:  &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined},
