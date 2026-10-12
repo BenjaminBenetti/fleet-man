@@ -186,6 +186,22 @@ for test_file in "${tests[@]}"; do
 done
 parity_total="${#tests[@]}"
 
+# FLEET_ITEST_REQUIRE_K8S_PARITY=1 — the merge gate's parity check (the
+# integration-k8s workflow sets it): a selection holding a devcontainer-only
+# exemption or a test not ported to kubernetes fails before any test runs,
+# naming each, so the count cannot grow back from 0.
+if [ -n "${FLEET_ITEST_REQUIRE_K8S_PARITY:-}" ]; then
+  parity_gaps=$(itest_parity_gaps "${tests[@]}")
+  if [ -n "${parity_gaps}" ]; then
+    printf "%b[fatal]%b k8s parity required (FLEET_ITEST_REQUIRE_K8S_PARITY): %d devcontainer-only, %d not ported yet:\n" \
+      "${RED}" "${RESET}" "${parity_exempt}" "${parity_pending}" >&2
+    printf '%s\n' "${parity_gaps}" | sed 's/^/    /' >&2
+    printf "    mark each '# itest: k8s' once it runs on a cluster, or '# itest: no-docker' when it never makes an instance\n" >&2
+    exit 1
+  fi
+  say "k8s parity required: ${parity_k8s} marked k8s, ${parity_host} host-only, none exempt or unported"
+fi
+
 # On kubernetes, run only the "# itest: k8s" tests. devcontainer-only ones stay
 # in the list to be reported as skipped with their reason, and so do tests with
 # a malformed marker, which fail below; the rest are left out like other

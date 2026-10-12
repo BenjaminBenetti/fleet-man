@@ -179,7 +179,7 @@ poisoned, so treating an instance as a docker container fails loudly;
 | --- | --- |
 | `# itest: no-docker` | host-side only (no instance); `FLEET_ITEST_NO_DOCKER=1` runs just these |
 | `# itest: k8s` | runs on `FLEET_ITEST_BACKEND=kubernetes`; the unit that ports a feature adds it to that feature's tests |
-| `# itest: devcontainer-only: <reason>` | checks a Docker mechanism clusters lack, so the kubernetes run skips it; the reason says what replaces it. These must reach 0 before the kubernetes backend merges |
+| `# itest: devcontainer-only: <reason>` | checks a Docker mechanism clusters lack, so the kubernetes run skips it; the reason says what replaces it. None may remain: the merge gate's parity check fails it |
 
 An unmarked test that creates instances is not ported to kubernetes yet; the
 kubernetes run leaves it out. run.sh fails a test whose markers are malformed
@@ -187,6 +187,10 @@ kubernetes run leaves it out. run.sh fails a test whose markers are malformed
 `devcontainer-only`) without running it. Every run's summary ends with the
 k8s parity of the selected tests (marked `k8s`, devcontainer-only, not ported
 yet, host-only) and lists each exemption with its reason.
+`FLEET_ITEST_REQUIRE_K8S_PARITY=1` (set by every integration-k8s shard) makes
+any devcontainer-only or unported test in the selection fail the run before
+a test starts, naming each: a new test that makes instances is marked `k8s`
+or, when it never makes one, `no-docker`.
 
 Any line that starts with `# itest:` counts, heredocs included, so a test that
 writes such a line for another file builds it with `printf`.
@@ -320,8 +324,10 @@ through fleet within 2x of kubectl port-forward on the same link.
 ## CI
 
 `.github/workflows/integration-k8s.yml` runs the kubernetes subset sharded on
-a minikube in each runner, beside the backend conformance suite and the
-cluster-gated Go tests (non-required until the Kubernetes backend merges).
+a minikube in each runner, with the parity check on, beside the backend
+conformance suite and the cluster-gated Go tests; its aggregate
+`integration-k8s` check (every shard, conformance and live group green) is
+the one branch protection requires.
 
 Two PR checks run this suite end-to-end on every PR to `main`:
 
