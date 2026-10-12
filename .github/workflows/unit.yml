@@ -106,3 +106,19 @@ jobs:
         run: |
           go test -c -o "$RUNNER_TEMP/podagent.test" ./internal/podagent
           sudo FLEET_PODAGENT_REQUIRE_ROOT=1 "$RUNNER_TEMP/podagent.test" -test.run 'AsRoot' -test.v
+
+  # The unit suite under the race detector, beside the unit job rather than in
+  # its 10 minutes (about 5 minutes of tests on a 4-core runner, plus the
+  # race build).
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: go test -race
+        run: go test -race ./...
