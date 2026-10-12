@@ -87,6 +87,10 @@ type InstanceRecord struct {
 	// the fleet's share, or the instance's own copy (share.go). nil without
 	// fleet mounts.
 	Share *ShareRecord `json:"share,omitempty"`
+	// DockerImage is the image fleet rendered for the pod's docker engine
+	// sidecar ("" without one, and in a record an older fleet wrote): the
+	// pod's sidecar must name it, and run it (Expect.DockerImage).
+	DockerImage string `json:"dockerImage,omitempty"`
 }
 
 // ErrInstanceRecordNewer is a record a newer fleet wrote: read-only to this

@@ -93,7 +93,14 @@ func TestCloneRecordCarriesTheSources(t *testing.T) {
 	rec.Share = &ShareRecord{Mode: "single-node", Claim: "fs-alpha-abcdefgh-share", Roots: []podshare.SpokeRoot{{Name: ".mnt", Reserved: []string{"data"}}}, UID: 1000, GID: 1000}
 	c := cloneRig(t, sts, rec)
 	c.srcRec, c.gen = rec, rec.Gen
+	// The source's pod has the docker engine's sidecar, which the clone's
+	// template keeps: its record names the image to verify.
+	sts = sts.DeepCopy()
+	sts.Spec.Template.Spec.InitContainers = append(sts.Spec.Template.Spec.InitContainers, corev1.Container{Name: podspec.DockerSidecar, Image: podspec.DefaultDockerImage})
 	got := c.cloneRecord(&podspec.Objects{StatefulSet: sts})
+	if got.DockerImage != podspec.DefaultDockerImage {
+		t.Errorf("the clone's record names docker image %q", got.DockerImage)
+	}
 	if got.Share == rec.Share || !reflect.DeepEqual(got.Share, rec.Share) || &got.Share.Roots[0].Reserved[0] == &rec.Share.Roots[0].Reserved[0] {
 		t.Errorf("the clone's share record is %+v, want a copy of the source's", got.Share)
 	}

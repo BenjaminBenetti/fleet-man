@@ -14,6 +14,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 )
 
 // testHash stands in for podspec.SpecHash: the parts of a spec a
@@ -137,6 +139,82 @@ func TestVerifyPodRefusesASubstitutedPod(t *testing.T) {
 }
 
 // The annotation a pod carries is never what it is checked against.
+// The docker engine's sidecar (privileged root beside the dev container) and
+// the share's init container run what fleet rendered: the spec hash leaves
+// images out, so another image named or run there (a StatefulSet edited to
+// another one) is tampering. The share's runs the delivered image; the
+// sidecar its recorded image, by its digest once it runs when pinned. A
+// record without the sidecar's image (an older fleet's) checks nothing of it.
+func TestVerifyPodChecksTheSidecarsImages(t *testing.T) {
+	const engine = "docker:29.9.0-dind@" + otherImage
+	withSidecars := func() (*appsv1.StatefulSet, *corev1.Pod, Expect) {
+		set, pod := instanceObjects("ns", "fi-a-b-key", "pod-1")
+		pod.Spec.InitContainers = []corev1.Container{
+			{Name: podspec.ShareInit, Image: pod.Spec.Containers[0].Image},
+			{Name: podspec.DockerSidecar, Image: engine},
+		}
+		pod.Status.InitContainerStatuses = []corev1.ContainerStatus{
+			{Name: podspec.ShareInit, ImageID: "docker.io/library/devcontainer@" + testDigest},
+			{Name: podspec.DockerSidecar, ImageID: "docker.io/library/docker@" + otherImage},
+		}
+		want := expectFor(set, pod)
+		want.DockerImage = engine
+		return set, pod, want
+	}
+	set, pod, want := withSidecars()
+	if err := VerifyPod(pod, set, want, testHash); err != nil {
+		t.Fatalf("the pod fleet made: %v", err)
+	}
+	// The sidecar not running yet: its spec decides.
+	pod.Status.InitContainerStatuses[1].ImageID = ""
+	if err := VerifyPod(pod, set, want, testHash); err != nil {
+		t.Fatalf("a sidecar not started yet: %v", err)
+	}
+
+	tamper := []struct {
+		name, mentions string
+		edit           func(*corev1.Pod, *Expect)
+	}{
+		{"the sidecar runs another image", podspec.DockerSidecar, func(p *corev1.Pod, _ *Expect) {
+			p.Status.InitContainerStatuses[1].ImageID = "docker.io/evil/docker@" + testDigest
+		}},
+		{"the sidecar names another image", "not " + engine, func(p *corev1.Pod, _ *Expect) {
+			p.Spec.InitContainers[1].Image = "evil/dind:latest"
+		}},
+		{"no sidecar", "no " + podspec.DockerSidecar, func(p *corev1.Pod, _ *Expect) {
+			p.Spec.InitContainers = p.Spec.InitContainers[:1]
+		}},
+		{"the share's init container runs another image", podspec.ShareInit, func(p *corev1.Pod, _ *Expect) {
+			p.Status.InitContainerStatuses[0].ImageID = "docker.io/evil/x@" + otherImage
+		}},
+	}
+	for _, tt := range tamper {
+		set, pod, want := withSidecars()
+		tt.edit(pod, &want)
+		want.SpecHash = testHash(&pod.Spec) // only the images differ
+		var te *TamperedError
+		if err := VerifyPod(pod, set, want, testHash); !errors.As(err, &te) || !strings.Contains(err.Error(), tt.mentions) {
+			t.Errorf("%s: %v, want it refused naming %q", tt.name, err, tt.mentions)
+		}
+	}
+
+	// An unpinned image (a connection's service_images.dind tag) is checked
+	// by name only; a record without one checks nothing of the sidecar.
+	set, pod, want = withSidecars()
+	pod.Spec.InitContainers[1].Image, want.DockerImage = "docker:dind", "docker:dind"
+	want.SpecHash = testHash(&pod.Spec)
+	pod.Status.InitContainerStatuses[1].ImageID = "docker.io/library/docker@" + testDigest
+	if err := VerifyPod(pod, set, want, testHash); err != nil {
+		t.Errorf("an unpinned sidecar image: %v", err)
+	}
+	want.DockerImage = ""
+	pod.Spec.InitContainers[1].Image = "other:1"
+	want.SpecHash = testHash(&pod.Spec)
+	if err := VerifyPod(pod, set, want, testHash); err != nil {
+		t.Errorf("a record without the sidecar's image: %v", err)
+	}
+}
+
 func TestVerifyPodNeverTrustsTheAnnotation(t *testing.T) {
 	set, pod := instanceObjects("ns", "fi-a-b-key", "pod-1")
 	want := expectFor(set, pod)
