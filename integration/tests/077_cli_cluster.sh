@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # itest: no-docker
 # itest: k8s
-# Description: `fleet cluster` contexts/add/set/ls/test/gc/login/rm work on the daemon host's kubeconfig and print the same through the gateway as locally; on a cluster backend a plain namespace tests usable and a baseline-labelled one limited.
+# Description: `fleet cluster` contexts/add/set/ls/test/gc/login/rm work on the daemon host's kubeconfig and print the same through the gateway as locally; on a cluster backend add and set create a missing namespace (labelled as asked), a plain namespace tests usable and a baseline-labelled one limited.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -196,19 +196,23 @@ if itest_backend_is kubernetes; then
   for where in local gateway; do
     plain="fleet-it-077-${where}-plain-${suffix}"
     baseline="fleet-it-077-${where}-baseline-${suffix}"
-    LIVE_NAMESPACES="${LIVE_NAMESPACES} ${plain} ${baseline}"
+    moved="fleet-it-077-${where}-moved-${suffix}"
+    LIVE_NAMESPACES="${LIVE_NAMESPACES} ${plain} ${baseline} ${moved}"
     if [ "${where}" = gateway ]; then
       export FLEET_GATEWAY="${public_grpc_url}"
       FLEET_TOKEN="$(cat "${HOME}/.fleet/mcp.token")"
       export FLEET_TOKEN
     fi
     info "${where}: connect ${FLEET_ITEST_CLUSTER} in ${plain} and ${baseline}"
-    out=$("${FLEET_BIN}" cluster add "${FLEET_ITEST_CLUSTER}" --name "plain-${where}" --kubeconfig "${real_kubeconfig}" \
-      -n "${plain}" --create-namespace)
-    assert_contains "${out}" "app.kubernetes.io/managed-by: fleet" "${where}: add --create-namespace prints the namespace"
+    out=$("${FLEET_BIN}" cluster add "${FLEET_ITEST_CLUSTER}" --name "plain-${where}" --kubeconfig "${real_kubeconfig}" -n "${plain}")
+    assert_contains "${out}" "Created namespace ${plain}" "${where}: add creates the missing namespace"
+    [ "$(kubectl --context "${FLEET_ITEST_CLUSTER}" get namespace "${plain}" -o 'jsonpath={.metadata.labels.app\.kubernetes\.io/managed-by}')" = fleet ] \
+      || fail "${where}: the namespace fleetd created lacks app.kubernetes.io/managed-by=fleet"
     out=$("${FLEET_BIN}" cluster add "${FLEET_ITEST_CLUSTER}" --name "baseline-${where}" --kubeconfig "${real_kubeconfig}" \
-      -n "${baseline}" --create-namespace --namespace-label pod-security.kubernetes.io/enforce=baseline)
-    assert_contains "${out}" "pod-security.kubernetes.io/enforce: baseline" "${where}: the namespace gets its label"
+      -n "${baseline}" --namespace-label pod-security.kubernetes.io/enforce=baseline)
+    assert_contains "${out}" "Created namespace ${baseline}" "${where}: add creates the labelled namespace"
+    [ "$(kubectl --context "${FLEET_ITEST_CLUSTER}" get namespace "${baseline}" -o 'jsonpath={.metadata.labels.pod-security\.kubernetes\.io/enforce}')" = baseline ] \
+      || fail "${where}: the namespace did not get its label"
 
     rc=0
     out=$("${FLEET_BIN}" cluster test "plain-${where}") || rc=$?
@@ -229,6 +233,11 @@ if itest_backend_is kubernetes; then
 
     out=$("${FLEET_BIN}" cluster gc "plain-${where}")
     assert_contains "${out}" "lease held by this daemon" "${where}: gc runs under this daemon's Lease"
+    out=$("${FLEET_BIN}" cluster set "plain-${where}" "namespace=${moved}")
+    assert_contains "${out}" "Created namespace ${moved}" "${where}: set creates the namespace it moves to"
+    kubectl --context "${FLEET_ITEST_CLUSTER}" get namespace "${moved}" >/dev/null || fail "${where}: set did not create ${moved}"
+    out=$("${FLEET_BIN}" cluster set "plain-${where}" "namespace=${plain}")
+    assert_not_contains "${out}" "Created namespace" "${where}: an existing namespace is not created again"
     out=$("${FLEET_BIN}" cluster ls)
     assert_contains "${out}" "baseline-${where}" "${where}: ls lists the connection"
     "${FLEET_BIN}" cluster rm "plain-${where}" >/dev/null

@@ -700,9 +700,14 @@ func writePluginScript(t *testing.T, path, body string) {
 	}
 }
 
+// CreateKubeNamespace makes a saved connection's namespace that went
+// missing since (the add created it), with the caller's labels.
 func TestCreateKubeNamespace(t *testing.T) {
 	f := newKubeFixture(t)
 	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet-new"}).GetCluster().GetId()
+	if err := f.apis["minikube"].CoreV1().Namespaces().Delete(context.Background(), "fleet-new", metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("the add did not create the namespace: %v", err)
+	}
 	dry, err := f.svc.CreateKubeNamespace(context.Background(), &fleetgrpc.CreateKubeNamespaceRequest{Id: id, DryRun: true})
 	if err != nil {
 		t.Fatal(err)

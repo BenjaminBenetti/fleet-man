@@ -657,7 +657,7 @@ stops and restarts.
 
 ```bash
 fleet cluster contexts                   # contexts in fleetd's kubeconfig
-fleet cluster add prod-eu -n fleet       # connect one (a namespace you made)
+fleet cluster add prod-eu -n fleet       # connect one (fleetd creates a missing namespace)
 fleet cluster test prod-eu               # every check: ready, limited, or why not
 fleet up agent-1 --cluster prod-eu       # create an instance there
 ```
@@ -666,9 +666,10 @@ fleet up agent-1 --cluster prod-eu       # create an instance there
   and the devcontainer CLI, as for Docker instances) and holds the kubeconfig
   and its login plugin. Cluster credentials never leave it: a remote TUI or
   CLI, through the gateway or Armada SSH, gets the same control without them.
-- **The cluster** needs a namespace and a Role for fleet's identity in it
-  ([the Role](doc/kubernetes.md#2-what-you-need)); `fleet cluster test` lists
-  anything missing.
+- **The cluster** needs a Role for fleet's identity in the connection's
+  namespace ([the Role](doc/kubernetes.md#2-what-you-need)), and fleet creates
+  that namespace when it does not exist (or prints its manifest when it may
+  not); `fleet cluster test` lists anything missing.
 - **In the TUI**, connect, edit and test clusters in **Settings →
   Kubernetes**. Each cluster is then a Deploy option `☸ <name>` in the New
   instance dialog, which says when the fleet's devcontainer.json will not work

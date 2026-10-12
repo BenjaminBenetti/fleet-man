@@ -152,13 +152,18 @@ func (s *service) ListKubeClusters(context.Context, *fleetgrpc.ListKubeClustersR
 	return &fleetgrpc.ListKubeClustersReply{Clusters: s.kube.statuses()}, nil
 }
 
-// AddKubeCluster saves a new connection and starts probing it.
-func (s *service) AddKubeCluster(_ context.Context, req *fleetgrpc.AddKubeClusterRequest) (*fleetgrpc.AddKubeClusterReply, error) {
+// AddKubeCluster saves a new connection, creates its namespace when it does
+// not exist, and starts probing it.
+func (s *service) AddKubeCluster(ctx context.Context, req *fleetgrpc.AddKubeClusterRequest) (*fleetgrpc.AddKubeClusterReply, error) {
 	rec := kubeRecordFromProto(req.GetCluster())
 	if err := s.kubeDefaults(&rec); err != nil {
 		return nil, err
 	}
 	if err := validateKubeCluster(&rec); err != nil {
+		return nil, err
+	}
+	// Bad labels are refused before anything is saved.
+	if _, _, err := kubeNamespaceObject(rec.Namespace, req.GetNamespaceLabels()); err != nil {
 		return nil, err
 	}
 	now := s.kube.now().UTC()
@@ -175,8 +180,10 @@ func (s *service) AddKubeCluster(_ context.Context, req *fleetgrpc.AddKubeCluste
 		return nil, kubeStoreError(err)
 	}
 	flog.Info("kube: connection added", "cluster", rec.ID, "context", rec.Context, "namespace", rec.Namespace)
+	// Before the worker starts, so its first preflight finds the namespace.
+	ns := s.ensureKubeNamespace(ctx, rec, req.GetNamespaceLabels())
 	s.kube.sync()
-	return &fleetgrpc.AddKubeClusterReply{Cluster: s.kube.status(rec.ID)}, nil
+	return &fleetgrpc.AddKubeClusterReply{Cluster: s.kube.status(rec.ID), Namespace: ns}, nil
 }
 
 // kubeStoreError passes a status error through and wraps any other failure
@@ -264,6 +271,12 @@ func (s *service) UpdateKubeCluster(ctx context.Context, req *fleetgrpc.UpdateKu
 		return nil, kubeStoreError(err)
 	}
 	flog.Info("kube: connection updated", "cluster", cur.ID, "fields", req.GetUpdateMask().GetPaths())
+	var ns *fleetgrpc.KubeNamespaceResult
+	if repoint || next.Namespace != cur.Namespace {
+		// Before the worker takes the new target, so its preflight finds
+		// the namespace.
+		ns = s.ensureKubeNamespace(ctx, next, nil)
+	}
 	s.kube.sync()
 	if next.BlocksMetadata() != cur.BlocksMetadata() {
 		// A security setting of the fleets' pods there, not of new
@@ -281,7 +294,7 @@ func (s *service) UpdateKubeCluster(ctx context.Context, req *fleetgrpc.UpdateKu
 		// Deployments are applied again now, not at the next create.
 		go reensureClusterServices(s.bgCtx, cur.ID)
 	}
-	return &fleetgrpc.UpdateKubeClusterReply{Cluster: s.kube.status(cur.ID)}, nil
+	return &fleetgrpc.UpdateKubeClusterReply{Cluster: s.kube.status(cur.ID), Namespace: ns}, nil
 }
 
 func samePaths(a, b []string) bool {
@@ -792,8 +805,9 @@ func (s *service) LoginKubeCluster(req *fleetgrpc.LoginKubeClusterRequest, strea
 }
 
 // CreateKubeNamespace creates (or with dry_run renders) a connection's
-// namespace. Fleet never creates one on its own: this is the explicit
-// action, and the manifest shows exactly what it makes.
+// namespace: one that went missing after the connection was saved, or one
+// with labels of the caller's. AddKubeCluster and UpdateKubeCluster create a
+// missing namespace themselves (ensureKubeNamespace).
 func (s *service) CreateKubeNamespace(ctx context.Context, req *fleetgrpc.CreateKubeNamespaceRequest) (*fleetgrpc.CreateKubeNamespaceReply, error) {
 	var rec fleet.KubeCluster
 	if id := req.GetId(); id != "" {
@@ -811,27 +825,11 @@ func (s *service) CreateKubeNamespace(ctx context.Context, req *fleetgrpc.Create
 	if name == "" {
 		name = rec.Namespace
 	}
-	if !names.IsDNS1123Label(name) {
-		return nil, invalidf("namespace %q is not a valid namespace name", name)
-	}
-	labels := req.GetLabels()
-	if len(labels) == 0 {
-		labels = map[string]string{names.LabelManagedBy: names.ManagedBy}
-	}
-	for k, v := range labels {
-		if errs := validation.IsQualifiedName(k); len(errs) > 0 {
-			return nil, invalidf("label %q: %v", k, errs)
-		}
-		if errs := validation.IsValidLabelValue(v); len(errs) > 0 {
-			return nil, invalidf("label %s=%q: %v", k, v, errs)
-		}
-	}
-	ns := &corev1.Namespace{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"}, ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
-	manifest, err := yaml.Marshal(ns)
+	ns, manifest, err := kubeNamespaceObject(name, req.GetLabels())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rendering the namespace: %v", err)
+		return nil, err
 	}
-	reply := &fleetgrpc.CreateKubeNamespaceReply{Manifest: cleanManifest(string(manifest))}
+	reply := &fleetgrpc.CreateKubeNamespaceReply{Manifest: manifest}
 	if req.GetDryRun() {
 		return reply, nil
 	}
@@ -842,16 +840,8 @@ func (s *service) CreateKubeNamespace(ctx context.Context, req *fleetgrpc.Create
 	}
 	cctx, cancel := context.WithTimeout(ctx, kubeRepointTimeout)
 	defer cancel()
-	ns.TypeMeta = metav1.TypeMeta{}
-	if _, err := link.client.CoreV1().Namespaces().Create(cctx, ns, metav1.CreateOptions{}); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil, status.Errorf(codes.AlreadyExists, "namespace %q already exists", name)
-		}
-		kind, msg := preflight.Classify(err)
-		if kind == fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_FORBIDDEN {
-			return nil, status.Errorf(codes.PermissionDenied, "creating namespace %q: %s (it needs namespaces create; apply the manifest as someone who has it)", name, msg)
-		}
-		return nil, status.Errorf(codes.Unavailable, "creating namespace %q: %s", name, msg)
+	if err := createKubeNamespace(cctx, link, ns); err != nil {
+		return nil, err
 	}
 	flog.Info("kube: namespace created", "cluster", rec.ID, "namespace", name)
 	reply.Created = true
@@ -864,6 +854,98 @@ func (s *service) CreateKubeNamespace(ctx context.Context, req *fleetgrpc.Create
 		}
 	}
 	return reply, nil
+}
+
+// kubeNamespaceObject is namespace name as fleet creates it, labelled with
+// labels (empty: the managed-by label), and its manifest.
+func kubeNamespaceObject(name string, labels map[string]string) (*corev1.Namespace, string, error) {
+	if !names.IsDNS1123Label(name) {
+		return nil, "", invalidf("namespace %q is not a valid namespace name", name)
+	}
+	if len(labels) == 0 {
+		labels = map[string]string{names.LabelManagedBy: names.ManagedBy}
+	}
+	for k, v := range labels {
+		if errs := validation.IsQualifiedName(k); len(errs) > 0 {
+			return nil, "", invalidf("label %q: %v", k, errs)
+		}
+		if errs := validation.IsValidLabelValue(v); len(errs) > 0 {
+			return nil, "", invalidf("label %s=%q: %v", k, v, errs)
+		}
+	}
+	ns := &corev1.Namespace{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"}, ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+	manifest, err := yaml.Marshal(ns)
+	if err != nil {
+		return nil, "", status.Errorf(codes.Internal, "rendering the namespace: %v", err)
+	}
+	ns.TypeMeta = metav1.TypeMeta{}
+	return ns, cleanManifest(string(manifest)), nil
+}
+
+// createKubeNamespace creates ns through link: ALREADY_EXISTS when it
+// exists, PERMISSION_DENIED without namespaces create.
+func createKubeNamespace(ctx context.Context, link *kubeLink, ns *corev1.Namespace) error {
+	_, err := link.client.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	switch {
+	case err == nil:
+		return nil
+	case apierrors.IsAlreadyExists(err):
+		return status.Errorf(codes.AlreadyExists, "namespace %q already exists", ns.Name)
+	}
+	kind, msg := preflight.Classify(err)
+	if kind == fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_FORBIDDEN {
+		return status.Errorf(codes.PermissionDenied, "creating namespace %q: %s (it needs namespaces create; apply the manifest as someone who has it)", ns.Name, msg)
+	}
+	return status.Errorf(codes.Unavailable, "creating namespace %q: %s", ns.Name, msg)
+}
+
+// ensureKubeNamespace creates rec's namespace when it does not exist, as
+// CreateKubeNamespace does: the namespace a connection is added with, or
+// set to, is the one the user chose. One that exists is left as it is.
+// Nothing here fails the caller: the connection is saved either way, and
+// the result says what happened.
+func (s *service) ensureKubeNamespace(ctx context.Context, rec fleet.KubeCluster, labels map[string]string) *fleetgrpc.KubeNamespaceResult {
+	res := &fleetgrpc.KubeNamespaceResult{Namespace: rec.Namespace}
+	ns, manifest, err := kubeNamespaceObject(rec.Namespace, labels)
+	if err != nil {
+		res.Error = status.Convert(err).Message()
+		return res
+	}
+	link, err := s.kube.connect(rec, s.kube.environ())
+	if err != nil {
+		_, msg := preflight.Classify(err)
+		res.Error = "could not tell whether it exists: " + msg
+		return res
+	}
+	ctx, cancel := context.WithTimeout(ctx, kubeRepointTimeout)
+	defer cancel()
+	_, getErr := link.client.CoreV1().Namespaces().Get(ctx, rec.Namespace, metav1.GetOptions{})
+	switch {
+	case getErr == nil:
+		return res
+	case apierrors.IsForbidden(getErr):
+		// Namespaces are not readable here, and the one fleet works in may
+		// well exist: a create still makes a missing one, and a refused
+		// create tells nothing (the preflight judges the namespace).
+	case !apierrors.IsNotFound(getErr):
+		_, msg := preflight.Classify(getErr)
+		res.Error = "could not tell whether it exists: " + msg
+		return res
+	}
+	err = createKubeNamespace(ctx, link, ns)
+	switch status.Code(err) {
+	case codes.OK:
+		flog.Info("kube: namespace created", "cluster", rec.ID, "namespace", rec.Namespace)
+		res.Created = true
+	case codes.AlreadyExists:
+	case codes.PermissionDenied:
+		if !apierrors.IsForbidden(getErr) {
+			res.Error, res.PermissionDenied, res.Manifest = status.Convert(err).Message(), true, manifest
+		}
+	default:
+		res.Error = status.Convert(err).Message()
+	}
+	return res
 }
 
 // cleanManifest drops the empty fields yaml renders for an unsaved object.

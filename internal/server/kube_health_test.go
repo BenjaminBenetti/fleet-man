@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -251,6 +252,10 @@ func TestKubeWorkerRecordChanges(t *testing.T) {
 func TestKubeShallowProbeDoesNotRerunFullOnContentFailures(t *testing.T) {
 	f := newKubeFixture(t)
 	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "missing-ns"}).GetCluster().GetId()
+	// Gone since the add created it.
+	if err := f.apis["minikube"].CoreV1().Namespaces().Delete(context.Background(), "missing-ns", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	w := f.svc.kube.newWorker(f.stored(id))
 	w.runFull(context.Background(), nil)
 	if st := w.status(); st.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED {

@@ -424,7 +424,7 @@ assert_equals "200" "${code}" "the no-login delivery: $(cat "${TEST_SCRATCH_DIR}
 # An agent whose connection was forgotten: refused with the reason.
 info "kubernetes: an agent on a forgotten connection"
 GONE_NS="${FLEET_ITEST_NAMESPACE}-gone"
-out=$("${FLEET_BIN}" cluster add "${FLEET_ITEST_CLUSTER}" --name gone -n "${GONE_NS}" --create-namespace 2>&1) \
+out=$("${FLEET_BIN}" cluster add "${FLEET_ITEST_CLUSTER}" --name gone -n "${GONE_NS}" 2>&1) \
   || fail "fleet cluster add gone: ${out}"
 gone_id=$(jq -r '.clusters[] | select(.display_name == "gone") | .id' "${HOME}/.fleet/kube_clusters.json")
 [ -n "${gone_id}" ] || fail "connection gone has no id: $(cat "${HOME}/.fleet/kube_clusters.json")"

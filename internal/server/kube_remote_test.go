@@ -118,12 +118,15 @@ type parityResult struct {
 	pruneOwner string
 	manifest   string
 	login      []*fleetgrpc.KubeDeviceCode
+	// nsCreated: adding the connection created its missing namespace.
+	nsCreated bool
 }
 
 // The same suite over each transport gives the same results: a remote client
 // adds a connection from a non-default kubeconfig on the daemon host, sets
 // every field (allow_privileged, extra_path and plugin_env included), tests,
-// prunes, creates a namespace, logs in on the daemon and removes it.
+// prunes, creates a namespace, logs in on the daemon and removes it. Its
+// missing namespace is created by the add, as it is locally.
 func TestKubeRPCsHaveRemoteParity(t *testing.T) {
 	f := newKubeFixture(t)
 	f.real["plugin-ctx"] = true
@@ -174,7 +177,8 @@ func TestKubeRPCsHaveRemoteParity(t *testing.T) {
 		if !proto.Equal(got.record, local.record) {
 			t.Errorf("%s stored\n %v\nlocal stored\n %v", name, got.record, local.record)
 		}
-		if got.testState != local.testState || got.checkNames != local.checkNames || got.pruneOwner != local.pruneOwner || got.manifest != local.manifest {
+		if got.testState != local.testState || got.checkNames != local.checkNames || got.pruneOwner != local.pruneOwner || got.manifest != local.manifest ||
+			got.nsCreated != local.nsCreated {
 			t.Errorf("%s = %+v\nlocal = %+v", name, got, local)
 		}
 		if len(got.login) != 1 || !proto.Equal(got.login[0], local.login[0]) {
@@ -220,12 +224,16 @@ printf '%%s' '{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCreden
 	}
 
 	added, err := c.AddKubeCluster(ctx, &fleetgrpc.AddKubeClusterRequest{Cluster: &fleetgrpc.KubeCluster{
-		Context: "minikube", KubeconfigPaths: []string{kubeconfig}, DisplayName: "parity-" + name, Namespace: "fleet",
+		Context: "minikube", KubeconfigPaths: []string{kubeconfig}, DisplayName: "parity-" + name, Namespace: "parity-" + name,
 	}})
 	if err != nil {
 		t.Fatalf("AddKubeCluster: %v", err)
 	}
 	noSecrets(t, name, added)
+	res.nsCreated = added.GetNamespace().GetCreated()
+	if !res.nsCreated || added.GetNamespace().GetError() != "" {
+		t.Errorf("the add must create its missing namespace: %v", added.GetNamespace())
+	}
 	id := added.GetCluster().GetCluster().GetId()
 	// The gateway pull credential is stored on the daemon host only.
 	if err := state.UpdateKubeClusters(func(k *state.KubeClusters) error {

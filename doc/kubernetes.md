@@ -75,9 +75,10 @@ that dies mid-rebuild has the rebuild rolled back on its next start.
   release's checksums; an offline daemon host needs them there, or named by
   `FLEET_POD_BINARY_<ARCH>` / `FLEET_POD_TMUX_<ARCH>` (`AMD64`, `ARM64`).
 
-**On the cluster**: a namespace (fleet never creates one unasked) and these
-permissions in it for fleet's identity. `fleet cluster test` lists any that
-are missing (`FORBIDDEN`).
+**On the cluster**: a namespace (fleet creates the one a connection names
+when it does not exist, given `namespaces create`) and these permissions in
+it for fleet's identity. `fleet cluster test` lists any that are missing
+(`FORBIDDEN`).
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -136,8 +137,10 @@ StorageClasses (the class picker; without it you type a class name), nodes
 (attach limits), PersistentVolumes (a share's topology), CSIDrivers and
 VolumeSnapshotClasses (clone tiers), RuntimeClasses (sysbox), and the
 `kube-system` namespace (the cluster's identity, so a renamed context can be
-re-pointed). `get`, `list` and `watch` on each is enough; `namespaces create`
-lets the cluster editor's **[ Create ]** make a missing namespace.
+re-pointed). `get`, `list` and `watch` on each is enough. `namespaces create`
+lets fleet make a connection's namespace when it does not exist; without it
+the connection is still saved, and fleet shows the namespace's manifest to
+apply as someone who has it.
 
 **Kubernetes versions.** Docker outside of Docker needs 1.29 or later (native
 sidecars). On SELinux nodes, volumes are relabelled at mount time where the
@@ -181,8 +184,8 @@ health, version and the instances and agents that use it:
 
 ```bash
 fleet cluster contexts                          # contexts in fleetd's kubeconfig
-fleet cluster add prod-eu -n fleet --name prod  # connect a context
-fleet cluster add kind-dev --create-namespace   # create the namespace first
+fleet cluster add prod-eu -n fleet --name prod  # connect a context; a missing namespace is created
+fleet cluster add kind-dev -n team --namespace-label pod-security.kubernetes.io/enforce=baseline
 fleet cluster ls                                # connections and their health
 fleet cluster ls prod                           # warnings and every set field
 fleet cluster set prod allow_privileged=true storage_class=gp3
@@ -193,8 +196,12 @@ fleet cluster rm prod [--destroy-instances | --forget]
 fleet cluster gc prod [--apply]                 # objects no instance accounts for
 ```
 
-Kubeconfig paths, `extra_path` and `plugin_env` are daemon-host paths and
-names, whichever machine you type them on.
+`add`, and `set` of a namespace or a context, create the namespace when it
+does not exist (labelled `app.kubernetes.io/managed-by=fleet`, or with
+`--namespace-label`); when fleetd may not create it, the connection is still
+saved and the namespace's manifest is printed to apply. Kubeconfig paths,
+`extra_path` and `plugin_env` are daemon-host paths and names, whichever
+machine you type them on.
 
 **From MCP**, `fleet_cluster_list {cluster?}` and
 `fleet_cluster_test {cluster, deep?, storage_classes?, test_storage?}`.

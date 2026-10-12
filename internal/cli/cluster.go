@@ -270,14 +270,14 @@ func newClusterAddCmd() *cobra.Command {
 	var (
 		name, namespace string
 		kubeconfigs     []string
-		createNamespace bool
 		namespaceLabels []string
 	)
 	cmd := &cobra.Command{
 		Use:   "add <context> [<field>=<value>...]",
 		Short: "Connect a kubeconfig context on the daemon host",
 		Long: "Connect a kubeconfig context on the daemon host. Fields as for `set`.\n" +
-			"fleetd checks the connection in the background; `test` shows the checks.",
+			"fleetd creates the namespace when it does not exist, then checks the\n" +
+			"connection in the background; `test` shows the checks.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, _, err := parseClusterFields(args[1:])
@@ -290,9 +290,6 @@ func newClusterAddCmd() *cobra.Command {
 			if cmd.Flags().Changed("name") {
 				c.DisplayName = name
 			}
-			if len(namespaceLabels) > 0 && !createNamespace {
-				return errors.New("--namespace-label needs --create-namespace")
-			}
 			labels, err := parseLabels(namespaceLabels)
 			if err != nil {
 				return err
@@ -302,18 +299,14 @@ func newClusterAddCmd() *cobra.Command {
 				if c.GetDisplayName() == "" && !cmd.Flags().Changed("name") {
 					c.DisplayName = defaultClusterName(cmd.Context(), svc, c)
 				}
-				if createNamespace {
-					if err := createClusterNamespace(cmd.Context(), svc, out, c, labels); err != nil {
-						return err
-					}
-				}
-				reply, err := svc.AddKubeCluster(cmd.Context(), &fleetgrpc.AddKubeClusterRequest{Cluster: c})
+				reply, err := svc.AddKubeCluster(cmd.Context(), &fleetgrpc.AddKubeClusterRequest{Cluster: c, NamespaceLabels: labels})
 				if err != nil {
 					return err
 				}
 				added := reply.GetCluster().GetCluster()
 				fmt.Fprintf(out, "Added cluster %q (%s): context %s, namespace %s; %s\n", added.DisplayNameOrID(), added.GetId(),
 					added.GetContext(), added.GetNamespace(), reply.GetCluster().GetState().Display())
+				printNamespaceResult(out, reply.GetNamespace())
 				return nil
 			})
 		},
@@ -322,8 +315,7 @@ func newClusterAddCmd() *cobra.Command {
 	f.StringVar(&name, "name", "", "display name (default: the context's)")
 	f.StringArrayVar(&kubeconfigs, "kubeconfig", nil, "kubeconfig `path` on the daemon host (repeatable; default: fleetd's)")
 	f.StringVarP(&namespace, "namespace", "n", "", "namespace (default: the context's, else default)")
-	f.BoolVar(&createNamespace, "create-namespace", false, "create the namespace first")
-	f.StringArrayVar(&namespaceLabels, "namespace-label", nil, "`key=value` label for --create-namespace (repeatable)")
+	f.StringArrayVar(&namespaceLabels, "namespace-label", nil, "`key=value` label of a namespace fleetd creates (repeatable)")
 	return cmd
 }
 
@@ -393,28 +385,18 @@ func parseLabels(labels []string) (map[string]string, error) {
 	return m, nil
 }
 
-// createClusterNamespace creates the namespace c names (or its default)
-// through fleetd before the connection is added; one that exists is fine.
-// When fleetd may not create it, the manifest is printed for someone who can.
-func createClusterNamespace(ctx context.Context, svc fleetgrpc.FleetServiceClient, out io.Writer, c *fleetgrpc.KubeCluster, labels map[string]string) error {
-	reply, err := svc.CreateKubeNamespace(ctx, &fleetgrpc.CreateKubeNamespaceRequest{Cluster: c, Labels: labels})
+// printNamespaceResult says what fleetd did about the connection's
+// namespace: created it, or why not, with the manifest to apply when it may
+// not create namespaces. The connection is saved either way.
+func printNamespaceResult(out io.Writer, ns *fleetgrpc.KubeNamespaceResult) {
 	switch {
-	case status.Code(err) == codes.AlreadyExists:
-		fmt.Fprintf(out, "%s\n", status.Convert(err).Message())
-		return nil
-	case status.Code(err) == codes.PermissionDenied:
-		dry, derr := svc.CreateKubeNamespace(ctx, &fleetgrpc.CreateKubeNamespaceRequest{Cluster: c, Labels: labels, DryRun: true})
-		if derr == nil && dry.GetManifest() != "" {
-			fmt.Fprintf(out, "Namespace manifest:\n%s", dry.GetManifest())
-		}
-		return err
-	case err != nil:
-		return err
+	case ns.GetCreated():
+		fmt.Fprintf(out, "Created namespace %s\n", ns.GetNamespace())
+	case ns.GetError() != "" && ns.GetPermissionDenied():
+		fmt.Fprintf(out, "warning: namespace %s does not exist: %s\nNamespace manifest:\n%s", ns.GetNamespace(), ns.GetError(), ns.GetManifest())
+	case ns.GetError() != "":
+		fmt.Fprintf(out, "warning: namespace %s: %s\n", ns.GetNamespace(), ns.GetError())
 	}
-	if reply.GetCreated() {
-		fmt.Fprintf(out, "Created namespace:\n%s", reply.GetManifest())
-	}
-	return nil
 }
 
 // --- set ---
@@ -448,6 +430,7 @@ func newClusterSetCmd() *cobra.Command {
 					return err
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Updated cluster %q: %s\n", reply.GetCluster().GetCluster().DisplayNameOrID(), strings.Join(paths, ", "))
+				printNamespaceResult(cmd.OutOrStdout(), reply.GetNamespace())
 				return nil
 			})
 		},
