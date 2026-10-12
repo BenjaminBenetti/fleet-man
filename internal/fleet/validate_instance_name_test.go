@@ -16,6 +16,18 @@ func TestValidateInstanceName(t *testing.T) {
 		{name: "agent-1 ", wantErr: true},
 		{name: "agent\t1", wantErr: true},
 		{name: "agent\n1", wantErr: true},
+		// The fleet's own folders beside the checkouts.
+		{name: "files", wantErr: true},
+		{name: ".claude", wantErr: true},
+		{name: ".mnt", wantErr: true},
+		{name: ".vol", wantErr: true},
+		{name: ".hostbind", wantErr: true},
+		{name: ".", wantErr: true},
+		{name: "..", wantErr: true},
+		{name: "files/x", wantErr: true},
+		{name: "a\\b", wantErr: true},
+		{name: "files-2"},
+		{name: "my.files"},
 	}
 
 	for _, tt := range tests {
