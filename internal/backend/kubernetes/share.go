@@ -314,6 +314,33 @@ func (c *creation) needShare(ctx context.Context, pod *podspec.PodSpec) error {
 	return c.prepareShareFor(ctx, nil)
 }
 
+// awaitShareGone waits, at most shareGoneWait, for a share PVC that is being
+// deleted to go, deleting the ended pods of fleet's Jobs that hold it (the
+// seed that bound it, kept until its TTL).
+func (c *creation) awaitShareGone(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
+	sc := Scope{Client: c.cs, Namespace: c.ns, Owner: c.owner, Cluster: c.id.cluster}
+	if c.p != nil {
+		sc.Gate, sc.Logger = c.p.gateFor(c.id.cluster), c.p.opts.Logger
+	}
+	wctx, cancel := context.WithTimeout(ctx, shareGoneWait)
+	defer cancel()
+	for {
+		got, err := c.cs.CoreV1().PersistentVolumeClaims(c.ns).Get(wctx, pvc.Name, metav1.GetOptions{})
+		if gone(err) || (err == nil && got.UID != pvc.UID) {
+			return nil
+		}
+		releaseClaimHolders(wctx, sc, pvc.Name)
+		select {
+		case <-wctx.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return kubeerr.New(kubeerr.Unavailable.Narrow("share_terminating"), "the fleet's share from an earlier fleet of the name (PVC %s) is still being deleted after %s: a pod still holds it (kubectl -n %s describe pvc %s names it); try again once it is gone", pvc.Name, shareGoneWait, c.ns, pvc.Name)
+		case <-time.After(shareMoveInterval):
+		}
+	}
+}
+
 // prepareShareFor is prepareShare of a share whose fleet folders are
 // entries.
 func (c *creation) prepareShareFor(ctx context.Context, entries []backend.LayoutEntry) error {
@@ -333,6 +360,15 @@ func (c *creation) prepareShareFor(ctx context.Context, entries []backend.Layout
 	}
 	pvcs := c.cs.CoreV1().PersistentVolumeClaims(c.ns)
 	pvc, err := pvcs.Get(ctx, s.claim, metav1.GetOptions{})
+	if err == nil && pvc.DeletionTimestamp != nil {
+		// A destroyed fleet of the name retired it, and a pod still holds
+		// it: the fleet gets a share of its own once that one is gone,
+		// never the one going (a pod cannot mount it).
+		if err := c.awaitShareGone(ctx, pvc); err != nil {
+			return err
+		}
+		pvc, err = pvcs.Get(ctx, s.claim, metav1.GetOptions{})
+	}
 	switch {
 	case gone(err):
 		if why := c.facts.Capabilities.GetShareRefused(); why != "" {

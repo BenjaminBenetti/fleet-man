@@ -30,6 +30,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/topology"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // share_move.go moves a fleet's share to the connection's shared
@@ -186,6 +187,39 @@ type shareMoveRun struct {
 	done      chan struct{}
 	mu        sync.Mutex
 	committed bool
+	// retired: the fleet's destroy ended the move (retire); postCancel
+	// ends what runs past its point of no return.
+	retired    bool
+	postCancel context.CancelCauseFunc
+}
+
+// retire ends the run for the fleet's destroy, past its point of no return
+// too: its new share is never made.
+func (r *shareMoveRun) retire() {
+	r.mu.Lock()
+	r.retired = true
+	post := r.postCancel
+	r.mu.Unlock()
+	r.cancel(ErrShareRetired)
+	if post != nil {
+		post(ErrShareRetired)
+	}
+}
+
+// pastNoReturn is the context of the run's part past its point of no
+// return: ctx without its cancellation (a create or a start no longer calls
+// it off, a shutdown lets it finish), but for the fleet's destroy. stop
+// releases it.
+func (r *shareMoveRun) pastNoReturn(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
+	r.mu.Lock()
+	r.postCancel = cancel
+	retired := r.retired
+	r.mu.Unlock()
+	if retired {
+		cancel(ErrShareRetired)
+	}
+	return ctx, func() { cancel(nil) }
 }
 
 func (r *shareMoveRun) commit() {
@@ -202,6 +236,21 @@ func (r *shareMoveRun) isCommitted() bool {
 
 // errShareMoveCalledOff is a move a create or a start called off.
 var errShareMoveCalledOff = errors.New("called off: an instance of the fleet is starting")
+
+// ErrShareRetired is a move the fleet's destroy ended (RetireShare): the
+// share goes with the fleet, and no new one is made.
+var ErrShareRetired = errors.New("ended: the fleet is being destroyed")
+
+// fleetRecorded reports whether state.json still holds fleet name (one it
+// cannot read is taken to): a move makes no claim for a fleet that is gone.
+// A variable for tests.
+var fleetRecorded = func(name string) bool {
+	st, err := state.Load()
+	if err != nil {
+		return true
+	}
+	return st.Fleets[name] != nil
+}
 
 // moveScope is what a move works with.
 type moveScope struct {
@@ -469,6 +518,9 @@ func (p *Pool) MoveShare(ctx context.Context, clusterID, fleetName string, repor
 	if s, err = p.moveScopeOf(ctx, clusterID, fleetName); err != nil {
 		return err
 	}
+	if !fleetRecorded(fleetName) {
+		return ErrShareRetired
+	}
 	m, err := s.move(ctx)
 	if err != nil || m == nil || m.Untested != "" {
 		return err
@@ -524,6 +576,10 @@ func (p *Pool) MoveShare(ctx context.Context, clusterID, fleetName string, repor
 			s.callOff(info)
 			return err
 		}
+		if !fleetRecorded(fleetName) {
+			s.callOff(info)
+			return ErrShareRetired
+		}
 		run.commit()
 		report("deleting the share in " + orDefault(info.From, "the default class"))
 		if err := s.deleteClaim(context.WithoutCancel(ctx), s.share); err != nil {
@@ -541,17 +597,29 @@ func (p *Pool) MoveShare(ctx context.Context, clusterID, fleetName string, repor
 			}
 		}
 	}
-	ctx = context.WithoutCancel(ctx)
+	ctx, stop := run.pastNoReturn(ctx)
+	defer stop()
 	// A share already in the new class and no longer marked was filled by
 	// an earlier pass that stopped before the end.
 	if s.share == nil || s.hasShareInfo || !sameClass(classOf(s.share), info.To, s.caps) {
+		// The fleet's destroy past the point of no return: the copy goes
+		// with the fleet (RetireShare), no new share is made for it.
+		if errors.Is(context.Cause(ctx), ErrShareRetired) || (s.share == nil && !fleetRecorded(fleetName)) {
+			return ErrShareRetired
+		}
 		report("filling the new share")
 		if err := s.fillShare(ctx, src, info); err != nil {
+			if errors.Is(context.Cause(ctx), ErrShareRetired) {
+				return ErrShareRetired
+			}
 			return err
 		}
 	}
 	report("placing the fleet's instances")
 	if err := s.replace(ctx, sets, info.Mode); err != nil {
+		if errors.Is(context.Cause(ctx), ErrShareRetired) {
+			return ErrShareRetired
+		}
 		return err
 	}
 	if err := s.deleteClaim(ctx, s.copy); err != nil {
@@ -793,7 +861,13 @@ func (s *moveScope) deleteClaim(ctx context.Context, pvc *corev1.PersistentVolum
 // keeps a claim any pod on a node names (pvc-protection), ended or not,
 // and a finished Job's pods stay until its TTL.
 func (s *moveScope) releaseClaim(ctx context.Context, claim string) {
-	l, err := s.cs.CoreV1().Pods(s.ns).List(ctx, metav1.ListOptions{LabelSelector: names.Selector(s.ident.Owner(), s.clusterID)})
+	releaseClaimHolders(ctx, s.scope(), claim)
+}
+
+// releaseClaimHolders deletes the ended pods of fleet's Jobs in sc that
+// mount claim (releaseClaim).
+func releaseClaimHolders(ctx context.Context, sc Scope, claim string) {
+	l, err := sc.Client.CoreV1().Pods(sc.Namespace).List(ctx, metav1.ListOptions{LabelSelector: names.Selector(sc.Owner, sc.Cluster)})
 	if err != nil {
 		return
 	}
@@ -811,8 +885,8 @@ func (s *moveScope) releaseClaim(ctx context.Context, claim string) {
 		}
 	}
 	if len(ended) > 0 {
-		if _, err := s.scope().deleteAll(ctx, ended); err != nil {
-			flog.Warn("kube share: deleting ended pods that hold a claim", "cluster", s.clusterID, "claim", claim, "err", err)
+		if _, err := sc.deleteAll(ctx, ended); err != nil {
+			flog.Warn("kube share: deleting ended pods that hold a claim", "cluster", sc.Cluster, "claim", claim, "err", err)
 		}
 	}
 }
@@ -1054,6 +1128,28 @@ func gateShare(ctx context.Context, key string, read func() (*moveScope, error))
 	return nil, &kubeerr.Error{Code: kubeerr.Unavailable.Narrow("share_moving"),
 		Err:  fmt.Errorf("the fleet's share on %s is moving to StorageClass %s", clusterName(s.rec), orDefault(to, "default")),
 		Hint: "try again once the move finishes (a minute or so; fleet cluster ls names the fleets still moving)"}
+}
+
+// retireGate is what a fleet's destroy passes before it retires the share of
+// key: a move of it this daemon runs is ended, past its point of no return
+// too (retire), and waited for within ctx; until release, no move begins.
+func retireGate(ctx context.Context, key string) (func(), error) {
+	for {
+		shareMoves.mu.Lock()
+		run := shareMoves.runs[key]
+		if run == nil {
+			release := holdShareLocked(key)
+			shareMoves.mu.Unlock()
+			return release, nil
+		}
+		shareMoves.mu.Unlock()
+		run.retire()
+		select {
+		case <-run.done:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for the move of the fleet's share to end: %w", ctx.Err())
+		}
+	}
 }
 
 // RetireShareCopy deletes the copy a share move left of fleetName's share on

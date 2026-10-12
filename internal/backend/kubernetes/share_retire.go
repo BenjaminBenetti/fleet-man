@@ -30,7 +30,10 @@ import (
 // keep labels it an orphan; one still labelled an orphan (an earlier fleet
 // of the name kept it, and this one never took it up) is never deleted. It
 // returns the share's name ("" when the fleet has none there, or the PVC of
-// that name is not this daemon's).
+// that name is not this daemon's). A move of the share this daemon runs is
+// ended first and waited for (its copy goes too, or with keep stays an
+// orphan), and none begins until the share is retired; the ended pods of
+// the fleet's Jobs that hold it go, so the deletion is not kept waiting.
 func (p *Pool) RetireShare(ctx context.Context, clusterID, fleetName string, keep bool) (string, error) {
 	c, err := p.Cluster(clusterID)
 	if err != nil {
@@ -46,6 +49,11 @@ func (p *Pool) RetireShare(ctx context.Context, clusterID, fleetName string, kee
 	}
 	h8 := names.FleetHash(ident.DaemonID, clusterID, fleetName)
 	claim := ShareClaim(fleetName, h8)
+	release, err := retireGate(ctx, clusterID+"/"+claim)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	if !keep {
 		// A move the fleet's share was in the middle of leaves its copy:
 		// what it holds is on the daemon host, as the share's is.
@@ -87,6 +95,10 @@ func (p *Pool) RetireShare(ctx context.Context, clusterID, fleetName string, kee
 	if err := pvcs.Delete(ctx, claim, metav1.DeleteOptions{PropagationPolicy: &propagation, Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil && !gone(err) {
 		return claim, classify(fmt.Errorf("deleting the fleet's share %s: %w", claim, err))
 	}
+	// pvc-protection keeps a claim any pod names, ended or not: the seed
+	// that bound the share (its Job's pods stay until its TTL) would keep
+	// it Terminating for minutes, for a fleet made again to find.
+	releaseClaimHolders(ctx, Scope{Client: cs, Namespace: c.Namespace(), Owner: ident.Owner(), Cluster: clusterID, Gate: p.gateFor(clusterID), Logger: p.opts.Logger}, claim)
 	flog.Info("kube share: deleted the destroyed fleet's share", "cluster", clusterID, "fleet", fleetName, "claim", claim)
 	return claim, nil
 }

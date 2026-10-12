@@ -153,6 +153,15 @@ func TestKubeShareMoves(t *testing.T) {
 		t.Fatalf("in use: %v", got)
 	}
 
+	// Ended by the fleet's destroy: no failure, no longer listed.
+	f.result = kubernetes.ErrShareRetired
+	now = now.Add(shareMoveRetry + time.Second)
+	m.pass(ctx)
+	waitMoves(t, m)
+	if got := m.status("c1"); len(got) != 0 {
+		t.Fatalf("a move the destroy ended: %v", got)
+	}
+
 	// The shared class changed since the last full preflight: waiting for
 	// the test to judge it, never begun.
 	f.moves[fleetShare{"c1", "alpha"}] = &kubernetes.ShareMove{Fleet: "alpha", From: "standard", To: "nfs2", Untested: "waits for the cluster test to judge nfs2"}
