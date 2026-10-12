@@ -1,13 +1,22 @@
 name: Kubernetes runner
 description: >-
   The build job's fleet binaries in $RUNNER_TEMP/fleet-k8s-bin, kubectl and
-  minikube at the QA image's pins (qa/env/Dockerfile), and a minikube started
-  on the runner's docker as the current context.
+  minikube (and kind, if asked) at the QA image's pins (qa/env/Dockerfile),
+  and, unless asked not to, a minikube started on the runner's docker as the
+  current context.
 inputs:
   minikube-flags:
     description: extra `minikube start` flags
     required: false
     default: ""
+  start-minikube:
+    description: start the minikube (false for a job that makes its own clusters)
+    required: false
+    default: "true"
+  kind:
+    description: install kind too, at the QA image's pin
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -25,7 +34,7 @@ runs:
       id: pins
       shell: bash
       run: |
-        for arg in KUBECTL_VERSION MINIKUBE_VERSION; do
+        for arg in KUBECTL_VERSION MINIKUBE_VERSION KIND_VERSION; do
           v=$(sed -n "s/^ARG ${arg}=//p" qa/env/Dockerfile)
           [ -n "$v" ] || { echo "::error::no ARG ${arg} in qa/env/Dockerfile"; exit 1; }
           echo "$(echo "$arg" | tr '[:upper:]' '[:lower:]')=$v" >> "$GITHUB_OUTPUT"
@@ -44,6 +53,18 @@ runs:
         kubectl version --client
         minikube version
 
+    - name: Install kind
+      if: inputs.kind == 'true'
+      shell: bash
+      env:
+        KIND_VERSION: ${{ steps.pins.outputs.kind_version }}
+      run: |
+        base="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}"
+        curl -fsSLo /tmp/kind "${base}/kind-linux-amd64"
+        echo "$(curl -fsSL "${base}/kind-linux-amd64.sha256sum" | awk '{ print $1 }')  /tmp/kind" | sha256sum -c -
+        sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+        kind version
+
     # The node image and Kubernetes binaries (~1 GB) between runs.
     - uses: actions/cache@v4
       with:
@@ -51,6 +72,7 @@ runs:
         key: minikube-${{ steps.pins.outputs.minikube_version }}-${{ runner.arch }}
 
     - name: Start minikube
+      if: inputs.start-minikube == 'true'
       shell: bash
       env:
         MINIKUBE_FLAGS: ${{ inputs.minikube-flags }}

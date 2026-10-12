@@ -112,6 +112,9 @@ jobs:
           FLEET_ITEST_BACKEND: kubernetes
           FLEET_ITEST_CLUSTER: minikube
           FLEET_ITEST_RANGE: ${{ matrix.range }}
+          # Each failed test's fleet.log and cluster state, before its
+          # teardown: the failure artifact below.
+          FLEET_ITEST_ARTIFACTS: ${{ runner.temp }}/k8s-dump/tests
         run: ./integration/run.sh
 
       - name: Dump the cluster
