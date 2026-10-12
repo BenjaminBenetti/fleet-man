@@ -352,11 +352,13 @@ Unset means default.
 
 ## 6. Storage
 
-**Instance disks** (`storage_class`, 50Gi). Auto picks a block class with
-`WaitForFirstConsumer` binding, volume expansion and a snapshot class, and never
-a class of static volumes (`kubernetes.io/no-provisioner`). An NFS class for
-instance disks warns: root squash breaks package installs, and Docker inside
-the instance cannot use overlay storage on a file share. A node-local class on
+**Instance disks** (`storage_class`, 50Gi). Auto picks a block class,
+network-attached before node-local (on one node too: the disk outlives its
+node), then with a snapshot class, `WaitForFirstConsumer` binding and volume
+expansion, and never a class of static volumes
+(`kubernetes.io/no-provisioner`). An NFS class for instance disks warns: root
+squash breaks package installs, and Docker inside the instance cannot use
+overlay storage on a file share. A node-local class on
 a multi-node cluster loses an instance's disk with its node; the connection is
 limited until you acknowledge it with `node_local_ack`.
 

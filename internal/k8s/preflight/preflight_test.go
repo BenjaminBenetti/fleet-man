@@ -579,6 +579,11 @@ func TestFullStorage(t *testing.T) {
 		{name: "network beats node-local on several nodes", nodes: []runtime.Object{cloudNode("a"), cloudNode("b")},
 			classes: []runtime.Object{storageClass("local-path", "rancher.io/local-path", isDefault, wffc), storageClass("gp3", "ebs.csi.aws.com", wffc, retain)},
 			state:   fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, msg: "privileged not allowed", detail: "auto → gp3 (RWO, WFFC, network): reclaim policy Retain: disks outlive the instances they belonged to", warning: "keeps disks after destroy"},
+		// On one node too: a network disk outlives its node, and the
+		// cluster's default being node-local does not outweigh that.
+		{name: "network beats node-local on one node", nodes: []runtime.Object{minikubeNode()},
+			classes: []runtime.Object{storageClass("standard", "k8s.io/minikube-hostpath", isDefault, wffc), storageClass("gp3", "ebs.csi.aws.com", wffc)},
+			state:   fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, detail: "auto → gp3 (RWO, WFFC, network)"},
 		// A class of hand-made volumes (local static PVs) outscores minikube's
 		// Immediate default on WaitForFirstConsumer, but a new disk there
 		// would wait for a volume nobody makes: auto never picks it.

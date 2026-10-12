@@ -110,13 +110,15 @@ func diskHint(ks *fleetgrpc.KubeStorageClass) string {
 const staticProvisioner = "kubernetes.io/no-provisioner"
 
 // PickInstanceClass is auto's instance-disk class: a block class, preferring
-// (in this order) one that is not node-local on a multi-node cluster, one
-// with a snapshot class for fast clones, WaitForFirstConsumer binding,
-// expansion, and the cluster default. Only file-share classes left: the best
-// of those. Never a class of static volumes (kubernetes.io/no-provisioner),
-// where every new disk would wait for a volume someone makes by hand; such
-// a class is still used when storage_class names it. None: nil.
-func PickInstanceClass(classes []*fleetgrpc.KubeStorageClass, snapshotDrivers map[string]bool, multiNode bool) *fleetgrpc.KubeStorageClass {
+// (in this order) network-attached storage over node-local, one with a
+// snapshot class for fast clones, WaitForFirstConsumer binding, expansion,
+// and the cluster default. Network storage wins on one node too: a disk
+// there outlives its node, and a fleet share in single-node mode takes this
+// class. Only file-share classes left: the best of those. Never a class of
+// static volumes (kubernetes.io/no-provisioner), where every new disk would
+// wait for a volume someone makes by hand; such a class is still used when
+// storage_class names it. None: nil.
+func PickInstanceClass(classes []*fleetgrpc.KubeStorageClass, snapshotDrivers map[string]bool) *fleetgrpc.KubeStorageClass {
 	var best *fleetgrpc.KubeStorageClass
 	bestScore := -1
 	for _, c := range classes {
@@ -127,7 +129,7 @@ func PickInstanceClass(classes []*fleetgrpc.KubeStorageClass, snapshotDrivers ma
 		if c.Block {
 			score += 64
 		}
-		if multiNode && !c.NodeLocal {
+		if !c.NodeLocal {
 			score += 32
 		}
 		if snapshotDrivers[c.Provisioner] {
@@ -234,7 +236,7 @@ func (r *run) rootStorage(ctx context.Context) {
 	var chosen *fleetgrpc.KubeStorageClass
 	auto := want == ""
 	if auto {
-		chosen = PickInstanceClass(r.caps.StorageClasses, snapDrivers, r.multiNode)
+		chosen = PickInstanceClass(r.caps.StorageClasses, snapDrivers)
 		if chosen == nil {
 			msg := "no StorageClass: instance disks (the persistent root) need one"
 			fix := "install a CSI driver with a block StorageClass"
