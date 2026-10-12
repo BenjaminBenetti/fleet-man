@@ -217,7 +217,9 @@ Only ready and limited connections take creates. A connection's checks also
 decide its capability tier: root or no root (a namespace whose admission
 refuses root pods runs every container as one non-root user, with no apt and no
 sudo: limited, `restricted: no root (experimental)`), privileged pods, debug
-capabilities, storage and image delivery.
+capabilities, storage and image delivery. A connection holding more than 150
+instances warns: each adds to fleetd's memory and to its reconnect after a
+restart.
 
 **Logging in.** An exec plugin that needs a browser or a device code has two
 ways in:
@@ -360,7 +362,7 @@ mounts, named volumes. Auto tests classes and picks the mode:
 |---|---|---|
 | multi-node | a ReadWriteMany class passes the multi-node test (two pods on two nodes, plus a POSIX self-test: rename, symlinks, chmod/chown, uid, unix sockets, O_APPEND, flock) | instances schedule anywhere the share's volume reaches. Codex's SQLite moves pod-local (`CODEX_SQLITE_HOME`); a socket inside a shared folder connects only from the same node; writes made on another node reach watchers a little later |
 | single-node | no class passes | all of a fleet's pods run on the node holding its share; the cluster shows `⚠ Each fleet's instances run together on one node (cap N)`, N from node capacity and the volume attach limit. Different fleets can use different nodes |
-| copy | one volume cannot be mounted by two pods on one node (the deep test's `share_pods`) | no share: each instance keeps its own copy, and logins may need repeating per instance (limited) |
+| copy | one volume cannot be mounted by two pods on one node, or on an SELinux node the second cannot read what the first wrote (the deep test's `share_pods`) | no share: each instance keeps its own copy, and logins may need repeating per instance (limited) |
 
 The first create that makes a fleet share on a connection no deep test has told
 runs it first (the create's `testing the cluster` step; concurrent creates
@@ -462,6 +464,10 @@ sync pauses while fleetd is down and catches up when it returns.
   own state lives beside it in `~/.fleet/sync/<fleet>/`.
 
 **Shared state and SELinux.** Every pod of one share uses one SELinux level.
+The deep test's `share_pods` runs its two pods at one level too. Where the
+second cannot read the first's file (the runtime relabels the class's volumes
+per pod, or leaves files at a level the pods lack), the check fails and the
+share falls back to copy mode.
 An NFS share mounted without `context=` is labelled `nfs_t`, which any pod
 allowed `virt_use_nfs` can read: no MCS isolation between fleets on that
 server.
