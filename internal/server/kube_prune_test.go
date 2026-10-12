@@ -236,3 +236,21 @@ func TestPruneCountsOnlyTheSharesOfGoneFleets(t *testing.T) {
 		t.Errorf("orphan shares %d, want the two kept by destroys", o.GetShares())
 	}
 }
+
+// Only what a prune would delete, or a destroy labelled an orphan, counts:
+// an existing fleet's cache volumes, a mounted volume and a young one are
+// kept by a prune and are no orphans.
+func TestKubeOrphansCountsOnlyOrphans(t *testing.T) {
+	cache := func(h8 string) string { return names.FleetObject("f", h8, names.SuffixAptCache) }
+	o := kubeOrphans([]*pruneObject{
+		{kind: "pvc", name: cache("live0001"), action: pruneFleetExists},
+		{kind: "pvc", name: cache("busy0001"), action: pruneMounted, mounted: true},
+		{kind: "pvc", name: cache("new00001"), action: pruneYoung},
+		{kind: "pvc", name: cache("gone0001"), action: pruneWouldDelete},
+		{kind: "pvc", name: names.FleetObject("again", "again001", names.SuffixShare), action: pruneFleetExists,
+			labels: map[string]string{names.LabelRole: string(names.RoleShare), names.LabelOrphan: names.OrphanFlushFailed}},
+	})
+	if o.GetCacheVolumes() != 1 || o.GetShares() != 1 || o.GetInstances() != 0 {
+		t.Errorf("orphans %v, want the gone fleet's cache volume and the share a destroy kept", o)
+	}
+}

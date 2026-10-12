@@ -927,9 +927,8 @@ func kubeGroupInfo(key string, st *fleetgrpc.KubeClusterStatus) []string {
 		for _, q := range caps.GetQuota() {
 			out = append(out, dimStyle.Render(fmt.Sprintf("quota %s: %s of %s used", q.GetResource(), q.GetUsed(), q.GetHard())))
 		}
-		if o := caps.GetOrphans(); o.GetInstances()+o.GetShares()+o.GetCacheVolumes()+o.GetSnapshotContents() > 0 {
-			out = append(out, kubeWarningLine(fmt.Sprintf("orphaned objects: %d instances, %d shares, %d cache volumes (fleet cluster gc lists them)",
-				o.GetInstances(), o.GetShares(), o.GetCacheVolumes())))
+		if line := kubeOrphansLine(caps.GetOrphans()); line != "" {
+			out = append(out, kubeWarningLine(line))
 		}
 	case "storage":
 		// The checks of storage go with the pickers and under the
@@ -991,4 +990,30 @@ func kubeStorageClassLine(sc *fleetgrpc.KubeStorageClass) string {
 		return sc.GetName()
 	}
 	return sc.GetName() + " (" + strings.Join(traits, ", ") + ")"
+}
+
+// kubeOrphansLine is the orphans warning, naming only the kinds found ("" with
+// none): "orphaned objects: 3 cache volumes (fleet cluster gc lists them)".
+func kubeOrphansLine(o *fleetgrpc.KubeOrphans) string {
+	var parts []string
+	for _, k := range []struct {
+		n          int32
+		one, other string
+	}{
+		{o.GetInstances(), "instance", "instances"},
+		{o.GetShares(), "share", "shares"},
+		{o.GetCacheVolumes(), "cache volume", "cache volumes"},
+		{o.GetSnapshotContents(), "snapshot", "snapshots"},
+	} {
+		switch {
+		case k.n == 1:
+			parts = append(parts, "1 "+k.one)
+		case k.n > 1:
+			parts = append(parts, fmt.Sprintf("%d %s", k.n, k.other))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "orphaned objects: " + strings.Join(parts, ", ") + " (fleet cluster gc lists them)"
 }

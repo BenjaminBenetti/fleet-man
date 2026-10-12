@@ -834,3 +834,19 @@ func TestEditorNamespaceSetIsCreated(t *testing.T) {
 		t.Fatalf("message %q", m.message)
 	}
 }
+
+// The orphans warning names only the kinds found.
+func TestKubeOrphansLine(t *testing.T) {
+	for _, tc := range []struct {
+		o    *fleetgrpc.KubeOrphans
+		want string
+	}{
+		{&fleetgrpc.KubeOrphans{}, ""},
+		{&fleetgrpc.KubeOrphans{CacheVolumes: 3}, "orphaned objects: 3 cache volumes (fleet cluster gc lists them)"},
+		{&fleetgrpc.KubeOrphans{Instances: 1, Shares: 2, SnapshotContents: 1}, "orphaned objects: 1 instance, 2 shares, 1 snapshot (fleet cluster gc lists them)"},
+	} {
+		if got := kubeOrphansLine(tc.o); got != tc.want {
+			t.Errorf("kubeOrphansLine(%v) = %q, want %q", tc.o, got, tc.want)
+		}
+	}
+}

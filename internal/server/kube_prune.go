@@ -326,12 +326,17 @@ func pruneKindOrder(kind string) int {
 	return 99
 }
 
-// kubeOrphans counts a connection's unaccounted objects for its
-// capabilities: instance StatefulSets, fleet shares, cache volumes and the
-// snapshots clones left.
+// kubeOrphans counts a connection's orphans for its capabilities: instance
+// StatefulSets, fleet shares, cache volumes and the snapshots clones left,
+// of the objects a prune would delete or a destroy labelled orphans. What a
+// prune keeps otherwise is no orphan: an existing fleet's (its cache
+// volumes), a mounted volume, an object still young.
 func kubeOrphans(objects []*pruneObject) *fleetgrpc.KubeOrphans {
 	o := &fleetgrpc.KubeOrphans{}
 	for _, obj := range objects {
+		if obj.action != pruneWouldDelete && obj.labels[names.LabelOrphan] == "" {
+			continue
+		}
 		switch {
 		case obj.kind == "sts" && obj.labels[names.LabelRole] == string(names.RoleInstance):
 			o.Instances++
