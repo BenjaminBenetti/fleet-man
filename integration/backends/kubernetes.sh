@@ -81,7 +81,11 @@ _be_kubectl() { kubectl --context "${FLEET_ITEST_CLUSTER}" --request-timeout=30s
 # target, and wait until fleetd judges it usable (ready or limited), so a
 # TUI's Deploy row offers it.
 _be_setup() {
-  if ! _be_kubectl get namespace "${FLEET_ITEST_NAMESPACE}" >/dev/null 2>&1; then
+  local ns_out
+  # An identity limited to its namespace may not read namespaces at all: its
+  # namespace is the one it was given (integration/nightly/rbac-limited.sh).
+  if ! ns_out=$(_be_kubectl get namespace "${FLEET_ITEST_NAMESPACE}" 2>&1) \
+    && ! printf '%s' "${ns_out}" | grep -qi forbidden; then
     _be_kubectl create namespace "${FLEET_ITEST_NAMESPACE}" >/dev/null 2>&1 \
       || _be_kubectl get namespace "${FLEET_ITEST_NAMESPACE}" >/dev/null \
       || fail "could not create namespace ${FLEET_ITEST_NAMESPACE} on ${FLEET_ITEST_CLUSTER}"

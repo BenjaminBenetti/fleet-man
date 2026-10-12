@@ -303,6 +303,7 @@ the itest logs, failed tests' `FLEET_ITEST_ARTIFACTS` and cluster dumps in
 | `attach-limit.sh` | minikube, csi-hostpath at 3 volumes per node | 825-826 |
 | `expand.sh` | minikube, OpenEBS LVM LocalPV on a loop-file volume group (`clusters/lvm-localpv.sh`): volumes that hold only their size and grow | 854: a share that fills, pauses the sync and grows with auto-expand on; a cache volume growing |
 | `runtime-docker.sh` | minikube `--container-runtime=docker` (the shards' minikube runs containerd) | 010-061, 800-807 |
+| `rbac-limited.sh` | minikube; the connection a ServiceAccount token whose Role, in its namespace, grants only what the preflight requires, and nothing cluster-wide | 010-061, 800 |
 | `netem.sh` | minikube behind tc netem (150ms round trip; then with ~1% loss) | 851: audio jitter beside bulk transfers, page loads through fleet vs kubectl port-forward, poll times |
 | `scale.sh <n>` | minikube, one node of `n`+60 pods | 850: fleetd's scale budgets and the reconnect storm at `n` (100; 300 on a larger runner) |
 | `poll-cost.sh` | none (macOS in the workflow) | a poll pass over 20 bound files in a 5000-entry host folder under 100ms (`BenchmarkPollOfBoundFiles`): sides without inotify poll every 2s |
