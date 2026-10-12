@@ -30,7 +30,9 @@ fleet_setting() {
 # here needs a container or a cluster that answers.
 rm -rf "${HOME}/.fleet"
 mkdir -p "${HOME}/.fleet"
-scratch=$(mktemp -d)
+# A short dir: the fleet options dialog is 50 columns wide, and a longer host
+# folder (one under macOS's $TMPDIR) wraps "host: <folder>" across lines.
+scratch=$(mktemp -d /tmp/fleet-dialogs.XXXXXX)
 host_folder="${scratch}/host-data"
 mkdir -p "${host_folder}"
 cat > "${HOME}/.fleet/state.json" <<EOF
