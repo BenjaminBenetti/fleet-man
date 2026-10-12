@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -20,6 +21,11 @@ import (
 // persisted root, so they survive stop and start, and a rebuild's fresh root
 // runs every hook again).
 const DefaultDataFolder = "/var/lib/fleet/devcontainer"
+
+// setUpServeGrace bounds how long a set-up that is done waits for the execs
+// its CLI left running in the pod to end once they are aborted (a variable
+// for tests).
+var setUpServeGrace = 30 * time.Second
 
 // SetUpRequest asks for an instance's lifecycle hooks to be run in its pod.
 type SetUpRequest struct {
@@ -67,6 +73,10 @@ type SetUpResult struct {
 // markers as that user and silently skips every marker-gated hook when it
 // cannot. A failure is returned for the caller to treat as fatal (create,
 // rebuild) or as a warning (start). Its log goes to ctx's provisioning log.
+//
+// ctx's deadline bounds the whole run: the CLI and everything it started are
+// stopped then, and the failure is a *TimeoutError naming the execs that
+// were still running in the pod.
 func SetUp(ctx context.Context, req SetUpRequest) (*SetUpResult, error) {
 	if req.Container.ContainerID == "" || req.Execer == nil {
 		return nil, errors.New("devcli.SetUp needs a container and an Execer")
@@ -93,12 +103,22 @@ func SetUp(ctx context.Context, req SetUpRequest) (*SetUpResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listening for the docker shim's execs: %w", err)
 	}
+	live := newLiveExecs(req.Execer)
 	serveCtx, stopServing := context.WithCancel(ctx)
 	served := make(chan error, 1)
-	go func() { served <- kubeshim.ServeExec(serveCtx, ln, req.Execer) }()
+	go func() { served <- kubeshim.ServeExec(serveCtx, ln, live) }()
+	// The execs the CLI left running are aborted once it is done; one that
+	// does not end (its pod's agent session lost track of it) must not hold
+	// the set-up, and so the create, for ever: it is left to end with the
+	// session.
 	defer func() {
 		stopServing()
-		<-served
+		select {
+		case <-served:
+		case <-time.After(setUpServeGrace):
+			flog.Warn("kubernetes set-up: execs the devcontainer CLI started did not end once it was done; left to end with the pod's agent session",
+				"container", req.Container.ContainerID, "running", strings.Join(live.runningAt(time.Now()), "; "))
+		}
 	}()
 
 	// set-up takes the workspace folder from the configuration it is given.
@@ -127,7 +147,11 @@ func SetUp(ctx context.Context, req SetUpRequest) (*SetUpResult, error) {
 	res := &SetUpResult{CLIVersion: cliVersion(r.log)}
 	res.Calls, _ = dir.Calls()
 	if r.err != nil {
-		return res, withRefusals(cliError("devcontainer set-up (lifecycle hooks)", r), res.Calls)
+		err := withRefusals(cliError("devcontainer set-up (lifecycle hooks)", r), res.Calls)
+		if deadline, ok := ctx.Deadline(); ok && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return res, &TimeoutError{Running: live.runningAt(deadline), Err: err}
+		}
+		return res, err
 	}
 	var out struct {
 		Outcome             string          `json:"outcome"`

@@ -68,6 +68,7 @@ func Cases() []Case {
 		{Name: "clone-stopped", Kind: Scenario, Run: caseCloneStopped},
 		{Name: "clone-consistent", Kind: Scenario, Run: caseCloneConsistent},
 		{Name: "failed-create", Kind: Scenario, Run: caseFailedCreate},
+		{Name: "blocking-login-shell", Kind: Scenario, Run: caseBlockingLoginShell},
 	}
 }
 

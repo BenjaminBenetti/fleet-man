@@ -87,7 +87,20 @@ func (x sessionExecer) Exec(ctx context.Context, req kubeshim.ExecRequest, stdio
 	go func() { defer out.Done(); _, _ = io.Copy(writerOr(stdio.Stdout), e.Stdout()) }()
 	go func() { defer out.Done(); _, _ = io.Copy(writerOr(stdio.Stderr), e.Stderr()) }()
 	code, err := e.Wait()
-	out.Wait()
+	copied := make(chan struct{})
+	go func() { out.Wait(); close(copied) }()
+	select {
+	case <-copied:
+	case <-ctx.Done():
+		// The shim that asked is gone (or set-up is over): output it no
+		// longer reads must not hold the exec, which its caller waits for
+		// before it closes the shim's connection that a blocked copy
+		// writes to.
+		select {
+		case <-copied:
+		case <-time.After(execOutputGrace):
+		}
+	}
 	if err != nil && ctx.Err() == nil {
 		return -1, err
 	}
@@ -96,6 +109,10 @@ func (x sessionExecer) Exec(ctx context.Context, req kubeshim.ExecRequest, stdio
 	}
 	return code, nil
 }
+
+// execOutputGrace bounds how long an ended exec's output is still copied to
+// a shim that asked for it once that shim is gone.
+const execOutputGrace = 5 * time.Second
 
 func writerOr(w io.Writer) io.Writer {
 	if w == nil {
@@ -118,6 +135,8 @@ type setUp struct {
 	created         time.Time
 	workspaceFolder string
 	tools           devcli.Tools
+	// deadline bounds the run; 0 is DefaultDeadlines().SetUp.
+	deadline time.Duration
 }
 
 // run runs set-up: every hook that is due.
@@ -131,14 +150,38 @@ func (u setUp) run(ctx context.Context) error {
 		return errors.New("the instance's dev container is not running")
 	}
 	c.StartedAt = kubeshim.StartedAt(st.State.Running.StartedAt.Time, string(u.pod.UID), st.RestartCount)
-	_, err := devcli.SetUp(ctx, devcli.SetUpRequest{
+	limit := u.deadline
+	if limit <= 0 {
+		limit = DefaultDeadlines().SetUp
+	}
+	sctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	_, err := devcli.SetUp(sctx, devcli.SetUpRequest{
 		Tools:           u.tools,
 		Container:       c,
 		WorkspaceFolder: u.workspaceFolder,
 		Execer:          sessionExecer{u.session},
 		RemoteEnv:       hookRemoteEnv(u.session.Sockets()),
 	})
-	return err
+	return setUpError(ctx, limit, err)
+}
+
+// setUpWait is what a set-up's deadline error says fleet waited for.
+const setUpWait = "devcontainer set-up (the lifecycle hooks)"
+
+// setUpError is a set-up's error as the create, rebuild or start reports it:
+// one stopped by its own deadline (FLEET_KUBE_SETUP_TIMEOUT), not by its
+// caller's context, is kubernetes:timeout naming what still ran in the pod.
+func setUpError(ctx context.Context, limit time.Duration, err error) error {
+	var te *devcli.TimeoutError
+	if err == nil || ctx.Err() != nil || !errors.As(err, &te) {
+		return err
+	}
+	detail := "the devcontainer CLI was still running (its log is in the creation log)"
+	if len(te.Running) > 0 {
+		detail = "still running in the pod: " + strings.Join(te.Running, "; ")
+	}
+	return &DeadlineError{Kind: CodeTimeout, Wait: setUpWait, After: limit, Detail: detail, Env: EnvSetUpTimeout, Err: err}
 }
 
 // hookRemoteEnv is fleet's remote environment for the lifecycle hooks: the

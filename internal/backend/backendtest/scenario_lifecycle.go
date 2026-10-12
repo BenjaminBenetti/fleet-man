@@ -232,3 +232,44 @@ func caseFailedCreate(c *C) {
 	}
 	c.Teardown(i)
 }
+
+// blockingCreateBound bounds a create whose login shell never answers: the
+// devcontainer CLI gives its userEnvProbe up after 10s, so such a create
+// takes about as long as any other.
+const blockingCreateBound = 10 * time.Minute
+
+// caseBlockingLoginShell: a create whose remote user's interactive login
+// shell never answers (an rc file waiting for input) still ends, and
+// succeeds: the devcontainer CLI gives its userEnvProbe (`bash -lic`) up
+// after 10s and runs the lifecycle hooks without the probed environment, as
+// `devcontainer up` does on docker. The instance then runs commands.
+func caseBlockingLoginShell(c *C) {
+	type created struct {
+		i   *Instance
+		err error
+	}
+	done := make(chan created, 1)
+	start := time.Now()
+	go func() {
+		i, err := c.suite.provision(c.Ctx, Fixture{BlockingLoginShell: true})
+		done <- created{i, err}
+	}()
+	var got created
+	select {
+	case got = <-done:
+	case <-time.After(blockingCreateBound):
+		c.Fatalf("the create is still running %s after it began: it hangs on a login shell that never answers (the devcontainer CLI gives its userEnvProbe up after 10s)", blockingCreateBound)
+	}
+	if got.i != nil {
+		c.Cleanup(func() { c.suite.teardown(c, got.i) })
+	}
+	if got.err != nil {
+		c.Fatalf("a create whose login shell never answers failed after %s; the devcontainer CLI runs the hooks without the probed environment instead: %v", time.Since(start).Round(time.Second), got.err)
+	}
+	c.Logf("the create took %s", time.Since(start).Round(time.Second))
+	i := got.i
+	if n := lineCount(c, i, PostCreateLog); n != 1 {
+		c.Errorf("postCreateCommand ran %d times, want 1: the hooks run without the probed environment", n)
+	}
+	c.Sh(i, `touch "$1"`, UnblockLoginShell)
+}

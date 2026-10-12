@@ -46,8 +46,8 @@ func (e *StartError) Error() string { return e.Message }
 
 // abortWait bounds how long Close waits for the agent's EXIT before it gives
 // up on the transport: the agent kills what is left of an aborted command
-// after execas.AbortGrace.
-const abortWait = execas.AbortGrace + 5*time.Second
+// after execas.AbortGrace. A variable for tests.
+var abortWait = execas.AbortGrace + 5*time.Second
 
 // ExecOptions configure OpenExec.
 type ExecOptions struct {
@@ -624,9 +624,12 @@ func (e *Exec) Close() error {
 		e.finish(ExitStatus{Code: -1, Signal: "KILL"}, nil)
 		return nil
 	}
+	// The EXIT is waited for from now on: the ABORT itself may wait on a
+	// transport that stopped taking frames (a write of stdin blocked on it
+	// holds the writer), and giving up on the transport ends that wait.
+	time.AfterFunc(abortWait, func() { e.lost(gen, conn, errors.New("no exit status after abort")) })
 	_ = w.Write(FrameAbort, nil)
 	closeWrite(conn)
-	time.AfterFunc(abortWait, func() { e.lost(gen, conn, errors.New("no exit status after abort")) })
 	return nil
 }
 
