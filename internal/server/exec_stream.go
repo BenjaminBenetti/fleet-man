@@ -116,6 +116,7 @@ func (s *service) Exec(stream fleetgrpc.FleetService_ExecServer) error {
 	}
 	if editor {
 		log := newCreationLogAppender(start.GetFleet(), start.GetInstance())
+		// The end of the output closes it; this, a session whose caller left first.
 		defer log.Close()
 		proc = withCreationLog(proc, log)
 	}

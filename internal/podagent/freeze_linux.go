@@ -132,6 +132,19 @@ func (a *agent) rpcFreeze(_ context.Context, raw json.RawMessage) (any, error) {
 	if err != nil {
 		a.log.Warn("flushing the instance disk after the freeze", "err", err.Error())
 	}
+	// The watchdog counts from the reply: the settle and the flush (seconds
+	// on a busy disk) must not use up the time its holder has to renew it.
+	res, err = l.Renew(a.opts.FreezeMarker, time.Now().Add(args.Watchdog()))
+	switch {
+	case errors.Is(err, podinit.ErrThawed):
+		// pod-init's watchdog thawed it during a flush that outlasted it.
+		return nil, &podwire.RemoteError{Code: podwire.CodeThawed, Message: err.Error()}
+	case err != nil:
+		a.log.Warn("moving the freeze's deadline after the flush", "err", err.Error())
+	default:
+		armFreezeTimer(l, a.opts.FreezeMarker, res.Deadline, a.log)
+		info.Deadline = res.Deadline
+	}
 	return info, nil
 }
 
@@ -159,8 +172,11 @@ func (a *agent) rpcSync(context.Context, json.RawMessage) (any, error) {
 }
 
 // syncDisk flushes the filesystem holding p (the instance disk, where the
-// pod's persisted root lives), or every filesystem when p is "".
-func syncDisk(p string) (time.Duration, error) {
+// pod's persisted root lives), or every filesystem when p is "". A var for
+// tests (a slow disk).
+var syncDisk = syncFS
+
+func syncFS(p string) (time.Duration, error) {
 	start := time.Now()
 	if p == "" {
 		unix.Sync()

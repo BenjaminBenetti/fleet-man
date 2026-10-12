@@ -37,7 +37,8 @@ const (
 
 // FreezeArgs are MethodFreeze's arguments.
 type FreezeArgs struct {
-	// WatchdogMS is how long the freeze may last before the pod thaws itself;
+	// WatchdogMS is how long the freeze may last, from its reply (once the
+	// processes stopped and the disk flushed), before the pod thaws itself;
 	// 0 is DefaultFreezeWatchdog, and it is capped at MaxFreezeWatchdog.
 	WatchdogMS int64 `json:"watchdog_ms,omitempty"`
 	// Renew moves the deadline of the freeze in force and never freezes

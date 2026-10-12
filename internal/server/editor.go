@@ -158,9 +158,26 @@ type editorStream struct {
 func (s editorStream) Stderr() io.Reader { return s.stderr }
 
 // withCreationLog tees proc's error output (ssh-server's report: extensions
-// installed, settings written, postAttachCommand's output) into log.
-func withCreationLog(proc backend.ExecStream, log io.Writer) backend.ExecStream {
-	return editorStream{ExecStream: proc, stderr: io.TeeReader(proc.Stderr(), log)}
+// installed, settings written, postAttachCommand's output) into log, and
+// closes log once that output ends: the output drains before the session's
+// exit is sent, so a caller that sees the exit finds the whole report logged.
+func withCreationLog(proc backend.ExecStream, log io.WriteCloser) backend.ExecStream {
+	return editorStream{ExecStream: proc, stderr: &closeAtEnd{r: io.TeeReader(proc.Stderr(), log), c: log}}
+}
+
+// closeAtEnd closes c once r has ended.
+type closeAtEnd struct {
+	r    io.Reader
+	c    io.Closer
+	once sync.Once
+}
+
+func (e *closeAtEnd) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err != nil {
+		e.once.Do(func() { _ = e.c.Close() })
+	}
+	return n, err
 }
 
 // creationLogLine caps one line an editor session appends, and

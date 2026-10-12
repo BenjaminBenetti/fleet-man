@@ -58,8 +58,8 @@ func TestFreezeAndThawOverTheSession(t *testing.T) {
 	if err := s.c.Call(ctx, podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: 20000}, &fi); err != nil {
 		t.Fatal(err)
 	}
-	if d := fi.Deadline.Sub(fi.FrozenAt); d < 19*time.Second || d > 21*time.Second {
-		t.Fatalf("the freeze's watchdog is %s away, want 20s", d)
+	if d := time.Until(fi.Deadline); d < 19*time.Second || d > 20*time.Second {
+		t.Fatalf("the freeze's watchdog is %s away from its reply, want 20s", d)
 	}
 	if got, _ := os.ReadFile(filepath.Join(user, "cgroup.freeze")); string(got) != "1" {
 		t.Fatalf("cgroup.freeze = %q", got)
@@ -76,6 +76,30 @@ func TestFreezeAndThawOverTheSession(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(user, "cgroup.freeze")); string(got) != "0" {
 		t.Fatalf("cgroup.freeze after the thaw = %q", got)
+	}
+}
+
+// The watchdog counts from the freeze's reply: a flush slower than the
+// watchdog does not use up the time its holder has to renew it.
+func TestAFreezesWatchdogCountsFromTheReply(t *testing.T) {
+	o, user, _ := freezeOptions(t)
+	fast := syncDisk
+	syncDisk = func(p string) (time.Duration, error) {
+		time.Sleep(1200 * time.Millisecond)
+		return fast(p)
+	}
+	t.Cleanup(func() { syncDisk = fast })
+	s := startAgent(t, o)
+	var fi podwire.FreezeInfo
+	if err := s.c.Call(context.Background(), podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: 1000}, &fi); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Until(fi.Deadline); d < 500*time.Millisecond || d > time.Second {
+		t.Fatalf("the freeze's watchdog is %s away from its reply, want 1s", d)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got, _ := os.ReadFile(filepath.Join(user, "cgroup.freeze")); string(got) != "1" {
+		t.Fatal("the watchdog thawed the freeze before its holder could renew it")
 	}
 }
 
