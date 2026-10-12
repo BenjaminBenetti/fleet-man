@@ -756,7 +756,7 @@ func TestEditInstanceRejectsNameWithSpaces(t *testing.T) {
 func stubFleetSettingsSave(t *testing.T) {
 	t.Helper()
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { return nil }
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) ([]string, error) { return nil, nil }
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 }
 
@@ -1552,11 +1552,11 @@ func TestEditFleetPFLSetFlagRevertedOnSaveFailure(t *testing.T) {
 
 	failNext := false
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(string, fleet.FleetSettings) error {
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) ([]string, error) {
 		if failNext {
-			return errors.New("simulated save failure")
+			return nil, errors.New("simulated save failure")
 		}
-		return nil
+		return nil, nil
 	}
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 
@@ -2443,12 +2443,12 @@ func TestEditFleetMountHostFolder(t *testing.T) {
 	var saved fleet.FleetSettings
 	fail := error(nil)
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(_ string, s fleet.FleetSettings) error {
+	setFleetSettingsRemote = func(_ string, s fleet.FleetSettings) ([]string, error) {
 		if fail != nil {
-			return fail
+			return nil, fail
 		}
 		saved = s
-		return nil
+		return nil, nil
 	}
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 

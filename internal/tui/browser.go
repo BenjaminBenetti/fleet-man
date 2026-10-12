@@ -487,7 +487,7 @@ func (fleetPage *fleetPage) chooseBrowserLaunch(m *model, preferFleetLaunch bool
 
 	prefer := preferFleetLaunch
 	f.Settings.PreferFleetLaunch = &prefer
-	_ = setFleetSettingsRemote(fleetName, f.Settings)
+	_, _ = setFleetSettingsRemote(fleetName, f.Settings)
 
 	instance, err := f.GetInstance(fleetPage.dlg.inst)
 	if err != nil || instance.Status != fleet.StatusRunning {

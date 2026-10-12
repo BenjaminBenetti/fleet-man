@@ -1539,7 +1539,7 @@ func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFe
 	if idx := fleetPage.dlg.row - editFleetRowCoderParamBase; isCoderParamChildRow(fleetPage.dlg.row) && idx >= len(newParams) {
 		fleetPage.dlg.row = editFleetRowCoderPreset
 	}
-	m.message = fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(msg.presets))
+	m.message = fleetPage.savedMessage(fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(msg.presets)))
 	return nil
 }
 
@@ -1616,11 +1616,45 @@ func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
 	f.Settings.CoderPreset = fleetPage.editFleet.coderPreset
 	f.Settings.CoderParameters = fleetPage.editFleet.coderParams
 
-	if err := setFleetSettingsRemote(fleetPage.dlg.fleet, f.Settings); err != nil {
+	warnings, err := setFleetSettingsRemote(fleetPage.dlg.fleet, f.Settings)
+	if err != nil {
 		f.Settings = prev
 		return err
 	}
+	fleetPage.noteSaveWarnings(m, warnings)
 	return nil
+}
+
+// noteSaveWarnings keeps what the daemon warned about the settings it just
+// saved (saveWarnings) and shows it on the message line: the warning is the
+// daemon's word, and a remote user has no other way to see it.
+func (fleetPage *fleetPage) noteSaveWarnings(m *model, warnings []string) {
+	fleetPage.saveWarnings = warnings
+	if len(warnings) > 0 {
+		m.message = saveWarningLine(warnings)
+	}
+}
+
+// savedMessage is msg, the message a successful save shows, followed by
+// what the daemon warned about it.
+func (fleetPage *fleetPage) savedMessage(msg string) string {
+	return withWarningLine(msg, fleetPage.saveWarnings)
+}
+
+// withWarningLine is msg followed by the daemon's warnings about what it
+// reports ("" msg: the warnings alone).
+func withWarningLine(msg string, warnings []string) string {
+	if len(warnings) == 0 {
+		return msg
+	}
+	if msg == "" {
+		return saveWarningLine(warnings)
+	}
+	return msg + " · " + saveWarningLine(warnings)
+}
+
+func saveWarningLine(warnings []string) string {
+	return "⚠ " + strings.Join(warnings, " · ⚠ ")
 }
 
 // commitHomedir persists the current home-dir input value (instant-save),

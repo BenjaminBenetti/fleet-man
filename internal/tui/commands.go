@@ -135,16 +135,18 @@ func rebuildInstanceCmd(fleetName, instanceName string) tea.Cmd {
 func deleteInstanceCmd(fleetName, instanceName string, pf *portforward.Manager) tea.Cmd {
 	return func() tea.Msg {
 		pf.RemoveAll(fleetName + "/" + instanceName)
-		if err := destroyInstanceRemote(fleetName, instanceName, false); err != nil {
+		warnings, err := destroyInstanceRemote(fleetName, instanceName, false)
+		if err != nil {
 			return operationDoneMsg{fleetName, instanceName, "", err}
 		}
-		return operationDoneMsg{fleetName, instanceName, fmt.Sprintf("Removed %s/%s", fleetName, instanceName), nil}
+		return operationDoneMsg{fleetName, instanceName, withWarningLine(fmt.Sprintf("Removed %s/%s", fleetName, instanceName), warnings), nil}
 	}
 }
 
 // deleteFleetCmd tears down every instance in the fleet plus the fleet record
-// via a single server job (destroy_fleet). TUI-owned port forwards are removed
-// here first.
+// via a single server job (destroy_fleet), an empty fleet's too: the job, not
+// the UI loop, waits for the fleet's caches and shares to go, on every
+// cluster it reached. TUI-owned port forwards are removed here first.
 func deleteFleetCmd(fleetName string, instances []*fleet.Instance, pf *portforward.Manager) tea.Cmd {
 	names := make([]string, len(instances))
 	for i, instance := range instances {
@@ -154,10 +156,11 @@ func deleteFleetCmd(fleetName string, instances []*fleet.Instance, pf *portforwa
 		for _, name := range names {
 			pf.RemoveAll(fleetName + "/" + name)
 		}
-		if err := destroyInstanceRemote(fleetName, "", true); err != nil {
+		warnings, err := destroyInstanceRemote(fleetName, "", true)
+		if err != nil {
 			return operationDoneMsg{fleetName, "", "", err}
 		}
-		return operationDoneMsg{fleetName, "", fmt.Sprintf("Removed fleet %s", fleetName), nil}
+		return operationDoneMsg{fleetName, "", withWarningLine(fmt.Sprintf("Removed fleet %s", fleetName), warnings), nil}
 	}
 }
 

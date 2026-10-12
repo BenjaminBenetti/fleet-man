@@ -79,9 +79,9 @@ func TestAgentOnAForgottenClusterAsksForATarget(t *testing.T) {
 	f := m.st.Fleets["alpha"]
 	f.Settings.Agents = []fleet.Agent{{Name: "k", Backend: gone.Backend, KubeCluster: gone.KubeCluster, Command: "claude"}}
 	var saves []fleet.FleetSettings
-	setFleetSettingsRemote = func(_ string, s fleet.FleetSettings) error {
+	setFleetSettingsRemote = func(_ string, s fleet.FleetSettings) ([]string, error) {
 		saves = append(saves, s)
-		return nil
+		return nil, nil
 	}
 
 	if got := agentSummary(m, f, f.Settings.Agents[0]); !strings.HasPrefix(got, "☸ prod-xyz567 (missing)") {

@@ -20,12 +20,9 @@ func (fleetPage *fleetPage) updateConfirmDelete(m *model, msg tea.Msg) tea.Cmd {
 					fleetPage.mode = viewConfirmDeleteFleetWarn
 					return nil
 				}
-				// Empty fleet, just remove it
-				delete(m.st.Fleets, fleetPage.dlg.fleet)
-				delete(fleetPage.collapsed, fleetPage.dlg.fleet)
-				_ = destroyFleetRemote(fleetPage.dlg.fleet)
-				fleetPage.buildRows(m)
-				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dlg.fleet)
+				// Empty fleet, just remove it.
+				fleetPage.mode = viewNormal
+				return fleetPage.removeEmptyFleet(m, fleetPage.dlg.fleet)
 			} else {
 				// Instance-level delete runs as a server job. Flip an optimistic
 				// in-memory Deleting status for the spinner (NOT persisted — the
@@ -50,6 +47,18 @@ func (fleetPage *fleetPage) updateConfirmDelete(m *model, msg tea.Msg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// removeEmptyFleet takes a fleet with no instances off the list at once and
+// removes it on the daemon off the UI loop: the destroy_fleet job tears its
+// caches, network and shares down on every runtime it has (a cluster may be
+// slow, or away), and operationDoneMsg reloads what is left.
+func (fleetPage *fleetPage) removeEmptyFleet(m *model, name string) tea.Cmd {
+	delete(m.st.Fleets, name)
+	delete(fleetPage.collapsed, name)
+	fleetPage.buildRows(m)
+	m.message = fmt.Sprintf("Removing fleet %s…", name)
+	return deleteFleetCmd(name, nil, m.portForwards)
 }
 
 // updateConfirmRebuild handles the instance rebuild confirmation dialog.
@@ -101,11 +110,8 @@ func (fleetPage *fleetPage) updateConfirmDeleteFleetWarn(m *model, msg tea.Msg) 
 				fleetPage.mode = viewNormal
 				return deleteFleetCmd(fleetPage.dlg.fleet, f.Instances, m.portForwards)
 			} else if ok {
-				delete(m.st.Fleets, fleetPage.dlg.fleet)
-				delete(fleetPage.collapsed, fleetPage.dlg.fleet)
-				_ = destroyFleetRemote(fleetPage.dlg.fleet)
-				fleetPage.buildRows(m)
-				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dlg.fleet)
+				fleetPage.mode = viewNormal
+				return fleetPage.removeEmptyFleet(m, fleetPage.dlg.fleet)
 			}
 			fleetPage.mode = viewNormal
 

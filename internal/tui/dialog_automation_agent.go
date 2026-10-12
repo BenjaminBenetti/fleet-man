@@ -349,7 +349,7 @@ func (fleetPage *fleetPage) saveAutomationAgent(m *model) tea.Cmd {
 		return nil
 	}
 	fleetPage.mode = viewNormal
-	m.message = fmt.Sprintf("Saved agent %q", strings.TrimSpace(candidate.Name))
+	m.message = fleetPage.savedMessage(fmt.Sprintf("Saved agent %q", strings.TrimSpace(candidate.Name)))
 	return nil
 }
 
