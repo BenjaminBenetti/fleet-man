@@ -16,7 +16,9 @@ import (
 // freeze.go freezes the user cgroup for a clone's consistent copy, and
 // thaws it again. A freeze stops every user process (the start script, and
 // every command the pod agent starts for a user, docker-in-docker's dockerd
-// included) at once, as docker commit pauses a container; the agent, PID 1 and
+// included) and every container a nested docker engine runs at once, as
+// docker commit pauses a container: it freezes the user tree (fleet-user),
+// whose children hold both (procs and docker); the agent, PID 1 and
 // the watchdog stay in the agent cgroup and keep running, so the pod still
 // answers fleetd, and an exec the kubelet starts (into PID 1's cgroup) does
 // not stall.
@@ -83,10 +85,21 @@ func (l *Layout) cfs() cgroupFS {
 
 // usable reports whether l is a layout a freeze can act on.
 func (l *Layout) usable() error {
-	if l == nil || l.User == "" || !path.IsAbs(l.User) {
+	if l == nil || l.User == "" || !path.IsAbs(l.User) || (l.UserTree != "" && !path.IsAbs(l.UserTree)) {
 		return ErrNoLayout
 	}
 	return nil
+}
+
+// frozenDir is the cgroup a freeze acts on: the user tree, which holds the
+// user processes (User) and a nested docker engine's containers (Docker),
+// so a clone's copy sees neither write. A layout an older pod-init recorded
+// (version 1) has User alone, which was the whole tree.
+func (l *Layout) frozenDir() string {
+	if l.UserTree != "" {
+		return l.UserTree
+	}
+	return l.User
 }
 
 // Freeze freezes the user cgroup until a thaw, or until the watchdog thaws it
@@ -102,7 +115,7 @@ func (l *Layout) Freeze(marker string, now time.Time, deadline time.Time) (Freez
 		return FreezeResult{}, fmt.Errorf("record the freeze: %w", err)
 	}
 	cfs := l.cfs()
-	if err := cfs.WriteFile(path.Join(l.User, "cgroup.freeze"), []byte("1")); err != nil {
+	if err := cfs.WriteFile(path.Join(l.frozenDir(), "cgroup.freeze"), []byte("1")); err != nil {
 		_ = os.Remove(marker)
 		return FreezeResult{}, fmt.Errorf("freeze %s: %w", UserCgroup, err)
 	}
@@ -162,7 +175,7 @@ func (l *Layout) Renew(marker string, deadline time.Time) (FreezeResult, error) 
 // frozen reports whether every process of the user cgroup has stopped
 // (cgroup.events "frozen 1").
 func (l *Layout) frozen() (bool, error) {
-	data, err := l.cfs().ReadFile(path.Join(l.User, "cgroup.events"))
+	data, err := l.cfs().ReadFile(path.Join(l.frozenDir(), "cgroup.events"))
 	if err != nil {
 		return false, err
 	}
@@ -177,7 +190,7 @@ func (l *Layout) frozen() (bool, error) {
 // freezing reports whether the user cgroup is asked to be frozen
 // (cgroup.freeze reads 1).
 func (l *Layout) freezing() (bool, error) {
-	data, err := l.cfs().ReadFile(path.Join(l.User, "cgroup.freeze"))
+	data, err := l.cfs().ReadFile(path.Join(l.frozenDir(), "cgroup.freeze"))
 	if err != nil {
 		return false, err
 	}
@@ -198,7 +211,7 @@ func (l *Layout) Thaw(marker, by string) (ThawResult, error) {
 	}
 	res.WasFrozen = was
 	if was {
-		if err := l.cfs().WriteFile(path.Join(l.User, "cgroup.freeze"), []byte("0")); err != nil {
+		if err := l.cfs().WriteFile(path.Join(l.frozenDir(), "cgroup.freeze"), []byte("0")); err != nil {
 			return res, fmt.Errorf("thaw %s: %w", UserCgroup, err)
 		}
 	}
