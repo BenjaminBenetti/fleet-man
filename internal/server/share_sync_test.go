@@ -426,6 +426,50 @@ func TestShareSyncConvergesBothWaysAndKeepsLoginsPerLocation(t *testing.T) {
 	}
 }
 
+// TestShareSyncNeverGivesTheHostsLoginsToACluster: logins are per location.
+// A connection saved with the removed credential_scope=fleet (which shared
+// the daemon host's logins) loads as any other: the host's login never
+// reaches its pods or its login store, and the automation login check does
+// not count it there.
+func TestShareSyncNeverGivesTheHostsLoginsToACluster(t *testing.T) {
+	r := newSyncRig(t)
+	if err := os.MkdirAll(state.FleetDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"v": 1, "clusters": [{"id": "` + syncCluster + `", "display_name": "minikube", "context": "minikube", "namespace": "fleet", "credential_scope": "fleet"}]}`
+	if err := os.WriteFile(state.KubeClustersPath(), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.m.records = func() []fleet.KubeCluster {
+		reg, err := state.LoadKubeClusters()
+		if err != nil {
+			t.Errorf("the saved connection does not load: %v", err)
+			return nil
+		}
+		return reg.Clusters
+	}
+	r.hostLayout()
+	syncWrite(t, r.host(".claude/.credentials.json"), `{"token":"host"}`)
+	claim := "fs-f-1a2b3c4d-share"
+	r.instance("alpha", "aaaaaaaa", claim, fleet.StatusRunning)
+	r.spokes.up("aaaaaaaa")
+	syncWrite(t, r.host(".mnt/opt/data/from-host.txt"), "host write")
+	r.wait()
+	side := shareSide(claim)
+	if got := syncRead(r.share(side, ".mnt/opt/data/from-host.txt")); got != "host write" {
+		t.Fatalf("the share is not in sync: %q", got)
+	}
+	if got := syncRead(r.share(side, ".claude/.credentials.json")); !strings.Contains(got, "no such file") {
+		t.Errorf("the host's login reached the cluster's share: %q", got)
+	}
+	if got := syncRead(filepath.Join(state.SyncLocationDir(r.fleet, syncCluster), ".claude/.credentials.json")); !strings.Contains(got, "no such file") {
+		t.Errorf("the host's login reached the cluster's login store: %q", got)
+	}
+	if locationLoggedIn(r.fleet, syncCluster, fleet.LoginTools()[0]) {
+		t.Error("the automation login check counts the host's login on the cluster")
+	}
+}
+
 // TestShareSyncMovesTheSpokeWhenItsPodStops: a stop flushes, and the
 // share's spoke moves to the fleet's other running pod.
 func TestShareSyncMovesTheSpokeWhenItsPodStops(t *testing.T) {
@@ -692,7 +736,7 @@ func TestShareSyncFleetWithoutLogins(t *testing.T) {
 	if len(fs.stores) != 0 {
 		t.Errorf("login stores %v for a fleet without logins", fs.stores)
 	}
-	if store, err := r.m.openStore(fs, syncCluster, ""); store != nil || err != nil {
+	if store, err := r.m.openStore(fs, syncCluster); store != nil || err != nil {
 		t.Errorf("openStore without logins = %v, %v; want none and no error", store, err)
 	}
 }

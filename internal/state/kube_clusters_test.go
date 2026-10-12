@@ -183,6 +183,31 @@ func TestUpdateKubeClustersRefusesNewerFormat(t *testing.T) {
 	}
 }
 
+// A file saved before credential_scope was removed (a connection with
+// "fleet", which shared the daemon host's logins) loads with no error and its
+// other fields, and the next save drops the key: logins are per location.
+func TestKubeClustersWithTheRemovedCredentialScopeLoad(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(FleetDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"v": 1, "clusters": [{"id": "a-abc234", "context": "ctx", "namespace": "ns", "share_retention": "retain", "credential_scope": "fleet"}]}`
+	if err := os.WriteFile(KubeClustersPath(), []byte(old), 0600); err != nil {
+		t.Fatal(err)
+	}
+	k, err := LoadKubeClusters()
+	if err != nil || len(k.Clusters) != 1 || k.Clusters[0].Context != "ctx" || k.Clusters[0].ShareRetention != fleet.KubeShareRetain {
+		t.Fatalf("LoadKubeClusters = %+v, %v", k, err)
+	}
+	if err := UpdateKubeClusters(func(k *KubeClusters) error { k.Clusters[0].DisplayName = "dev"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(KubeClustersPath())
+	if strings.Contains(string(data), "credential_scope") || !strings.Contains(string(data), `"display_name": "dev"`) {
+		t.Errorf("the saved file:\n%s", data)
+	}
+}
+
 // Concurrent updates in the daemon never lose one another.
 func TestUpdateKubeClustersConcurrent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

@@ -16,8 +16,7 @@ import (
 )
 
 // automation_login.go is the automation login check. Logins are per
-// location (the daemon host, or one cluster: credential_scope=location), so
-// an agent fired at a cluster where its tool was never logged in for the
+// location (the daemon host, or one cluster), so an agent fired at a cluster where its tool was never logged in for the
 // fleet would sit at a login prompt until it is reaped. Each location's
 // sync keeps the fleet's copy of that location's login files on the daemon
 // host (state.SyncLocationDir), so the check reads only local files and
@@ -86,36 +85,15 @@ func credentialFile(tool fleet.LoginTool) (string, bool) {
 }
 
 // locationLoggedIn reports whether the fleet's copy of location's login
-// files holds tool's (a regular file with something in it), or, for a
-// connection that shares the daemon host's logins (credential_scope fleet,
-// experimental), the fleet's own folders on the daemon host do.
+// files holds tool's (a regular file with something in it). The daemon
+// host's own login never counts for a cluster.
 func locationLoggedIn(fleetName, location string, tool fleet.LoginTool) bool {
 	rel, ok := credentialFile(tool)
 	if !ok {
 		return false
 	}
-	dirs := []string{state.SyncLocationDir(fleetName, location)}
-	if sharesHostLogins(location) {
-		dirs = append(dirs, filepath.Join(state.WorkspacesDir(), fleetName))
-	}
-	for _, dir := range dirs {
-		fi, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(rel)))
-		if err == nil && fi.Mode().IsRegular() && fi.Size() > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// sharesHostLogins reports whether connection id shares the daemon host's
-// logins (credential_scope fleet).
-func sharesHostLogins(id string) bool {
-	reg, err := state.LoadKubeClusters()
-	if err != nil {
-		return false
-	}
-	rec := reg.Find(id)
-	return rec != nil && rec.CredentialScope == fleet.KubeCredentialsPerFleet
+	fi, err := os.Lstat(filepath.Join(state.SyncLocationDir(fleetName, location), filepath.FromSlash(rel)))
+	return err == nil && fi.Mode().IsRegular() && fi.Size() > 0
 }
 
 // fleetDevcontainerEnv is the names the fleet's devcontainer.json sets in

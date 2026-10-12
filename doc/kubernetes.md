@@ -319,7 +319,6 @@ Unset means default.
 | | `backup_workspace_on_stop` | off | not acted on by this version |
 | fleet share | `shared_storage_class`, `share_size` | Auto, 10Gi | [section 6](#6-storage) |
 | | `share_retention` | delete | `retain` keeps a destroyed fleet's share |
-| | `credential_scope` | location | `fleet` is experimental ([section 7](#7-shared-folders-logins-and-sync)) |
 | caches | `cache_storage_class`, `cache_sizes.{debcache,imagecache,buildkit}` | Auto, 10Gi / 20Gi / 20Gi | [section 9](#9-docker-buildkit-and-the-caches) |
 | | `service_images.*` | digest-pinned | the cache, Buildkit and DooD sidecar images |
 | | `allow_shared_buildkit` | allowed | a permission; the fleet's own Buildkit toggle decides |
@@ -416,15 +415,13 @@ sync pauses while fleetd is down and catches up when it returns.
   (`fleet sync conflicts`). `downloads/`, `sessions/` (so Codex's session
   transcripts too), `daemon/`, `packages/`, lock files and Codex's SQLite
   databases stay local to each location.
-- **Locations and logins.** A location is the daemon host or one cluster. By
-  default (`credential_scope=location`) each logs in once per fleet: the agents
-  rotate their refresh tokens, so two locations refreshing one login at once
-  can sign each other out. Each cluster's logins are kept on the daemon host in
+- **Locations and logins.** A location is the daemon host or one cluster, and
+  each logs in once per fleet: one login serves every instance of the fleet
+  there, and never another location. The agents rotate their refresh tokens,
+  so two locations refreshing one login at once could sign each other out.
+  Each cluster's logins are kept on the daemon host in
   `~/.fleet/sync/<fleet>/loc/<cluster>/` (0600 files, 0700 folders), so a fleet
   destroyed and recreated on that cluster starts logged in.
-  `credential_scope=fleet` shares the host's logins with the cluster; it is
-  **experimental**: after a logout and a new login, an old copy's refresh can
-  still win and sign every location out.
 - **The Ready gate.** A create or start waits up to 60s for the logins and
   settings to sync into the pod before the lifecycle hooks run, then goes on
   with a warning.

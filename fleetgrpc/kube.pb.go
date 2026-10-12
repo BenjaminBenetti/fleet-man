@@ -405,11 +405,6 @@ type KubeCluster struct {
 	ShareSize string `protobuf:"bytes,19,opt,name=share_size,json=shareSize,proto3" json:"share_size,omitempty"`
 	// share_retention on fleet destroy: "" or "delete", or "retain".
 	ShareRetention string `protobuf:"bytes,20,opt,name=share_retention,json=shareRetention,proto3" json:"share_retention,omitempty"`
-	// credential_scope of agent logins: "" or "location" (one login per
-	// location), or "fleet" (shared across locations; experimental: the agents
-	// rotate their refresh tokens, so two locations refreshing at once can
-	// sign every location out).
-	CredentialScope string `protobuf:"bytes,21,opt,name=credential_scope,json=credentialScope,proto3" json:"credential_scope,omitempty"`
 	// cache_storage_class for the fleet cache volumes. Empty = auto.
 	CacheStorageClass string `protobuf:"bytes,22,opt,name=cache_storage_class,json=cacheStorageClass,proto3" json:"cache_storage_class,omitempty"`
 	// cache_sizes of the fleet cache volumes.
@@ -657,13 +652,6 @@ func (x *KubeCluster) GetShareSize() string {
 func (x *KubeCluster) GetShareRetention() string {
 	if x != nil {
 		return x.ShareRetention
-	}
-	return ""
-}
-
-func (x *KubeCluster) GetCredentialScope() string {
-	if x != nil {
-		return x.CredentialScope
 	}
 	return ""
 }
@@ -5302,7 +5290,7 @@ var File_kube_proto protoreflect.FileDescriptor
 const file_kube_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"kube.proto\x12\tfleetgrpc\x1a\fdomain.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc3\x12\n" +
+	"kube.proto\x12\tfleetgrpc\x1a\fdomain.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb0\x12\n" +
 	"\vKubeCluster\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x18\n" +
@@ -5328,8 +5316,7 @@ const file_kube_proto_rawDesc = "" +
 	"\x14shared_storage_class\x18\x12 \x01(\tR\x12sharedStorageClass\x12\x1d\n" +
 	"\n" +
 	"share_size\x18\x13 \x01(\tR\tshareSize\x12'\n" +
-	"\x0fshare_retention\x18\x14 \x01(\tR\x0eshareRetention\x12)\n" +
-	"\x10credential_scope\x18\x15 \x01(\tR\x0fcredentialScope\x12.\n" +
+	"\x0fshare_retention\x18\x14 \x01(\tR\x0eshareRetention\x12.\n" +
 	"\x13cache_storage_class\x18\x16 \x01(\tR\x11cacheStorageClass\x12:\n" +
 	"\vcache_sizes\x18\x17 \x01(\v2\x19.fleetgrpc.KubeCacheSizesR\n" +
 	"cacheSizes\x12C\n" +
@@ -5369,7 +5356,7 @@ const file_kube_proto_rawDesc = "" +
 	"\x16_allow_shared_buildkitB\x11\n" +
 	"\x0f_block_metadataB\x13\n" +
 	"\x11_allow_privilegedB\x1b\n" +
-	"\x19_automation_max_per_agent\"\x82\x01\n" +
+	"\x19_automation_max_per_agentJ\x04\b\x15\x10\x16R\x10credential_scope\"\x82\x01\n" +
 	"\rKubeResources\x12\x1f\n" +
 	"\vcpu_request\x18\x01 \x01(\tR\n" +
 	"cpuRequest\x12%\n" +

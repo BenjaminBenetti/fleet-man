@@ -43,9 +43,10 @@ import (
 //   - "host": the fleet's folders on the daemon host (~/.fleet/workspaces/
 //     <fleet>/.claude, files, .mnt, ...), the canonical copy the fleet's
 //     docker instances bind;
-//   - "store:<cluster>": each cluster's own logins (credential_scope is
-//     location by default: logging in on a cluster serves that cluster),
-//     kept on the daemon host in the login store (state.SyncLocationDir),
+//   - "store:<cluster>": each cluster's own logins (logins are per
+//     location: logging in on a cluster serves that cluster, never the
+//     daemon host or another cluster), kept on the daemon host in the login
+//     store (state.SyncLocationDir),
 //     which the automation login check reads, and which a share made again
 //     on that cluster (the fleet destroyed and made again) is seeded from;
 //   - "k8s:<cluster>/<share>": the spoke of each share the fleet's running
@@ -147,8 +148,7 @@ func (poolSpokes) retire(ctx context.Context, cluster, fleetName string, keep bo
 type shareSync struct {
 	svc    *service
 	spokes shareSpokes
-	// records are the connections (their credential_scope and
-	// share_retention); usable says whether one can be reached now (a fleet
+	// records are the connections (their share_retention); usable says whether one can be reached now (a fleet
 	// destroy reaches only those).
 	records func() []fleet.KubeCluster
 	usable  func(ctx context.Context, id string) bool
@@ -386,7 +386,6 @@ func (m *shareSync) wants(st *state.State) map[string]*fleetWant {
 		urgent[id] = true
 	}
 	m.mu.Unlock()
-	logins := m.loginsByCluster()
 	for name, f := range st.Fleets {
 		if f == nil {
 			continue
@@ -415,7 +414,7 @@ func (m *shareSync) wants(st *state.State) map[string]*fleetWant {
 			w.roots = mergeRoots(w.roots, share.Roots)
 			mergeBinds(w.binds, share.HostBinds)
 			w.clusters[inst.KubeCluster] = true
-			info := spokeInfo(inst.KubeCluster, inst.KubeKey, share, logins[inst.KubeCluster])
+			info := kubernetes.ShareSide(inst.KubeCluster, inst.KubeKey, share)
 			sw := w.shares[info.ID]
 			if sw == nil {
 				sw = &shareWant{cluster: inst.KubeCluster, share: share, info: info}
@@ -425,27 +424,6 @@ func (m *shareSync) wants(st *state.State) map[string]*fleetWant {
 			sw.roots = mergeRoots(sw.roots, share.Roots)
 			sw.active = sw.active || shareActive(inst.Status) || urgent[info.ID]
 			w.insts = append(w.insts, instWant{name: inst.Name, cluster: inst.KubeCluster, key: inst.KubeKey, side: info.ID, running: inst.Status == fleet.StatusRunning})
-		}
-	}
-	return out
-}
-
-// spokeInfo is the side a share's spoke is attached as: its location the
-// connection, and logins the location whose logins it keeps ("" its own).
-func spokeInfo(cluster, key string, share kubernetes.ShareRecord, logins string) sharesync.SideInfo {
-	info := kubernetes.ShareSide(cluster, key, share)
-	info.Logins = logins
-	return info
-}
-
-// loginsByCluster is the location whose logins each connection's sides keep:
-// the daemon host's for one that shares them (credential_scope fleet,
-// experimental), else its own ("", missing from the map).
-func (m *shareSync) loginsByCluster() map[string]string {
-	out := map[string]string{}
-	for _, rec := range m.records() {
-		if rec.CredentialScope == fleet.KubeCredentialsPerFleet {
-			out[rec.ID] = shareHostSide
 		}
 	}
 	return out
@@ -582,8 +560,7 @@ func (m *shareSync) converge(ctx context.Context, name string, w *fleetWant) {
 		m.mu.Unlock()
 		flog.Info("share sync: syncing the fleet's shared folders with its clusters", "fleet", name, "roots", rootNames(w.roots))
 	}
-	logins := m.loginsByCluster()
-	m.convergeStores(fs, w, logins)
+	m.convergeStores(fs, w)
 	m.convergeSpokes(ctx, fs, w)
 	fs.shares, fs.insts = w.shares, w.insts
 }
@@ -816,9 +793,9 @@ func (p notifyPeer) Apply(ctx context.Context, b sharesync.Batch) ([]sharesync.R
 }
 
 // convergeStores keeps a login store per cluster the fleet is on.
-func (m *shareSync) convergeStores(fs *fleetSync, w *fleetWant, logins map[string]string) {
+func (m *shareSync) convergeStores(fs *fleetSync, w *fleetWant) {
 	for cluster, store := range fs.stores {
-		if !w.clusters[cluster] || store.info.Logins != logins[cluster] {
+		if !w.clusters[cluster] {
 			store.stop()
 			fs.hub.Detach(store.info.ID)
 			store.tree.Close()
@@ -829,7 +806,7 @@ func (m *shareSync) convergeStores(fs *fleetSync, w *fleetWant, logins map[strin
 		if fs.stores[cluster] != nil {
 			continue
 		}
-		store, err := m.openStore(fs, cluster, logins[cluster])
+		store, err := m.openStore(fs, cluster)
 		if err != nil {
 			m.log.Warn("share sync: opening a cluster's login store", "fleet", fs.name, "cluster", cluster, "err", err)
 			continue
@@ -843,7 +820,7 @@ func (m *shareSync) convergeStores(fs *fleetSync, w *fleetWant, logins map[strin
 // openStore opens cluster's login store of the fleet: a side over the
 // store's folders that keeps only that location's logins (nil when none of
 // the fleet's folders holds a login: only custom mounts, say).
-func (m *shareSync) openStore(fs *fleetSync, cluster, logins string) (*localSide, error) {
+func (m *shareSync) openStore(fs *fleetSync, cluster string) (*localSide, error) {
 	table := syncpolicy.Defaults()
 	dir := state.SyncLocationDir(fs.name, cluster)
 	var trees []sharesync.TreeRoot
@@ -861,7 +838,7 @@ func (m *shareSync) openStore(fs *fleetSync, cluster, logins string) (*localSide
 	if len(trees) == 0 {
 		return nil, nil
 	}
-	info := sharesync.SideInfo{ID: shareStorePrefix + cluster, Location: cluster, Logins: logins, LoginsOnly: true}
+	info := sharesync.SideInfo{ID: shareStorePrefix + cluster, Location: cluster, LoginsOnly: true}
 	return m.openLocal(fs.hub, info, trees, filepath.Join(fs.dir, "state", "loc", stateSegment(cluster)), m.loginsChanged)
 }
 
@@ -892,8 +869,8 @@ func (m *shareSync) convergeSpokes(ctx context.Context, fs *fleetSync, w *fleetW
 			m.ended(fs, id, run)
 		case sw == nil || !sw.active || sw.info != run.info || !slices.Contains(sw.keys, run.key) || !sameRoots(sw.roots, run.roots):
 			// Its share is gone or idle, its instance no longer mounts it,
-			// it is to be attached as another side (the connection's
-			// credential_scope changed), or the share's folders changed (an
+			// it is to be attached as another side, or the share's folders
+			// changed (an
 			// instance mounting one the others lack came or went).
 			run.cancel()
 		}
@@ -1093,7 +1070,7 @@ func (m *shareSync) ready(ctx context.Context, fleetName, instance string) error
 	}
 	ctx, cancel := context.WithTimeout(ctx, shareReadyTimeout)
 	defer cancel()
-	id := spokeInfo(inst.KubeCluster, inst.KubeKey, share, "").ID
+	id := kubernetes.ShareSide(inst.KubeCluster, inst.KubeKey, share).ID
 	m.mu.Lock()
 	m.urgent[id]++
 	m.mu.Unlock()
@@ -1251,7 +1228,7 @@ func (m *shareSync) flushBefore(fleetName, instance, verb string, d time.Duratio
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
-	id := spokeInfo(inst.KubeCluster, inst.KubeKey, share, "").ID
+	id := kubernetes.ShareSide(inst.KubeCluster, inst.KubeKey, share).ID
 	err = m.flushFleet(ctx, fleetName)
 	// Only what holds this cluster's share back counts against it: another
 	// cluster's share being behind (or out of reach) leaves this one's

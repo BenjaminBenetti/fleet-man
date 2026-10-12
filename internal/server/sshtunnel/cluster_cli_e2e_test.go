@@ -27,7 +27,7 @@ func TestClusterCLIOverArmadaSSH(t *testing.T) {
 		"display_name=every-field", "extra_path=" + d.extra, "plugin_env=AWS_PROFILE", "plugin_env=AWS_REGION=eu-west-1",
 		"storage_class=standard", "disk_size=80Gi", "auto_expand_disk=false", "snapshot_class=csi-hostpath-snapclass",
 		"clone_method=snapshot", "clone_consistency=stop-source", "backup_workspace_on_stop=true", "node_local_ack=true",
-		"shared_storage_class=nfs", "share_size=20Gi", "share_retention=retain", "credential_scope=fleet",
+		"shared_storage_class=nfs", "share_size=20Gi", "share_retention=retain",
 		"cache_storage_class=fast", "cache_sizes.buildkit=30Gi", "cache_sizes.debcache=15Gi", "cache_sizes.imagecache=25Gi",
 		"service_images.buildkit=moby/buildkit:v0.34.0", "service_images.buildkit_rootless=moby/buildkit:v0.34.0-rootless",
 		"service_images.debcache=sameersbn/apt-cacher-ng:3.7", "service_images.imagecache=registry:3", "service_images.dind=docker:29-dind",

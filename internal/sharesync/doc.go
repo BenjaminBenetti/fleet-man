@@ -24,9 +24,8 @@
 // and a conflict copy of the other; append-union merges the lines; json3
 // and toml3 merge settings three ways, keeping what each copy changed, and
 // never take the '{}' seed over content or a file that does not parse;
-// credential keeps one login per location (or shared, for a side whose
-// SideInfo.Logins names another), on the priority lane, with logouts as
-// tombstones and stale or cleared logins refused. Nothing is
+// credential keeps one login per location, on the priority lane, with
+// logouts as tombstones and stale or cleared logins refused. Nothing is
 // dropped: a change the hub cannot take now (a root over its cap) waits on
 // the side that made it, a side that cannot take a change (its disk full) is
 // paused for files and catches up later, and a change that loses to a newer

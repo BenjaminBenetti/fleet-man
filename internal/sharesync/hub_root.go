@@ -238,7 +238,7 @@ func (root *hubRoot) setEntry(k key, e Entry, origin string, base uint64, hist [
 func (root *hubRoot) markDirty(k key, except string) {
 	now := root.hub.now()
 	for id, sr := range root.sides {
-		if id == except || k.loc != "" && sr.side.info.logins() != k.loc {
+		if id == except || k.loc != "" && sr.side.info.Location != k.loc {
 			continue
 		}
 		sr.mark(k.path, now)
@@ -333,7 +333,7 @@ func (h *Hub) process(ctx context.Context, root *hubRoot, side *hubSide, c Chang
 		h.log.Warn("sharesync: ignoring a malformed change", "root", root.name, "side", side.info.ID, "path", c.Path)
 		return ack
 	}
-	k, m, ok := root.keyFor(c.Path, side.info.logins())
+	k, m, ok := root.keyFor(c.Path, side.info.Location)
 	if !ok || side.info.LoginsOnly && m.Scope() != ScopeLocation {
 		return ack
 	}
