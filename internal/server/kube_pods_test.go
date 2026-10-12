@@ -324,6 +324,39 @@ func TestKubePodsActsOnARestart(t *testing.T) {
 	})
 }
 
+// A "sessions reset" notice ends with the instance's own stop: a stop and
+// start by fleet starts fresh sessions, which no restart of the cluster's
+// reset (it used to show until someone attached).
+func TestKubePodsNoticeEndsWithAStop(t *testing.T) {
+	r := newKubePodsRig(t, kubeInstance("one", fleet.StatusRunning))
+	r.waitTracked()
+	sts := kubeSTS("one")
+	crash := &backend.Restart{ID: "u1/1", Cause: backend.RestartCrashed, At: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
+	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusRunning, Restart: crash, SessionsEnded: true})
+	r.eventually("the notice", func() bool { return r.runtime("one").GetKube().GetRestartCause() == string(backend.RestartCrashed) })
+
+	setStatus := func(st fleet.InstanceStatus) {
+		t.Helper()
+		if err := state.Update(func(s *state.State) error {
+			s.Fleets["alpha"].Instances[0].Status = st
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		loadAndPush(r.svc.hub)
+	}
+	setStatus(fleet.StatusStopped)
+	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusStopped, Restart: crash})
+	r.eventually("the notice gone with the stop", func() bool { return r.runtime("one").GetKube().GetRestartCause() == "" })
+
+	setStatus(fleet.StatusRunning)
+	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusRunning, Restart: crash})
+	time.Sleep(50 * time.Millisecond)
+	if c := r.runtime("one").GetKube().GetRestartCause(); c != "" {
+		t.Fatalf("the started instance still says sessions reset: %q", c)
+	}
+}
+
 func TestKubePodsLeavesFleetsOwnStartsAlone(t *testing.T) {
 	r := newKubePodsRig(t, kubeInstance("one", fleet.StatusStarting))
 	r.waitTracked()
