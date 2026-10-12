@@ -795,7 +795,11 @@ block are advisory` when they are not, and `169.254.169.254 reachable from
 pods (egress block on)` when the block does not hold: use a plugin that
 enforces them (Calico, Cilium), and the cloud's own metadata hardening (an
 IMDSv2 hop limit of 1, GKE Workload Identity), since a node identity reachable
-from a pod is a credential for the whole node.
+from a pod is a credential for the whole node. Its probe pod decides 10s into
+its life, once the plugin holds it to its policies. Where a plugin lets a new
+pod's first packets out before then (kindnet does, for about a second), the
+check adds `a new pod's first packets got there`: a window the cloud's
+hardening covers.
 
 ### Remote access
 

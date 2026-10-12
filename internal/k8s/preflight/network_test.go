@@ -4,6 +4,10 @@ package preflight
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,13 +26,17 @@ import (
 
 func TestParseNetworkProbe(t *testing.T) {
 	for _, tt := range []struct {
-		out            string
-		metadata, peer bool
-		bad            bool
+		out                   string
+		metadata, peer, early bool
+		bad                   bool
 	}{
 		{out: "metadata=unreached\npeer=unreached\n"},
 		{out: "metadata=reached\npeer=reached\n", metadata: true, peer: true},
 		{out: "wget: noise\nmetadata=unreached\npeer=reached\n", peer: true},
+		{out: "metadata_early=reached\nmetadata=unreached\npeer=unreached\n", early: true},
+		{out: "metadata_early=reached\nmetadata=reached\npeer=unreached\n", metadata: true, early: true},
+		// The early try alone decides nothing.
+		{out: "metadata_early=reached\npeer=unreached\n", bad: true},
 		{out: "metadata=unreached\n", bad: true},
 		{out: "fake logs", bad: true},
 	} {
@@ -37,7 +45,7 @@ func TestParseNetworkProbe(t *testing.T) {
 			t.Errorf("%q: err %v", tt.out, err)
 			continue
 		}
-		if !tt.bad && (v.metadataReachable != tt.metadata || v.peerReachable != tt.peer) {
+		if !tt.bad && (v.metadataReachable != tt.metadata || v.peerReachable != tt.peer || v.metadataEarly != tt.early) {
 			t.Errorf("%q: %+v", tt.out, v)
 		}
 	}
@@ -53,7 +61,7 @@ func TestParseNetworkProbeReadsInotifyLimits(t *testing.T) {
 	if v, _ := parseNetworkProbe("metadata=unreached\npeer=unreached\ninotify_instances=\ninotify_watches=x\n"); v.inotifyInstances != 0 || v.inotifyWatches != 0 {
 		t.Fatalf("unread limits: %+v", v)
 	}
-	if !strings.Contains(probeScript("10.0.0.7"), "/proc/sys/fs/inotify/max_user_instances") {
+	if !strings.Contains(probeScript("10.0.0.7", probeSettle), "/proc/sys/fs/inotify/max_user_instances") {
 		t.Fatal("the client does not read the inotify limits")
 	}
 }
@@ -61,14 +69,88 @@ func TestParseNetworkProbeReadsInotifyLimits(t *testing.T) {
 // The client tries the metadata address and the target, one wget each, and
 // counts any HTTP answer (busybox's "server returned error") as reached.
 func TestProbeScript(t *testing.T) {
-	s := probeScript("10.0.0.7")
+	s := probeScript("10.0.0.7", probeSettle)
 	for _, want := range []string{"probe metadata http://169.254.169.254/", "probe peer http://10.0.0.7:8080/", `*"server returned error"*) rc=0`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("script lacks %q:\n%s", want, s)
 		}
 	}
-	if s := probeScript("fd00::7"); !strings.Contains(s, "http://[fd00::7]:8080/") {
+	if s := probeScript("fd00::7", probeSettle); !strings.Contains(s, "http://[fd00::7]:8080/") {
 		t.Errorf("an IPv6 target is not bracketed:\n%s", s)
+	}
+}
+
+// The client's tries that decide come once a network plugin that is late to
+// a new pod (kindnet passes its packets until it has synced the pod) holds it
+// to its policies: run under a fake clock, with a wget that gets through
+// until the plugin catches up at second 2, the metadata address and the
+// target are unreached, tried at second 10; the first try, at once, reached
+// the metadata address. Where the plugin never holds the pod, both stay
+// reached.
+func TestProbeScriptWaitsOutAPluginLateToTheNewPod(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		openUntil      int
+		metadata, peer string
+	}{
+		{name: "late plugin", openUntil: 2, metadata: "unreached", peer: "unreached"},
+		{name: "no enforcement", openUntil: 1 << 30, metadata: "reached", peer: "reached"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			clock, tries := filepath.Join(dir, "clock"), filepath.Join(dir, "tries")
+			if err := os.WriteFile(clock, []byte("0\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fake := map[string]string{
+				// Each date is a second on.
+				"date":  `n=$(cat "$CLOCK"); echo $((n + 1)) >"$CLOCK"; echo $((1000 + n))`,
+				"sleep": `:`,
+				// Through while the plugin has not caught up.
+				"wget": `for a; do url=$a; done; n=$(cat "$CLOCK"); echo "$n $url" >>"$TRIES"
+if [ "$n" -le "$OPEN_UNTIL" ]; then exit 0; fi
+echo "wget: download timed out" >&2; exit 1`,
+			}
+			for name, body := range fake {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("sh", "-c", probeScript("10.0.0.7", 10*time.Second))
+			cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"CLOCK="+clock, "TRIES="+tries, "OPEN_UNTIL="+strconv.Itoa(tt.openUntil))
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("%v: %s", err, out)
+			}
+			for _, want := range []string{"metadata_early=reached", "metadata=" + tt.metadata, "peer=" + tt.peer} {
+				if !strings.Contains(string(out), want+"\n") {
+					t.Errorf("output lacks %q:\n%s", want, out)
+				}
+			}
+			log, err := os.ReadFile(tries)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+			if len(lines) != 3 {
+				t.Fatalf("tries %q, want the early one and one per address", lines)
+			}
+			for i, line := range lines {
+				at, url, _ := strings.Cut(line, " ")
+				n, _ := strconv.Atoi(at)
+				switch {
+				case i == 0 && (n > 2 || url != "http://169.254.169.254/"):
+					t.Errorf("the first try %q is not the metadata address at once", line)
+				case i > 0 && n < 10:
+					t.Errorf("try %q came before the settle", line)
+				}
+			}
+			v, err := parseNetworkProbe(string(out))
+			if err != nil || !v.metadataEarly || v.metadataReachable != (tt.metadata == "reached") || v.peerReachable != (tt.peer == "reached") {
+				t.Errorf("verdict %+v %v", v, err)
+			}
+		})
 	}
 }
 
@@ -157,7 +239,12 @@ func TestDeepNetworkProbe(t *testing.T) {
 	}{
 		{name: "enforced and blocked", log: "metadata=unreached\npeer=unreached\n", enforced: true,
 			policyResult: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, metadataResult: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS,
-			metadataDetail: "not reachable from pods (egress block on)"},
+			metadataDetail: "169.254.169.254 not reachable from pods (egress block on)"},
+		// A plugin late to the new client (kindnet) let its first try through:
+		// blocked once the policy holds, and said so.
+		{name: "blocked after the first packets", log: "metadata_early=reached\nmetadata=unreached\npeer=unreached\n", enforced: true,
+			policyResult: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, metadataResult: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS,
+			metadataDetail: "169.254.169.254 not reachable from pods (egress block on); a new pod's first packets got there"},
 		{name: "not enforced", log: "metadata=reached\npeer=reached\n", metadata: true,
 			policyResult: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, metadataResult: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN,
 			metadataDetail: "169.254.169.254 reachable from pods (egress block on)", warning: "NetworkPolicies are not enforced here"},
@@ -182,6 +269,8 @@ func TestDeepNetworkProbe(t *testing.T) {
 			}
 			if got := check(t, r.res, CheckMetadata); got.GetResult() != tt.metadataResult || !strings.Contains(got.GetDetail(), tt.metadataDetail) {
 				t.Errorf("metadata %v", got)
+			} else if !strings.Contains(tt.log, "metadata_early=reached") && strings.Contains(got.GetDetail(), "first packets") {
+				t.Errorf("metadata %v: no early try got there", got)
 			}
 			found := tt.warning == ""
 			for _, w := range r.res.Warnings {

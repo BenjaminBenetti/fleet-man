@@ -25,9 +25,10 @@ import (
 // FLEET_PREFLIGHT_METADATA_STANDIN=1 (a throwaway cluster only) it first puts
 // a stand-in metadata server on the node, 169.254.169.254 on its loopback,
 // and then expects the probe to find it unreachable under the metadata block
-// and reachable with the block off; without it, it expects nothing to answer
-// there. FLEET_PREFLIGHT_NETWORK_ENFORCED=0 expects a network plugin that
-// does not enforce NetworkPolicies.
+// and reachable with the block off; without it, it expects the block to hold
+// against whatever answers there (nothing off the clouds, the cloud's own
+// metadata service on a cloud VM). FLEET_PREFLIGHT_NETWORK_ENFORCED=0 expects
+// a network plugin that does not enforce NetworkPolicies.
 func TestLiveNetworkProbe(t *testing.T) {
 	kctx := os.Getenv("FLEET_PREFLIGHT_NETWORK_LIVE")
 	if kctx == "" {
