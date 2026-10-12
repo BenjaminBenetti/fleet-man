@@ -32,6 +32,9 @@
       "requests": {
         "cpu": "500m",
         "memory": "2Gi"
+      },
+      "limits": {
+        "memory": "8Gi"
       }
     },
     "diskSize": "50Gi",

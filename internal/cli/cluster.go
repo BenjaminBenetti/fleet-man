@@ -405,7 +405,8 @@ const clusterSetLong = "Change a cluster connection's settings; other fields kee
 	"A sub-field is named by its path (image.mode=registry), a list or map\n" +
 	"takes one item per field=value (extra_path=/a extra_path=/b,\n" +
 	"node_selector=pool=fleet; tolerations=key[=value][:effect[:seconds]]),\n" +
-	"and field= resets a field to its default. Fields (kube.proto):\n"
+	"and field= resets a field to its default. memory_limit (default 8Gi) and\n" +
+	"resources.cpu_limit (default none) take 0 for no limit. Fields (kube.proto):\n"
 
 func newClusterSetCmd() *cobra.Command {
 	cmd := &cobra.Command{

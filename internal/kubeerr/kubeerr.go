@@ -249,7 +249,7 @@ var hints = map[Code]string{
 	PVCPending:      "check the storage class; `kubectl describe pvc` says why the disk does not bind",
 	Unschedulable:   "free or add a node that fits the instance, or lower its resources",
 	CrashLoop:       "the instance keeps exiting; read `fleet logs`, fix it, then start it again",
-	OOMKilled:       "raise memory_limit in Settings → Kubernetes, then start the instance again",
+	OOMKilled:       "raise memory_limit in Settings → Kubernetes (or the devcontainer's -m), then rebuild the instance",
 	Timeout:         "the wait's FLEET_KUBE_*_TIMEOUT can be raised if the cluster is just slow",
 	ClusterMissing:  "reconnect the cluster in Settings → Kubernetes, or destroy the instance",
 	Interrupted:     "rebuild the instance (R, `fleet rebuild`) to retry it, or destroy it (d)",

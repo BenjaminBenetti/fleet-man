@@ -50,6 +50,8 @@ func TestParseClusterFields(t *testing.T) {
 			&fleetgrpc.KubeCluster{PodOverridesYaml: "priorityClassName: fleet\nhostNetwork: false\n"}, []string{"pod_overrides_yaml"}},
 		{"multi-line as given", []string{"pod_overrides_yaml=a: 1\nb: 2"}, &fleetgrpc.KubeCluster{PodOverridesYaml: "a: 1\nb: 2"}, []string{"pod_overrides_yaml"}},
 		{"value with equals", []string{"plugin_env=AWS_REGION=eu-west-1"}, &fleetgrpc.KubeCluster{PluginEnv: []string{"AWS_REGION=eu-west-1"}}, []string{"plugin_env"}},
+		{"limits off", []string{"memory_limit=0", "resources.cpu_limit=0"},
+			&fleetgrpc.KubeCluster{MemoryLimit: "0", Resources: &fleetgrpc.KubeResources{CpuLimit: "0"}}, []string{"memory_limit", "resources.cpu_limit"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, paths, err := parseClusterFields(tc.args)
@@ -83,7 +85,7 @@ func TestParseClusterFieldsErrors(t *testing.T) {
 		{"allow_privileged=maybe", `allow_privileged: "maybe" is not true or false`},
 		{"max_instances=ten", `max_instances: "ten" is not a whole number`},
 		{"node_selector=pool", `node_selector: "pool" is not <key>=<value>`},
-		{"resources=1", "set its sub-fields (resources.cpu_request, resources.memory_request, resources.autopilot_memory)"},
+		{"resources=1", "set its sub-fields (resources.cpu_request, resources.memory_request, resources.autopilot_memory, resources.cpu_limit)"},
 		{"resources={bad", "resources:"},
 		{"tolerations=a:b:c:d", "is not <key>[=<value>][:<effect>[:<seconds>]]"},
 		{"tolerations=a:NoExecute:soon", `"soon" is not a number of seconds`},
@@ -124,7 +126,7 @@ func everyClusterField() *fleetgrpc.KubeCluster {
 		ServiceImages: &fleetgrpc.KubeServiceImages{Buildkit: "moby/buildkit:v0.34.0", BuildkitRootless: "moby/buildkit:v0.34.0-rootless",
 			Debcache: "sameersbn/apt-cacher-ng:3.7", Imagecache: "registry:3", Dind: "docker:29-dind"},
 		AllowSharedBuildkit: ptrTo(false), DeleteCacheVolumesOnDestroy: true, DindAddressPool: "10.200.0.0/16", BlockMetadata: ptrTo(false),
-		Resources:   &fleetgrpc.KubeResources{CpuRequest: "1", MemoryRequest: "3Gi", AutopilotMemory: "6Gi"},
+		Resources:   &fleetgrpc.KubeResources{CpuRequest: "1", MemoryRequest: "3Gi", AutopilotMemory: "6Gi", CpuLimit: "2"},
 		MemoryLimit: "12Gi", NodeSelector: map[string]string{"pool": "fleet", "topology.kubernetes.io/zone": "eu-west-1a"},
 		Tolerations: []*fleetgrpc.KubeToleration{
 			{Key: "dedicated", Operator: "Equal", Value: "fleet", Effect: "NoExecute", TolerationSeconds: ptrTo(int64(60))},
@@ -212,6 +214,11 @@ func TestClusterFieldHelpListsEverySettableField(t *testing.T) {
 		if strings.Contains(help, " "+name+" ") {
 			t.Errorf("set --help lists the daemon-owned %s", name)
 		}
+	}
+	// How to turn a limit off is not in the field list's names.
+	long := strings.Join(strings.Fields(clusterSetLong), " ")
+	if !strings.Contains(long, "memory_limit (default 8Gi) and resources.cpu_limit (default none) take 0 for no limit") {
+		t.Errorf("set --help does not say how to turn the limits off:\n%s", clusterSetLong)
 	}
 }
 

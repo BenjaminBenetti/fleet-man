@@ -426,8 +426,8 @@ type KubeCluster struct {
 	BlockMetadata *bool `protobuf:"varint,28,opt,name=block_metadata,json=blockMetadata,proto3,oneof" json:"block_metadata,omitempty"`
 	// resources requested by each instance pod.
 	Resources *KubeResources `protobuf:"bytes,29,opt,name=resources,proto3" json:"resources,omitempty"`
-	// memory_limit set explicitly when a LimitRange would inject a lower one.
-	// Empty = 8Gi.
+	// memory_limit is each instance pod's memory limit, raised to its memory
+	// request. Empty = 8Gi, "0" = none.
 	MemoryLimit string `protobuf:"bytes,30,opt,name=memory_limit,json=memoryLimit,proto3" json:"memory_limit,omitempty"`
 	// node_selector and tolerations place instance pods (e.g. on a dedicated
 	// node pool for privileged pods).
@@ -852,7 +852,7 @@ func (x *KubeCluster) GetRevision() int64 {
 	return 0
 }
 
-// KubeResources is what each instance pod requests.
+// KubeResources is what each instance pod requests, and its CPU limit.
 type KubeResources struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Empty = 500m.
@@ -862,8 +862,11 @@ type KubeResources struct {
 	// autopilot_memory is the memory request on GKE Autopilot, where limits
 	// equal requests. Empty = 4Gi.
 	AutopilotMemory string `protobuf:"bytes,3,opt,name=autopilot_memory,json=autopilotMemory,proto3" json:"autopilot_memory,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// cpu_limit is each instance pod's CPU limit, raised to its CPU request.
+	// Empty or "0" = none: a CPU limit throttles even on an idle node.
+	CpuLimit      string `protobuf:"bytes,4,opt,name=cpu_limit,json=cpuLimit,proto3" json:"cpu_limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *KubeResources) Reset() {
@@ -913,6 +916,13 @@ func (x *KubeResources) GetMemoryRequest() string {
 func (x *KubeResources) GetAutopilotMemory() string {
 	if x != nil {
 		return x.AutopilotMemory
+	}
+	return ""
+}
+
+func (x *KubeResources) GetCpuLimit() string {
+	if x != nil {
+		return x.CpuLimit
 	}
 	return ""
 }
@@ -1629,7 +1639,8 @@ type KubeCapabilities struct {
 	MetricsAvailable bool        `protobuf:"varint,16,opt,name=metrics_available,json=metricsAvailable,proto3" json:"metrics_available,omitempty"`
 	RuntimeClasses   []string    `protobuf:"bytes,17,rep,name=runtime_classes,json=runtimeClasses,proto3" json:"runtime_classes,omitempty"`
 	// limit_range_memory_limit is the default memory limit a LimitRange
-	// injects (empty when none does).
+	// injects (empty when none does); instance pods get it only with
+	// memory_limit off.
 	LimitRangeMemoryLimit string               `protobuf:"bytes,18,opt,name=limit_range_memory_limit,json=limitRangeMemoryLimit,proto3" json:"limit_range_memory_limit,omitempty"`
 	Quota                 []*KubeQuotaHeadroom `protobuf:"bytes,19,rep,name=quota,proto3" json:"quota,omitempty"`
 	ImageDelivery         *KubeImageDelivery   `protobuf:"bytes,20,opt,name=image_delivery,json=imageDelivery,proto3" json:"image_delivery,omitempty"`
@@ -1672,8 +1683,14 @@ type KubeCapabilities struct {
 	// classes are set by name (the multi-node test still validates one).
 	StorageClassesUnreadable bool   `protobuf:"varint,36,opt,name=storage_classes_unreadable,json=storageClassesUnreadable,proto3" json:"storage_classes_unreadable,omitempty"`
 	SingleNodeFleetCapReason string `protobuf:"bytes,37,opt,name=single_node_fleet_cap_reason,json=singleNodeFleetCapReason,proto3" json:"single_node_fleet_cap_reason,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// autopilot: the nodes are GKE Autopilot's, where limits equal requests.
+	Autopilot bool `protobuf:"varint,38,opt,name=autopilot,proto3" json:"autopilot,omitempty"`
+	// limit_range_memory_max is the lowest maximum memory a LimitRange allows
+	// a container or pod (empty when none sets one): instance memory limits
+	// are clamped to it.
+	LimitRangeMemoryMax string `protobuf:"bytes,39,opt,name=limit_range_memory_max,json=limitRangeMemoryMax,proto3" json:"limit_range_memory_max,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *KubeCapabilities) Reset() {
@@ -1961,6 +1978,20 @@ func (x *KubeCapabilities) GetStorageClassesUnreadable() bool {
 func (x *KubeCapabilities) GetSingleNodeFleetCapReason() string {
 	if x != nil {
 		return x.SingleNodeFleetCapReason
+	}
+	return ""
+}
+
+func (x *KubeCapabilities) GetAutopilot() bool {
+	if x != nil {
+		return x.Autopilot
+	}
+	return false
+}
+
+func (x *KubeCapabilities) GetLimitRangeMemoryMax() string {
+	if x != nil {
+		return x.LimitRangeMemoryMax
 	}
 	return ""
 }
@@ -5473,12 +5504,13 @@ const file_kube_proto_rawDesc = "" +
 	"\x16_allow_shared_buildkitB\x11\n" +
 	"\x0f_block_metadataB\x13\n" +
 	"\x11_allow_privilegedB\x1b\n" +
-	"\x19_automation_max_per_agentJ\x04\b\x15\x10\x16R\x10credential_scope\"\x82\x01\n" +
+	"\x19_automation_max_per_agentJ\x04\b\x15\x10\x16R\x10credential_scope\"\x9f\x01\n" +
 	"\rKubeResources\x12\x1f\n" +
 	"\vcpu_request\x18\x01 \x01(\tR\n" +
 	"cpuRequest\x12%\n" +
 	"\x0ememory_request\x18\x02 \x01(\tR\rmemoryRequest\x12)\n" +
-	"\x10autopilot_memory\x18\x03 \x01(\tR\x0fautopilotMemory\"\xb7\x01\n" +
+	"\x10autopilot_memory\x18\x03 \x01(\tR\x0fautopilotMemory\x12\x1b\n" +
+	"\tcpu_limit\x18\x04 \x01(\tR\bcpuLimit\"\xb7\x01\n" +
 	"\x0eKubeToleration\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1a\n" +
 	"\boperator\x18\x02 \x01(\tR\boperator\x12\x14\n" +
@@ -5536,7 +5568,7 @@ const file_kube_proto_rawDesc = "" +
 	"\x05state\x18\x04 \x01(\tR\x05state\x12\x16\n" +
 	"\x06detail\x18\x05 \x01(\tR\x06detail\"H\n" +
 	"\fKubeClusters\x128\n" +
-	"\bclusters\x18\x01 \x03(\v2\x1c.fleetgrpc.KubeClusterStatusR\bclusters\"\xdd\r\n" +
+	"\bclusters\x18\x01 \x03(\v2\x1c.fleetgrpc.KubeClusterStatusR\bclusters\"\xb0\x0e\n" +
 	"\x10KubeCapabilities\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\tR\x04user\x12\x1d\n" +
@@ -5578,7 +5610,9 @@ const file_kube_proto_rawDesc = "" +
 	"\x16instance_storage_class\x18\" \x01(\tR\x14instanceStorageClass\x12#\n" +
 	"\rshare_refused\x18# \x01(\tR\fshareRefused\x12<\n" +
 	"\x1astorage_classes_unreadable\x18$ \x01(\bR\x18storageClassesUnreadable\x12>\n" +
-	"\x1csingle_node_fleet_cap_reason\x18% \x01(\tR\x18singleNodeFleetCapReason\"\x9a\x01\n" +
+	"\x1csingle_node_fleet_cap_reason\x18% \x01(\tR\x18singleNodeFleetCapReason\x12\x1c\n" +
+	"\tautopilot\x18& \x01(\bR\tautopilot\x123\n" +
+	"\x16limit_range_memory_max\x18' \x01(\tR\x13limitRangeMemoryMax\"\x9a\x01\n" +
 	"\rKubeAdmission\x12\"\n" +
 	"\funprivileged\x18\x01 \x01(\bR\funprivileged\x12-\n" +
 	"\x12debug_capabilities\x18\x02 \x01(\bR\x11debugCapabilities\x12\x1e\n" +

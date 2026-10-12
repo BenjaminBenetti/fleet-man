@@ -89,7 +89,7 @@ func (l CrashLoop) Message() string {
 	}
 	hint := "`fleet logs` shows its runs; start it again once fixed"
 	if l.OOM {
-		hint = "raise memory_limit in the cluster's resources, then start it again"
+		hint = "raise memory_limit in the cluster's resources (or the devcontainer's -m), then rebuild it"
 	}
 	return fmt.Sprintf("%s: the dev container %s, %s. Parked as stopped: %s.", l.Code(), what, when, hint)
 }

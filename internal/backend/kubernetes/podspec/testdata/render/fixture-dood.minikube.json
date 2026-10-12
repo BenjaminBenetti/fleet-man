@@ -174,6 +174,9 @@
                 "fleet-docker"
               ],
               "resources": {
+                "limits": {
+                  "memory": "8Gi"
+                },
                 "requests": {
                   "cpu": "50m",
                   "memory": "128Mi"
@@ -251,6 +254,9 @@
                 }
               ],
               "resources": {
+                "limits": {
+                  "memory": "8Gi"
+                },
                 "requests": {
                   "cpu": "500m",
                   "memory": "2Gi"
@@ -469,6 +475,9 @@
                 "i=0; until [ -f /fleet-tools/.ready ]; do i=$((i+1)); [ $i -gt 600 ] && exit 70; sleep 1; done; exec /fleet-tools/fleet pod-job --spec /fleet-tools/job.json"
               ],
               "resources": {
+                "limits": {
+                  "memory": "8Gi"
+                },
                 "requests": {
                   "cpu": "500m",
                   "memory": "2Gi"

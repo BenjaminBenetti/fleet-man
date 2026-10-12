@@ -65,6 +65,10 @@ func (r *run) admission(ctx context.Context) {
 	adm := &fleetgrpc.KubeAdmission{}
 	r.caps.Admission = adm
 	allowed := r.caps.PrivilegedAllowed
+	// The canaries' limits are the instance's, clamped to a LimitRange
+	// maximum; an unreadable list leaves them unclamped (the limits check
+	// says so).
+	_, _ = r.readLimitRanges(ctx)
 
 	// Unprivileged: the instance pod, as a Pod and as the controllers that
 	// own it (a policy may judge those directly).
@@ -240,11 +244,13 @@ func judge(err error) verdict {
 		return verdict{err: err}
 	case apierrors.IsForbidden(err) && strings.Contains(err.Error(), "cannot create resource"):
 		return verdict{err: err} // RBAC, not admission
-	case apierrors.IsForbidden(err) && strings.Contains(err.Error(), "exceeded quota"):
-		// A full ResourceQuota (fleet's own instances may have filled it)
-		// refuses even a dry run, but it is judged last: pod security and
-		// the policy webhooks already let the pod through. The quota check
-		// reports the headroom.
+	case apierrors.IsForbidden(err) && (strings.Contains(err.Error(), "exceeded quota") || strings.Contains(err.Error(), "failed quota")):
+		// A full ResourceQuota (fleet's own instances may have filled it),
+		// or one on limits the pod sets none of ("failed quota: q: must
+		// specify limits.cpu"), refuses even a dry run, but it is judged
+		// last: pod security and the policy webhooks already let the pod
+		// through. The quota check reports the headroom, and the setting
+		// a missing limit needs.
 		return verdict{admitted: true}
 	case apierrors.IsForbidden(err), apierrors.IsInvalid(err), apierrors.IsBadRequest(err):
 		return verdict{denial: statusMessage(err)}
@@ -326,8 +332,9 @@ func (r *run) podSpec(s shape) corev1.PodSpec {
 	return spec
 }
 
-// resources are an instance pod's requests and its explicit memory limit.
-// A value that does not parse (the editor validates them) is left out.
+// resources are an instance pod's requests and the limits the connection's
+// settings give it (instanceLimits). A value that does not parse (the daemon
+// validates them) is left out.
 func (r *run) resources() corev1.ResourceRequirements {
 	c := r.t.Cluster
 	req := corev1.ResourceList{}
@@ -338,8 +345,12 @@ func (r *run) resources() corev1.ResourceRequirements {
 	if q, err := resource.ParseQuantity(orDefault(c.Resources.MemoryRequest, fleet.DefaultKubeMemoryRequest)); err == nil {
 		req[corev1.ResourceMemory] = q
 	}
-	if q, err := resource.ParseQuantity(orDefault(c.MemoryLimit, fleet.DefaultKubeMemoryLimit)); err == nil {
-		lim[corev1.ResourceMemory] = q
+	mem, cpu := instanceLimits(&c, r.lr)
+	if mem != nil {
+		lim[corev1.ResourceMemory] = *mem
+	}
+	if cpu != nil {
+		lim[corev1.ResourceCPU] = *cpu
 	}
 	return corev1.ResourceRequirements{Requests: req, Limits: lim}
 }

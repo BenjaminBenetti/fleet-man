@@ -165,7 +165,7 @@ func openEditor(m *model, sp *settingsPage, id string, unfold ...string) *kubeEd
 }
 
 // editorRowOf puts the cursor on the field with path.
-func editorRowOf(t *testing.T, e *kubeEditor, path string) {
+func editorRowOf(t *testing.T, m *model, e *kubeEditor, path string) {
 	t.Helper()
 	// Its group unfolded, as a user would.
 	for _, g := range kubeGroups {
@@ -175,7 +175,7 @@ func editorRowOf(t *testing.T, e *kubeEditor, path string) {
 			}
 		}
 	}
-	for i, row := range e.rows() {
+	for i, row := range e.rows(m.kubeStatus(e.id)) {
 		if row.field != nil && row.field.path == path {
 			e.row = i
 			return
@@ -239,7 +239,7 @@ func TestEditorAllowPrivilegedSavesWithMaskAndRevision(t *testing.T) {
 	m, sp := kubeTestModel(t, st)
 	calls := stubKubeUpdate(t, savedStatus(st))
 	e := openEditor(m, sp, "eu-1")
-	editorRowOf(t, e, "allow_privileged")
+	editorRowOf(t, m, e, "allow_privileged")
 	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "Allow privileged: [ auto → off ]") || strings.Contains(out, "isolation boundary") {
 		t.Fatalf("the toggle must show its resolved auto, and no warning while off:\n%s", out)
 	}
@@ -284,13 +284,13 @@ func TestEditorRemoteEditsLikeLocal(t *testing.T) {
 		for _, g := range kubeGroups {
 			e.open[g.key] = true
 		}
-		editorRowOf(t, e, "extra_path")
+		editorRowOf(t, m, e, "extra_path")
 		press(m, sp, "enter")
 		e.input.SetValue("/opt/aws/bin")
 		pumpKube(t, m, press(m, sp, "enter"))
-		editorRowOf(t, e, "allow_privileged")
+		editorRowOf(t, m, e, "allow_privileged")
 		pumpKube(t, m, press(m, sp, "right"))
-		return sent{rows: len(e.rows()), calls: *calls}
+		return sent{rows: len(e.rows(m.kubeStatus(e.id))), calls: *calls}
 	}
 	local := run(t, "", "")
 	if len(local.calls) != 2 {
@@ -322,7 +322,7 @@ func TestEditorTextFieldEditsInPlace(t *testing.T) {
 	m, sp := kubeTestModel(t, st)
 	calls := stubKubeUpdate(t, savedStatus(st))
 	e := openEditor(m, sp, "mk-1")
-	editorRowOf(t, e, "disk_size")
+	editorRowOf(t, m, e, "disk_size")
 
 	press(m, sp, "enter")
 	if e.editing == nil || e.editing.path != "disk_size" {
@@ -341,12 +341,82 @@ func TestEditorTextFieldEditsInPlace(t *testing.T) {
 	}
 
 	e.open["resources"] = true
-	editorRowOf(t, e, "max_instances")
+	editorRowOf(t, m, e, "max_instances")
 	press(m, sp, "enter")
 	e.input.SetValue("many")
 	pumpKube(t, m, press(m, sp, "enter"))
 	if len(*calls) != 1 || !strings.Contains(e.fieldErr["max_instances"], "whole number") {
 		t.Fatalf("a bad value must be refused locally: calls=%d err=%q", len(*calls), e.fieldErr["max_instances"])
+	}
+}
+
+// Resources & quotas has a CPU limit beside the memory limit, each saved by
+// its own mask, "0" turning it off.
+func TestEditorResourceLimitRows(t *testing.T) {
+	st := kubeSt("mk-1", "minikube", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	m, sp := kubeTestModel(t, st)
+	calls := stubKubeUpdate(t, savedStatus(st))
+	e := openEditor(m, sp, "mk-1", "resources")
+	var order []string
+	for _, row := range e.rows(m.kubeStatus(e.id)) {
+		if row.field != nil && row.group != nil && row.group.key == "resources" {
+			order = append(order, row.field.path)
+		}
+	}
+	if want := []string{"resources.cpu_request", "resources.memory_request", "resources.cpu_limit", "memory_limit", "max_instances"}; !slices.Equal(order[:len(want)], want) {
+		t.Fatalf("Resources & quotas rows %v; want %v first, no Autopilot memory", order, want)
+	}
+	out := flatText(e.view(m, sp))
+	for _, want := range []string{"CPU limit:", "(none)", "throttles even on an idle node", "Memory limit:", "(8Gi)", "0 = off"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the editor lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Autopilot memory") {
+		t.Errorf("Autopilot memory shows on a cluster that is not Autopilot:\n%s", out)
+	}
+
+	for path, value := range map[string]string{"resources.cpu_limit": "2", "memory_limit": "0"} {
+		*calls = nil
+		editorRowOf(t, m, e, path)
+		press(m, sp, "enter")
+		e.input.SetValue(value)
+		pumpKube(t, m, press(m, sp, "enter"))
+		if len(*calls) != 1 || !slices.Equal((*calls)[0].paths, []string{path}) {
+			t.Fatalf("%s: calls = %+v", path, *calls)
+		}
+		sent := (*calls)[0].cluster
+		if got := map[string]string{"resources.cpu_limit": sent.GetResources().GetCpuLimit(), "memory_limit": sent.GetMemoryLimit()}[path]; got != value {
+			t.Errorf("%s sent %q, want %q", path, got, value)
+		}
+	}
+	limited := &fleetgrpc.KubeClusterStatus{Cluster: &fleetgrpc.KubeCluster{MemoryLimit: "0", Resources: &fleetgrpc.KubeResources{CpuLimit: "2"}}}
+	if s := kubeGroupSummary("resources", limited); !strings.Contains(s, "500m · 2Gi · no memory limit · cpu limit 2") {
+		t.Errorf("the folded group reads %q", s)
+	}
+	if s := kubeGroupSummary("resources", st); !strings.Contains(s, "500m · 2Gi · limit 8Gi ·") {
+		t.Errorf("the folded group reads %q", s)
+	}
+}
+
+// The Autopilot memory row shows only where the last test found GKE
+// Autopilot; elsewhere the field is still settable (fleet cluster set).
+func TestEditorAutopilotMemoryOnlyOnAutopilot(t *testing.T) {
+	st := kubeSt("mk-1", "minikube", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	m, sp := kubeTestModel(t, st)
+	e := openEditor(m, sp, "mk-1", "resources")
+	for _, row := range e.rows(m.kubeStatus(e.id)) {
+		if row.field != nil && row.field.path == "resources.autopilot_memory" {
+			t.Fatal("an Autopilot memory row on a cluster that is not Autopilot")
+		}
+	}
+	if out := flatText(e.view(m, sp)); strings.Contains(out, "Autopilot memory") || !strings.Contains(out, "Memory request:") {
+		t.Errorf("the Resources group on a cluster that is not Autopilot:\n%s", out)
+	}
+	m.kubeStatus("mk-1").Capabilities = &fleetgrpc.KubeCapabilities{Autopilot: true}
+	editorRowOf(t, m, e, "resources.autopilot_memory")
+	if out := flatText(e.view(m, sp)); !strings.Contains(out, "Autopilot memory:") || !strings.Contains(out, "limits equal requests") {
+		t.Errorf("Autopilot memory hides on GKE Autopilot:\n%s", out)
 	}
 }
 
@@ -362,12 +432,12 @@ func TestEditorRefusedSavesExplain(t *testing.T) {
 		return nil, status.Error(codes.Aborted, "connection changed since it was read")
 	})
 	e := openEditor(m, sp, "mk-1")
-	editorRowOf(t, e, "clone_method")
+	editorRowOf(t, m, e, "clone_method")
 	pumpKube(t, m, press(m, sp, "right"))
 	if !strings.Contains(e.fieldErr["clone_method"], "changed elsewhere") || e.saving["clone_method"] {
 		t.Fatalf("err = %q", e.fieldErr["clone_method"])
 	}
-	editorRowOf(t, e, "namespace")
+	editorRowOf(t, m, e, "namespace")
 	press(m, sp, "enter")
 	e.input.SetValue("other")
 	pumpKube(t, m, press(m, sp, "enter"))
@@ -387,14 +457,14 @@ func TestEditorGroupsStatusAndLoginOnDaemon(t *testing.T) {
 	st := kubeSt("aks-1", "aks", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNAUTHORIZED)
 	m, sp := kubeTestModel(t, st)
 	e := openEditor(m, sp, "aks-1")
-	for i, row := range e.rows() {
+	for i, row := range e.rows(m.kubeStatus(e.id)) {
 		if row.kind == kubeEditorRowGroup && row.group.key == "caches" {
 			e.row = i
 		}
 	}
-	before := len(e.rows())
+	before := len(e.rows(m.kubeStatus(e.id)))
 	press(m, sp, "right")
-	if !e.open["caches"] || len(e.rows()) <= before {
+	if !e.open["caches"] || len(e.rows(m.kubeStatus(e.id))) <= before {
 		t.Fatal("→ on a folded group must unfold it")
 	}
 	press(m, sp, "enter")
@@ -484,7 +554,7 @@ func TestEditorNamespaceCreateAndContextRepoint(t *testing.T) {
 	}
 	t.Cleanup(func() { createKubeNamespaceRemote = origNS })
 	e := openEditor(m, sp, "mk-1")
-	editorRowOf(t, e, "namespace")
+	editorRowOf(t, m, e, "namespace")
 	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "✕ namespace 'fleet' does not exist [ Create ]") || !strings.Contains(out, "[c] create namespace") {
 		t.Fatalf("namespace row:\n%s", out)
 	}
@@ -504,7 +574,7 @@ func TestEditorNamespaceCreateAndContextRepoint(t *testing.T) {
 	press(m, sp, "esc")
 
 	stubKubeContexts(t, pickerContexts())
-	editorRowOf(t, e, "context")
+	editorRowOf(t, m, e, "context")
 	pumpKube(t, m, press(m, sp, "enter"))
 	if p, ok := sp.kubeDialog.(*kubePicker); !ok || p.repoint != "mk-1" {
 		t.Fatalf("Context opened %T", sp.kubeDialog)
@@ -610,13 +680,13 @@ func TestEditorQuickEditsNeverRefuseEachOther(t *testing.T) {
 	calls := stubKubeUpdate(t, answer)
 	e := openEditor(m, sp, "eu-1")
 
-	editorRowOf(t, e, "allow_privileged")
+	editorRowOf(t, m, e, "allow_privileged")
 	first := press(m, sp, "right") // on its way, not answered yet
-	editorRowOf(t, e, "debug_capabilities")
+	editorRowOf(t, m, e, "debug_capabilities")
 	if cmd := press(m, sp, "right"); cmd != nil {
 		t.Fatal("a second save while one is in flight must wait for it")
 	}
-	editorRowOf(t, e, "disk_size")
+	editorRowOf(t, m, e, "disk_size")
 	press(m, sp, "enter") // an edit begun before either answer
 	e.input.SetValue("100Gi")
 
@@ -640,7 +710,7 @@ func TestEditorQuickEditsNeverRefuseEachOther(t *testing.T) {
 
 	// Someone else changes the record; the editor has not seen it yet.
 	server.Cluster.Revision++
-	editorRowOf(t, e, "clone_method")
+	editorRowOf(t, m, e, "clone_method")
 	pumpKube(t, m, press(m, sp, "right"))
 	if !strings.Contains(e.fieldErr["clone_method"], "changed elsewhere") {
 		t.Fatalf("a change made elsewhere must still refuse the save: %v", e.fieldErr)
@@ -655,9 +725,9 @@ func TestEditorClosedWithSavesQueuedSendsThem(t *testing.T) {
 	_, answer := kubeRevServer(st)
 	calls := stubKubeUpdate(t, answer)
 	e := openEditor(m, sp, "eu-1")
-	editorRowOf(t, e, "allow_privileged")
+	editorRowOf(t, m, e, "allow_privileged")
 	first := press(m, sp, "right")
-	editorRowOf(t, e, "debug_capabilities")
+	editorRowOf(t, m, e, "debug_capabilities")
 	press(m, sp, "right")
 	press(m, sp, "esc")
 	if sp.kubeDialog != nil {
@@ -679,7 +749,7 @@ func TestEditorCycleWithOneChoiceSavesNothing(t *testing.T) {
 	m, sp := kubeTestModel(t, st)
 	calls := stubKubeUpdate(t, savedStatus(st))
 	e := openEditor(m, sp, "eu-1")
-	editorRowOf(t, e, "storage_class")
+	editorRowOf(t, m, e, "storage_class")
 	pumpKube(t, m, press(m, sp, "right"))
 	if len(*calls) != 0 {
 		t.Fatalf("sent %+v for a class list with nothing in it", *calls)
@@ -704,7 +774,7 @@ func TestEditorDeliverySelector(t *testing.T) {
 	m, sp := kubeTestModel(t, st)
 	calls := stubKubeUpdate(t, savedStatus(st))
 	e := openEditor(m, sp, "eu-1")
-	editorRowOf(t, e, "image.mode")
+	editorRowOf(t, m, e, "image.mode")
 	out := flatText(sp.viewSettings(m))
 	for _, want := range []string{"Delivery: [Auto] [Registry] [Gateway]", "Gateway unavailable: Enable Image Registry is off", "delivery is registry: no pull through the gateway"} {
 		if !strings.Contains(out, want) {
@@ -743,7 +813,7 @@ func TestEditorHasNoAgentLoginsRow(t *testing.T) {
 	st := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
 	m, sp := kubeTestModel(t, st)
 	e := openEditor(m, sp, "eu-1")
-	for _, r := range e.rows() {
+	for _, r := range e.rows(m.kubeStatus(e.id)) {
 		if r.field != nil && r.field.path == "credential_scope" {
 			t.Fatal("the editor still has a credential_scope row")
 		}
@@ -770,7 +840,7 @@ func TestEditorOpensWithOnlyCapabilitiesUnfolded(t *testing.T) {
 			t.Errorf("group %s open = %v", g.key, e.open[g.key])
 		}
 	}
-	for _, row := range e.rows() {
+	for _, row := range e.rows(m.kubeStatus(e.id)) {
 		if row.kind == kubeEditorRowField && row.group != nil {
 			t.Errorf("a folded group shows its field %s", row.field.path)
 		}
@@ -798,7 +868,7 @@ func TestEditorNamespaceSetIsCreated(t *testing.T) {
 	e := openEditor(m, sp, "mk-1")
 	set := func(ns string) {
 		t.Helper()
-		editorRowOf(t, e, "namespace")
+		editorRowOf(t, m, e, "namespace")
 		press(m, sp, "enter")
 		e.input.SetValue(ns)
 		pumpKube(t, m, press(m, sp, "enter"))

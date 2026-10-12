@@ -76,6 +76,10 @@ type ClusterFacts struct {
 	// namespace gives a container that sets none, as a quantity; "" when no
 	// LimitRange does.
 	LimitRangeMemoryLimit string
+	// LimitRangeMemoryMax is the lowest maximum memory a LimitRange in the
+	// namespace allows a container or pod, as a quantity; "" when none
+	// sets one.
+	LimitRangeMemoryMax string
 	// RuntimeClasses are the cluster's RuntimeClass names; nil when they
 	// could not be read.
 	RuntimeClasses []string

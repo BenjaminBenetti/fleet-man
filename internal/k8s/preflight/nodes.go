@@ -64,6 +64,7 @@ func (r *run) nodes(ctx context.Context) {
 	r.res.Local, r.res.Platform = local, nodePlatform(list.Items)
 	r.caps.NodeArchs = sortedKeys(archs)
 	r.caps.LocalCluster = local.Local()
+	r.caps.Autopilot = gkeAutopilot(list.Items)
 	r.caps.PrivilegedAllowed = r.t.Cluster.AllowsPrivileged(local.Local())
 	sort.Slice(r.caps.Nodes, func(i, j int) bool { return r.caps.Nodes[i].Name < r.caps.Nodes[j].Name })
 
@@ -87,6 +88,9 @@ func (r *run) nodes(ctx context.Context) {
 	if local.Local() {
 		detail += " · local cluster (" + local.String() + ")"
 	}
+	if r.caps.Autopilot {
+		detail += " · GKE Autopilot"
+	}
 	if cordoned > 0 {
 		detail += fmt.Sprintf(" · %d cordoned", cordoned)
 	}
@@ -95,6 +99,19 @@ func (r *run) nodes(ctx context.Context) {
 		return
 	}
 	r.pass(CheckNodes, detail)
+}
+
+// gkeAutopilot reports nodes that are all GKE Autopilot's: Compute Engine
+// instances (a gce:// provider id) named gk3-..., as Autopilot names its
+// nodes (a Standard cluster's are gke-...). Nodes not readable are not
+// known to be.
+func gkeAutopilot(nodes []corev1.Node) bool {
+	for i := range nodes {
+		if !strings.HasPrefix(nodes[i].Name, "gk3-") || !strings.HasPrefix(nodes[i].Spec.ProviderID, "gce://") {
+			return false
+		}
+	}
+	return len(nodes) > 0
 }
 
 // attachLimits reads each node's per-driver CSI volume limits (CSINode

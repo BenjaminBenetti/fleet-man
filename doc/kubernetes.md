@@ -313,7 +313,7 @@ again. **d** destroys it.
 | `kubernetes:image_build` / `image_push` / `image_pull` | the build, the delivery settings and registry login, the nodes' route to the image |
 | `kubernetes:pvc_pending` | the storage class; `kubectl describe pvc` says why |
 | `kubernetes:unschedulable` | a node that fits the instance, or smaller requests |
-| `kubernetes:crash_loop` / `oomkilled` | `fleet logs`; for OOM raise `memory_limit`, then start it |
+| `kubernetes:crash_loop` / `oomkilled` | `fleet logs`; for OOM raise `memory_limit` (or the devcontainer's `-m`), then rebuild it |
 | `kubernetes:timeout` | raise the wait's `FLEET_KUBE_*_TIMEOUT` if the cluster is just slow |
 | `kubernetes:interrupted` / `rebuild_failed` | `R` to retry, or `d` |
 | `kubernetes:tampered` | someone changed the pod or StatefulSet: destroy and recreate |
@@ -345,8 +345,9 @@ Unset means default.
 | | `dind_address_pool` | docker's | Docker-in-Docker networks: `<cidr>` or `base=<cidr>,size=<bits>`, several separated by spaces or `;` |
 | | `block_metadata` | on | deny pod egress to 169.254.0.0/16 and fd00:ec2::/64 (DNS excepted) |
 | pod | `resources.cpu_request`, `resources.memory_request` | 500m, 2Gi | raised to `hostRequirements` |
-| | `memory_limit` | 8Gi | set explicitly when a LimitRange would inject a lower limit |
-| | `resources.autopilot_memory` | 4Gi | for GKE Autopilot, which fleet does not detect yet |
+| | `memory_limit` | 8Gi | each instance's memory limit, never below its request; `0` for none ([instance limits](#instance-limits)) |
+| | `resources.cpu_limit` | none | an opt-in CPU limit, never below the request; `0` for none |
+| | `resources.autopilot_memory` | 4Gi | the memory request on GKE Autopilot, where limits equal requests; the editor shows it only where the last test found Autopilot |
 | | `node_selector`, `tolerations` | | e.g. a dedicated node pool |
 | | `allow_privileged` | auto | on for a detected local cluster (minikube, kind, k3d, Docker Desktop), off elsewhere ([section 14](#14-security-and-trust-model)) |
 | | `debug_capabilities` | auto | `auto` drops SYS_PTRACE / unconfined seccomp with a warning where admission denies them; `require` fails instead |
@@ -361,6 +362,27 @@ Unset means default.
 | | `image.builder`, `image.platform` | default builder, the nodes' | the build |
 | | `image.retention`, `image.upload_pace_percent` | 72h, 80 | pushed images kept after their last use; gateway upload pacing (0 = off) |
 | workspace | `rebuild_export` | auto | `off` rebuilds from the daemon host's checkout as it is |
+
+### Instance limits
+
+| The pod's dev container | Memory limit | CPU limit |
+|---|---|---|
+| by default | `memory_limit` (8Gi), raised to the memory request | none |
+| the devcontainer sets `-m` / `--cpus` / `--cpu-quota` | `-m` (the request lowered to it) | `--cpus` / `--cpu-quota` |
+| `memory_limit=0` | none: a LimitRange's default applies, raised to the request | |
+| `resources.cpu_limit` set | | it, raised to the CPU request |
+| a LimitRange maximum below `memory_limit` | the maximum, with a warning (a request above it is refused) | |
+| GKE Autopilot (its `gk3-` nodes) | the memory request, at least `resources.autopilot_memory` | the CPU request |
+
+A CPU limit throttles the container even when its node is idle, so there is
+none unless one is asked for. A ResourceQuota on `limits.cpu` admits only pods
+that set one: the quota check says to set `resources.cpu_limit` (and, on
+`limits.memory`, a `memory_limit` other than `0`). The docker sidecar takes the
+dev container's limits, the share's init container a 128Mi memory limit while
+the dev container has one, and the seed Job the instance's resources; the cache
+and Buildkit servers keep their own, Buildkit's memory limit being
+`memory_limit` (none at `0`). An existing instance keeps its limits until it is
+rebuilt.
 
 ## 6. Storage
 
@@ -623,7 +645,10 @@ fleetd was down are not reported. Three crashes in 5 minutes, or the kubelet's
 CrashLoopBackOff, park the instance as stopped (`kubernetes:crash_loop`, or
 `kubernetes:oomkilled` naming the memory limit).
 
-**Out of memory.** On Docker an OOM kill takes one process. On a cluster with
+**Out of memory.** An instance runs out of memory at its limit, `memory_limit`
+(8Gi) unless the devcontainer sets `-m` ([instance
+limits](#instance-limits)); a new limit reaches an existing instance when it
+is rebuilt. On Docker an OOM kill takes one process. On a cluster with
 cgroup v2 (Kubernetes 1.28+) on containerd or CRI-O, the kubelet makes it take
 the whole container (cri-dockerd still kills one process), so every session
 ends and the row says `restarted: out of memory, sessions ended`. fleet

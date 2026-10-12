@@ -50,9 +50,6 @@
       "--cap-add SYS_PTRACE",
       "--security-opt seccomp=unconfined"
     ],
-    "warnings": [
-      "LimitRange: default memory limit 1Gi → fleet sets 8Gi explicitly (memory_limit on prod-eu)"
-    ],
     "options": [
       {
         "option": "attach",

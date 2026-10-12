@@ -98,8 +98,9 @@ type KubeCluster struct {
 	// --- pod shape and security ---
 
 	Resources KubeResources `json:"resources"`
-	// MemoryLimit set explicitly when a LimitRange would inject a lower one;
-	// empty = DefaultKubeMemoryLimit.
+	// MemoryLimit is each instance's memory limit, never below its memory
+	// request; empty = DefaultKubeMemoryLimit, KubeNoLimit = none (see
+	// InstanceMemoryLimit).
 	MemoryLimit  string            `json:"memory_limit,omitempty"`
 	NodeSelector map[string]string `json:"node_selector,omitempty"`
 	Tolerations  []KubeToleration  `json:"tolerations,omitempty"`
@@ -154,7 +155,7 @@ type KubeCluster struct {
 	Revision int64 `json:"revision"`
 }
 
-// KubeResources is what each instance pod requests.
+// KubeResources is what each instance pod requests, and its CPU limit.
 type KubeResources struct {
 	// CPURequest; empty = DefaultKubeCPURequest.
 	CPURequest string `json:"cpu_request,omitempty"`
@@ -163,6 +164,10 @@ type KubeResources struct {
 	// AutopilotMemory is the memory request on GKE Autopilot, where limits
 	// equal requests; empty = DefaultKubeAutopilotMemory.
 	AutopilotMemory string `json:"autopilot_memory,omitempty"`
+	// CPULimit is each instance's CPU limit, never below its CPU request;
+	// empty or KubeNoLimit = none, as a CPU limit throttles even on an idle
+	// node (see InstanceCPULimit).
+	CPULimit string `json:"cpu_limit,omitempty"`
 }
 
 // KubeToleration mirrors a core/v1 Toleration.
@@ -243,6 +248,9 @@ const (
 	DefaultKubeUploadPacePercent      = 80
 )
 
+// KubeNoLimit is the memory_limit or resources.cpu_limit that sets no limit.
+const KubeNoLimit = "0"
+
 // DefaultKubeCacheSizes are the cache volume sizes an unset KubeCacheSizes
 // field takes.
 var DefaultKubeCacheSizes = KubeCacheSizes{Buildkit: "20Gi", DebCache: "10Gi", ImageCache: "20Gi"}
@@ -254,6 +262,27 @@ func (k *KubeCluster) GetDisplayName() string {
 		return k.ID
 	}
 	return k.DisplayName
+}
+
+// InstanceMemoryLimit is the memory limit memory_limit gives instance pods:
+// DefaultKubeMemoryLimit when unset, "" when turned off (KubeNoLimit).
+func (k *KubeCluster) InstanceMemoryLimit() string {
+	switch k.MemoryLimit {
+	case "":
+		return DefaultKubeMemoryLimit
+	case KubeNoLimit:
+		return ""
+	}
+	return k.MemoryLimit
+}
+
+// InstanceCPULimit is the CPU limit resources.cpu_limit gives instance pods:
+// "" (none) when unset or turned off (KubeNoLimit).
+func (k *KubeCluster) InstanceCPULimit() string {
+	if k.Resources.CPULimit == KubeNoLimit {
+		return ""
+	}
+	return k.Resources.CPULimit
 }
 
 // AutomationInterval is the shortest time between two firings of one

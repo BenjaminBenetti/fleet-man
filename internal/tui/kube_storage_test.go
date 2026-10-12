@@ -110,7 +110,7 @@ func TestEditorLargeSharedClassAsksFirst(t *testing.T) {
 	m, sp := kubeTestModel(t, st)
 	calls := stubKubeUpdate(t, savedStatus(st))
 	e := openEditor(m, sp, "gke-1", "storage")
-	editorRowOf(t, e, "shared_storage_class")
+	editorRowOf(t, m, e, "shared_storage_class")
 	// auto → standard-rwo → filestore
 	pumpKube(t, m, press(m, sp, "right"))
 	pumpKube(t, m, press(m, sp, "right"))
@@ -144,7 +144,7 @@ func TestEditorTestStorage(t *testing.T) {
 	m, sp := kubeTestModel(t, st)
 	reqs := stubKubeTest(t, func(*fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent { return testEvents(st) })
 	e := openEditor(m, sp, "gke-1", "storage")
-	for i, row := range e.rows() {
+	for i, row := range e.rows(m.kubeStatus(e.id)) {
 		if row.kind == kubeEditorRowAction && row.action == kubeEditorActionTestStorage {
 			e.row = i
 		}
@@ -181,7 +181,7 @@ func TestEditorStorageClassesUnreadable(t *testing.T) {
 	if out := flatText(e.view(m, sp)); !strings.Contains(out, "StorageClasses are not readable here type a class name on a picker") {
 		t.Fatalf("no typed-name note:\n%s", out)
 	}
-	editorRowOf(t, e, "shared_storage_class")
+	editorRowOf(t, m, e, "shared_storage_class")
 	pumpKube(t, m, press(m, sp, "enter"))
 	for _, r := range "efs-static" {
 		pumpKube(t, m, press(m, sp, string(r)))

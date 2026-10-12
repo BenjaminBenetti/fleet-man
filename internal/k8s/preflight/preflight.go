@@ -242,6 +242,11 @@ type run struct {
 	// CSINodes unreadable).
 	csiTopology map[string]bool
 	rootClass   *fleetgrpc.KubeStorageClass
+	// lr is the namespace's LimitRanges, read once (readLimitRanges);
+	// lrErr why they could not be.
+	lr     *limitRanges
+	lrRead bool
+	lrErr  error
 	// classObjs are the StorageClasses as listed, by name;
 	// classesUnreadable says the listing was forbidden.
 	classObjs         map[string]*storagev1.StorageClass

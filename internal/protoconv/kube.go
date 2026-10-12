@@ -160,6 +160,7 @@ func kubeResourcesToProto(r fleet.KubeResources) *fleetgrpc.KubeResources {
 		CpuRequest:      r.CPURequest,
 		MemoryRequest:   r.MemoryRequest,
 		AutopilotMemory: r.AutopilotMemory,
+		CpuLimit:        r.CPULimit,
 	}
 }
 
@@ -168,6 +169,7 @@ func kubeResourcesFromProto(pr *fleetgrpc.KubeResources) fleet.KubeResources {
 		CPURequest:      pr.GetCpuRequest(),
 		MemoryRequest:   pr.GetMemoryRequest(),
 		AutopilotMemory: pr.GetAutopilotMemory(),
+		CPULimit:        pr.GetCpuLimit(),
 	}
 }
 

@@ -82,6 +82,20 @@ func TestClassifyMessages(t *testing.T) {
 	}
 }
 
+// A quota on limits refuses a container without them, and the refusal names
+// the setting that sets each; a quota without room says to make room.
+func TestQuotaRefusalNamesTheLimitSetting(t *testing.T) {
+	for msg, want := range map[string]string{
+		`pods "dev-0" is forbidden: failed quota: small: must specify limits.cpu for: dev`:                                      "Set the connection's resources.cpu_limit: a quota on limits",
+		`pods "dev-0" is forbidden: failed quota: small: must specify limits.cpu for: dev; limits.memory for: dev,fleet-docker`: "Set the connection's resources.cpu_limit and memory_limit (it is 0, off): a quota",
+		refusalMessages[2].msg: "Stop or destroy instances there, lower the connection's resources, or raise the quota",
+	} {
+		if r := classifyMessage("Pod dev-0", msg).Refusal(); r.Code != CodeQuota || !strings.Contains(r.Reason, want) {
+			t.Errorf("%s:\n %s: %s\nwant %q", msg, r.Code, r.Reason, want)
+		}
+	}
+}
+
 func TestClassifyFailedCreateOthers(t *testing.T) {
 	for _, ev := range []string{
 		"create Pod dev-0 in StatefulSet dev failed error: Timeout: request did not complete within requested timeout",

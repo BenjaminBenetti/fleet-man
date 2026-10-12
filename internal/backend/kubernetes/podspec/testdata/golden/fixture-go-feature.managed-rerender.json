@@ -46,8 +46,7 @@
     ],
     "debugDropped": true,
     "warnings": [
-      "debug capabilities dropped by admission: --cap-add SYS_PTRACE, --security-opt seccomp=unconfined (namespace team-dev denies them); debuggers such as dlv and gdb cannot attach. Set debug_capabilities to require on prod-eu to fail the create instead",
-      "LimitRange: default memory limit 1Gi → fleet sets 8Gi explicitly (memory_limit on prod-eu)"
+      "debug capabilities dropped by admission: --cap-add SYS_PTRACE, --security-opt seccomp=unconfined (namespace team-dev denies them); debuggers such as dlv and gdb cannot attach. Set debug_capabilities to require on prod-eu to fail the create instead"
     ],
     "options": [
       {

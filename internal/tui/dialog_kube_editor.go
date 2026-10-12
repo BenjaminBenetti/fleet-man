@@ -122,8 +122,9 @@ func newKubeEditor(id string) *kubeEditor {
 	return &kubeEditor{id: id, open: open, input: input, saving: map[string]bool{}, own: map[int64]int64{}, fieldErr: map[string]string{}}
 }
 
-// rows is the editor's navigable rows in order.
-func (e *kubeEditor) rows() []kubeEditorRow {
+// rows is the editor's navigable rows in order, for the connection's
+// status st (a field shown only on a finding hides without it).
+func (e *kubeEditor) rows(st *fleetgrpc.KubeClusterStatus) []kubeEditorRow {
 	var out []kubeEditorRow
 	for i := range kubeTopFields {
 		out = append(out, kubeEditorRow{kind: kubeEditorRowField, field: &kubeTopFields[i]})
@@ -139,22 +140,24 @@ func (e *kubeEditor) rows() []kubeEditorRow {
 			out = append(out, kubeEditorRow{kind: kubeEditorRowAction, group: g, action: kubeEditorActionTestStorage})
 		}
 		for fi := range g.fields {
-			out = append(out, kubeEditorRow{kind: kubeEditorRowField, field: &g.fields[fi], group: g})
+			if f := &g.fields[fi]; f.shown == nil || f.shown(st.GetCapabilities()) {
+				out = append(out, kubeEditorRow{kind: kubeEditorRowField, field: f, group: g})
+			}
 		}
 	}
 	return out
 }
 
 // current is the row under the cursor.
-func (e *kubeEditor) current() kubeEditorRow {
-	rows := e.rows()
+func (e *kubeEditor) current(st *fleetgrpc.KubeClusterStatus) kubeEditorRow {
+	rows := e.rows(st)
 	e.row = max(0, min(e.row, len(rows)-1))
 	return rows[e.row]
 }
 
 // buttons is how many buttons the current row has.
 func (e *kubeEditor) buttons(m *model, st *fleetgrpc.KubeClusterStatus) int {
-	row := e.current()
+	row := e.current(st)
 	switch {
 	case row.kind == kubeEditorRowStatus:
 		return kubeEditorButtonLogin
@@ -253,16 +256,16 @@ func (e *kubeEditor) key(m *model, page *settingsPage, st *fleetgrpc.KubeCluster
 			return cmd
 		}
 	}
-	row := e.current()
+	row := e.current(st)
 	switch key.String() {
 	case "esc", "q":
 		page.closeKubeDialog(m)
 		return nil
 	case "j", "down":
-		e.row = (e.row + 1) % len(e.rows())
+		e.row = (e.row + 1) % len(e.rows(st))
 		e.button = 0
 	case "k", "up":
-		n := len(e.rows())
+		n := len(e.rows(st))
 		e.row = (e.row - 1 + n) % n
 		e.button = 0
 	case "left", "h", "right", "l":
@@ -540,7 +543,7 @@ func (e *kubeEditor) view(m *model, _ *settingsPage) string {
 
 	var body []string
 	cursorStart, cursorEnd := 0, 1
-	rows := e.rows()
+	rows := e.rows(st)
 	e.row = max(0, min(e.row, len(rows)-1))
 	for i, row := range rows {
 		start := len(body)
@@ -795,7 +798,7 @@ func (e *kubeEditor) footer(m *model, st *fleetgrpc.KubeClusterStatus) string {
 	if e.editing != nil {
 		return "[enter] save  [esc] cancel  · " + kubeInputHint(*e.editing)
 	}
-	row := e.current()
+	row := e.current(st)
 	return kubeFooter(kubeEditorKeys, func(k kubeKey) bool {
 		switch {
 		case kubeKeyIs(k, "y") || kubeKeyIs(k, "n"):
@@ -828,7 +831,14 @@ func kubeGroupSummary(key string, st *fleetgrpc.KubeClusterStatus) string {
 		}
 		return fmt.Sprintf("apt %s img %s · %s", or(c.GetCacheSizes().GetDebcache(), "10Gi"), or(c.GetCacheSizes().GetImagecache(), "20Gi"), buildkit)
 	case "resources":
-		parts := []string{or(c.GetResources().GetCpuRequest(), "500m"), or(c.GetResources().GetMemoryRequest(), "2Gi")}
+		limit := "limit " + or(c.GetMemoryLimit(), fleet.DefaultKubeMemoryLimit)
+		if c.GetMemoryLimit() == fleet.KubeNoLimit {
+			limit = "no memory limit"
+		}
+		parts := []string{or(c.GetResources().GetCpuRequest(), "500m"), or(c.GetResources().GetMemoryRequest(), "2Gi"), limit}
+		if cpu := c.GetResources().GetCpuLimit(); cpu != "" && cpu != fleet.KubeNoLimit {
+			parts = append(parts, "cpu limit "+cpu)
+		}
 		if c.GetMaxInstances() > 0 {
 			parts = append(parts, fmt.Sprintf("max %d", c.GetMaxInstances()))
 		}
@@ -916,13 +926,6 @@ func kubeGroupInfo(key string, st *fleetgrpc.KubeClusterStatus) []string {
 			if kubeOneNode(&fleetgrpc.KubeClusterStatus{Warnings: []string{w}}) == "" {
 				out = append(out, kubeWarningLine(w))
 			}
-		}
-		if lr := caps.GetLimitRangeMemoryLimit(); lr != "" {
-			limit := st.GetCluster().GetMemoryLimit()
-			if limit == "" {
-				limit = "8Gi"
-			}
-			out = append(out, dimStyle.Render(fmt.Sprintf("LimitRange: default memory limit %s → fleet sets %s explicitly", lr, limit)))
 		}
 		for _, q := range caps.GetQuota() {
 			out = append(out, dimStyle.Render(fmt.Sprintf("quota %s: %s of %s used", q.GetResource(), q.GetUsed(), q.GetHard())))

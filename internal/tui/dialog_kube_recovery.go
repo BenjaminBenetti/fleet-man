@@ -357,7 +357,7 @@ func (m *model) openKubeEditorAt(id, field string) tea.Cmd {
 				}
 			}
 		}
-		for i, row := range editor.rows() {
+		for i, row := range editor.rows(m.kubeStatus(id)) {
 			if row.kind == kubeEditorRowField && row.field.path == field {
 				editor.row = i
 				break

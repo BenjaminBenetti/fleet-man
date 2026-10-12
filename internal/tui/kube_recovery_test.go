@@ -19,7 +19,7 @@ import (
 
 const (
 	interruptedErr = "kubernetes:interrupted: interrupted by daemon restart during create (at step seed)"
-	oomParkedErr   = "kubernetes:oomkilled: the dev container kept running out of memory (memory limit 1Gi), 3 restarts within 5m0s. Parked as stopped: raise memory_limit in the cluster's resources, then start it again."
+	oomParkedErr   = "kubernetes:oomkilled: the dev container kept running out of memory (memory limit 1Gi), 3 restarts within 5m0s. Parked as stopped: raise memory_limit in the cluster's resources (or the devcontainer's -m), then rebuild it."
 )
 
 // kubeRowModel is a fleet page with one fleet of the given instances, the
@@ -399,7 +399,7 @@ func TestKubeRecoveryActions(t *testing.T) {
 		if !ok || e.id != "mk-1" {
 			t.Fatalf("no cluster editor for mk-1: %#v", sp.kubeDialog)
 		}
-		if row := e.current(); row.kind != kubeEditorRowField || row.field.path != "memory_limit" {
+		if row := e.current(m.kubeStatus(e.id)); row.kind != kubeEditorRowField || row.field.path != "memory_limit" {
 			t.Fatalf("the editor opened on %+v, want memory_limit", row)
 		}
 	})
@@ -421,7 +421,7 @@ func TestKubeRecoveryActions(t *testing.T) {
 			if !ok {
 				t.Fatalf("no cluster editor: %#v", sp.kubeDialog)
 			}
-			if row := e.current(); row.kind != kubeEditorRowField || row.field.path != "allow_privileged" {
+			if row := e.current(m.kubeStatus(e.id)); row.kind != kubeEditorRowField || row.field.path != "allow_privileged" {
 				t.Fatalf("the editor opened on %+v, want allow_privileged", row)
 			}
 		})

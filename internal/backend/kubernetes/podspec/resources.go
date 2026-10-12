@@ -148,9 +148,11 @@ func gpuCount(v string) (int64, error) {
 //     hostRequirements (clamped to the largest node) and to
 //     --memory-reservation;
 //   - -m and --cpus (or --cpu-quota) are the limits;
-//   - without -m, a namespace LimitRange that would give the container a
-//     default memory limit below the connection's memory_limit (default
-//     8Gi) gets an explicit memory_limit instead;
+//   - without -m the memory limit is the connection's memory_limit (default
+//     8Gi, "0" none), clamped to the namespace's LimitRange maximum and
+//     never below the memory request (memoryLimit);
+//   - without --cpus or --cpu-quota the CPU limit is the connection's
+//     resources.cpu_limit (default none), never below the CPU request;
 //   - on GKE Autopilot limits equal requests, and the memory request is
 //     raised to the connection's autopilot_memory (default 4Gi);
 //   - the disk is disk_size (default 50Gi), raised to
@@ -230,16 +232,18 @@ func (t *translation) finishResources() {
 		}
 		memLimit, cpuLimit = memReq, cpuReq
 		t.warn("GKE Autopilot: limits equal requests (%s CPU, %s memory); a process past the memory is OOM-killed, which restarts the pod", formatMillis(cpuReq), formatBytes(memReq))
-	} else if memLimit == 0 && t.in.Facts.LimitRangeMemoryLimit != "" {
-		injected, err := quantityBytes(t.in.Facts.LimitRangeMemoryLimit)
-		want, ok := t.setting("memory_limit", cl.MemoryLimit, fleet.DefaultKubeMemoryLimit, quantityBytes)
-		if !ok {
-			return
+	} else {
+		if memLimit == 0 {
+			if memLimit, ok = t.memoryLimit(memReq); !ok {
+				return
+			}
 		}
-		want = max(want, memReq)
-		if err == nil && injected < want {
-			memLimit = want
-			t.warn("LimitRange: default memory limit %s → fleet sets %s explicitly (memory_limit on %s)", formatBytes(injected), formatBytes(want), t.clusterName())
+		if cpuLimit == 0 && cl.InstanceCPULimit() != "" {
+			want, ok := t.setting("resources.cpu_limit", cl.Resources.CPULimit, "", quantityMillis)
+			if !ok {
+				return
+			}
+			cpuLimit = max(want, cpuReq)
 		}
 	}
 
@@ -276,6 +280,34 @@ func (t *translation) finishResources() {
 	} else {
 		t.spec.DiskSize = formatBytes(disk)
 	}
+}
+
+// memoryLimit is the memory limit of a dev container that requests req and
+// sets no -m: the connection's memory_limit, clamped to the namespace's
+// LimitRange maximum (which would refuse the pod otherwise) and never below
+// req, which a pod the maximum cannot fit is refused for at admission. With
+// memory_limit off it is 0, the LimitRange's default then applying, unless
+// that default is below req, which the API refuses: the limit is req then.
+func (t *translation) memoryLimit(req int64) (int64, bool) {
+	cl, facts := t.cluster, t.in.Facts
+	if cl.InstanceMemoryLimit() == "" {
+		if injected, err := quantityBytes(facts.LimitRangeMemoryLimit); err == nil && injected < req {
+			t.warn("LimitRange: default memory limit %s is below the %s request → fleet sets %s (memory_limit is off on %s)", formatBytes(injected), formatBytes(req), formatBytes(req), t.clusterName())
+			return req, true
+		}
+		return 0, true
+	}
+	want, ok := t.setting("memory_limit", cl.MemoryLimit, fleet.DefaultKubeMemoryLimit, quantityBytes)
+	if !ok {
+		return 0, false
+	}
+	if ceiling, err := quantityBytes(facts.LimitRangeMemoryMax); err == nil && ceiling < want {
+		if ceiling >= req {
+			t.warn("LimitRange: maximum memory %s → memory limit clamped from %s (memory_limit on %s)", formatBytes(ceiling), formatBytes(want), t.clusterName())
+		}
+		want = ceiling
+	}
+	return max(want, req), true
 }
 
 // setting reads a connection setting (or its default) with parse; a

@@ -141,7 +141,7 @@ func TestKubeClusterNeverCarriesTheGatewayCredential(t *testing.T) {
 // neighbour's value.
 func TestKubeClusterWirePlacement(t *testing.T) {
 	pinArity[fleet.KubeCluster](t, 48)
-	pinArity[fleet.KubeResources](t, 3)
+	pinArity[fleet.KubeResources](t, 4)
 	pinArity[fleet.KubeToleration](t, 5)
 	pinArity[fleet.KubeCacheSizes](t, 3)
 	pinArity[fleet.KubeServiceImages](t, 5)
@@ -189,6 +189,7 @@ func TestKubeClusterWirePlacement(t *testing.T) {
 		"Resources.CPURequest":           pk.GetResources().GetCpuRequest(),
 		"Resources.MemoryRequest":        pk.GetResources().GetMemoryRequest(),
 		"Resources.AutopilotMemory":      pk.GetResources().GetAutopilotMemory(),
+		"Resources.CPULimit":             pk.GetResources().GetCpuLimit(),
 		"MemoryLimit":                    pk.GetMemoryLimit(),
 		"NodeSelector.key":               firstKey(pk.GetNodeSelector()),
 		"NodeSelector.val":               pk.GetNodeSelector()[firstKey(pk.GetNodeSelector())],
