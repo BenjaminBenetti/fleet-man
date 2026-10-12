@@ -227,6 +227,7 @@ func TestRunPutsPrivilegedStepsOnTheRootClass(t *testing.T) {
 		{"root", &rootFake{capable: true}, split, "root,user", false},
 		{"no root", &rootFake{capable: false}, split, "user", false},
 		{"root fails", &rootFake{capable: true, fail: "root"}, split, "root", true},
+		{"user fails", &rootFake{capable: true, fail: "user"}, split, "root,user", true},
 		{"unsplit", &rootFake{capable: true}, Script{Name: "plain", Body: "x"}, "user", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -237,8 +238,17 @@ func TestRunPutsPrivilegedStepsOnTheRootClass(t *testing.T) {
 			if (len(errs) > 0) != tc.failing {
 				t.Fatalf("errors %v", errs)
 			}
+			if tc.failing && tc.b.fail == "user" {
+				if errs[0].LogPath != "~/.fleet/startup/audio.log" || strings.Contains(errs[0].Error(), "as root") {
+					t.Fatalf("a failed user step: %v (log %q), want the user's audio.log", errs[0], errs[0].LogPath)
+				}
+				return
+			}
 			if tc.failing && !strings.Contains(errs[0].Error(), "as root") {
 				t.Fatalf("the failure does not say it ran as root: %v", errs[0])
+			}
+			if tc.failing && errs[0].LogPath != "~root/.fleet/startup/audio-root.log" {
+				t.Fatalf("a failed root step names log %q, want root's own audio-root.log", errs[0].LogPath)
 			}
 		})
 	}
