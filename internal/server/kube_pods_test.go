@@ -357,6 +357,39 @@ func TestKubePodsNoticeEndsWithAStop(t *testing.T) {
 	}
 }
 
+// A park is not the user's stop: the parked row keeps its "sessions reset"
+// cause (the OOM that made the loop), and the next start clears it.
+func TestKubePodsParkKeepsTheNotice(t *testing.T) {
+	r := newKubePodsRig(t, kubeInstance("one", fleet.StatusRunning))
+	r.waitTracked()
+	sts := kubeSTS("one")
+	oom := &backend.Restart{ID: "u1/1", Cause: backend.RestartOOMKilled, At: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
+	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusRunning, Restart: oom, SessionsEnded: true})
+	r.eventually("the notice", func() bool { return r.runtime("one").GetKube().GetRestartCause() == string(backend.RestartOOMKilled) })
+
+	loop := &kubernetes.CrashLoop{OOM: true, Restarts: 3, MemoryLimit: "1Gi"}
+	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusUnknown, Restart: oom, CrashLoop: loop})
+	r.eventually("the parked record", func() bool {
+		st, err := state.Load()
+		return err == nil && st.Fleets["alpha"].Instances[0].Status == fleet.StatusStopped
+	})
+	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusStopped, Restart: oom})
+	time.Sleep(50 * time.Millisecond)
+	if c := r.runtime("one").GetKube().GetRestartCause(); c != string(backend.RestartOOMKilled) {
+		t.Fatalf("the parked row's restart cause %q, want %q", c, backend.RestartOOMKilled)
+	}
+
+	if err := state.Update(func(s *state.State) error {
+		s.Fleets["alpha"].Instances[0].Status = fleet.StatusStarting
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loadAndPush(r.svc.hub)
+	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusStopped, Restart: oom})
+	r.eventually("the notice gone with the start", func() bool { return r.runtime("one").GetKube().GetRestartCause() == "" })
+}
+
 func TestKubePodsLeavesFleetsOwnStartsAlone(t *testing.T) {
 	r := newKubePodsRig(t, kubeInstance("one", fleet.StatusStarting))
 	r.waitTracked()

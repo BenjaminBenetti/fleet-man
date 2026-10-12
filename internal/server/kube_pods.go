@@ -34,7 +34,7 @@ import (
 //     eviction, a drain, a lost node, a deleted pod) it re-runs the
 //     instance's post-start work once the pod runs again, and shows
 //     "sessions reset: <cause>" on the instance's row until the next attach
-//     or until fleet stops it;
+//     or until fleet stops it (its own park below keeps it until a start);
 //   - it parks a crash-looping instance (scaled to 0 and recorded stopped,
 //     the reason in its warning), naming an out-of-memory loop as one;
 //   - it serves a running instance's published ports (-p, appPort) on the
@@ -170,6 +170,10 @@ type kubeInst struct {
 
 	parking   bool
 	parkAfter time.Time
+	// parked: kubePods itself stopped the instance (a crash loop), so its
+	// notice stays on the stopped row, naming the cause, until fleet starts
+	// or rebuilds it.
+	parked bool
 }
 
 type kubePods struct {
@@ -551,10 +555,14 @@ func (k *kubePods) evaluate(ctx context.Context, ref kubeRef) {
 			ki.postStarted = r.ID
 		}
 	}
-	if !running && ki.notice != nil {
+	if ki.parked && ki.inst.Status != fleet.StatusStopped {
+		ki.parked = false // started (or rebuilt) since its park
+	}
+	if !running && ki.notice != nil && !ki.parking && !ki.parked {
 		// Fleet stopped it (or is starting or rebuilding it): the sessions
 		// the notice speaks of went with the user's own stop, and the next
-		// start's are new.
+		// start's are new. A park is not the user's stop: the parked row
+		// keeps saying what reset its sessions.
 		ki.notice, ki.sessionsEnded = nil, false
 	}
 	var postStart func()
@@ -737,7 +745,7 @@ func (k *kubePods) park(ctx context.Context, ref kubeRef, fleetName, name, key s
 		if err != nil {
 			ki.parkAfter = k.now().Add(k.parkRetry)
 		} else if parked {
-			ki.inst.Status = fleet.StatusStopped
+			ki.inst.Status, ki.parked = fleet.StatusStopped, true
 		}
 	}
 	k.mu.Unlock()
