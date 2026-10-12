@@ -56,6 +56,13 @@ func (s *service) kubeShutdownSteps() []shutdownStep {
 			s.checkpointKubeJobs(ctx)
 			pool.Close()
 		}},
+		{name: "end the image collections", run: func(ctx context.Context) {
+			// Ended with the serve loop: what one was doing is done again
+			// by the next collection.
+			if s.kube != nil && !s.kube.waitCleanups(ctx) {
+				flog.Warn("fleet server shutdown: an image collection is still running")
+			}
+		}},
 	}
 }
 

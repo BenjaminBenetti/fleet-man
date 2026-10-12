@@ -118,7 +118,7 @@ func (s *service) runBackupLoop(ctx context.Context) {
 	ticker := time.NewTicker(backupInterval)
 	defer ticker.Stop()
 	for {
-		backupTick(time.Now())
+		runBackupTick(time.Now())
 		select {
 		case <-ctx.Done():
 			return
@@ -126,6 +126,9 @@ func (s *service) runBackupLoop(ctx context.Context) {
 		}
 	}
 }
+
+// runBackupTick is the loop's tick (a var so a test can hold one).
+var runBackupTick = backupTick
 
 // backupTick performs one snapshot + prune. Both steps are best-effort: a
 // failure is logged and the loop continues, since a backup miss must never take

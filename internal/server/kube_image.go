@@ -417,9 +417,7 @@ func (m *kubeManager) releaseImages(rec fleet.KubeCluster, leaseHeld bool) {
 			flog.Warn("kube: forget the removed connection's gateway images", "cluster", rec.ID, "err", err)
 		}
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), kubeImageCleanupTime)
-		defer cancel()
+	m.cleanup(func(ctx context.Context) {
 		var seedCaches func(context.Context) ([]string, error)
 		if leaseHeld {
 			if link, err := m.connect(rec, m.environ()); err == nil {
@@ -456,5 +454,40 @@ func (m *kubeManager) releaseImages(rec fleet.KubeCluster, leaseHeld bool) {
 				flog.Warn("kube: remove the connection's directory", "cluster", rec.ID, "err", err)
 			}
 		}
+	})
+}
+
+// cleanup runs work in the background, bounded by kubeImageCleanupTime and
+// ended by the daemon's shutdown (the serve loop's context), as one of the
+// collections waitCleanups waits for.
+func (m *kubeManager) cleanup(work func(ctx context.Context)) {
+	m.mu.Lock()
+	base := m.ctx
+	m.mu.Unlock()
+	if base == nil {
+		base = context.Background()
+	}
+	m.cleanups.Add(1)
+	go func() {
+		defer m.cleanups.Done()
+		ctx, cancel := context.WithTimeout(base, kubeImageCleanupTime)
+		defer cancel()
+		work(ctx)
 	}()
+}
+
+// waitCleanups waits for the background collections until ctx ends, and
+// reports whether they all ended.
+func (m *kubeManager) waitCleanups(ctx context.Context) bool {
+	done := make(chan struct{})
+	go func() {
+		m.cleanups.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }

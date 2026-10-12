@@ -179,6 +179,11 @@ type kubeManager struct {
 	registryChangedAt time.Time
 	// imageGC paces each connection's image collection (kube_backend.go).
 	imageGC kubeImageGC
+	// cleanups are the collections running in the background (a removed
+	// connection's release, a connection's image collection): the shutdown
+	// ends and waits for them (kube_image.go), so none writes the daemon's
+	// files once it is gone.
+	cleanups sync.WaitGroup
 }
 
 func newKubeManager(svc *service) *kubeManager {

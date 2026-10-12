@@ -279,3 +279,29 @@ func TestServeShutdownWaitsForASlowSharedStateFlush(t *testing.T) {
 	default:
 	}
 }
+
+// A daemon's own writes to ~/.fleet end before Serve returns: a backup tick
+// still writing when the shutdown starts is waited for (bounded), so it
+// never lands after the daemon's HOME was handed back (a test's, here).
+func TestServeWaitsForAnInProgressBackup(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	var wrote atomic.Bool
+	orig := runBackupTick
+	runBackupTick = func(time.Time) {
+		once.Do(func() {
+			close(started)
+			<-release
+			time.Sleep(200 * time.Millisecond) // still writing as the shutdown runs
+			wrote.Store(true)
+		})
+	}
+	t.Cleanup(func() { runBackupTick = orig })
+	client, served := startServe(t)
+	<-started
+	close(release)
+	shutdownAndWait(t, client, served)
+	if !wrote.Load() {
+		t.Fatal("Serve returned while its backup tick was still writing")
+	}
+}

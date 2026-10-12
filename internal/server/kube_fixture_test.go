@@ -135,6 +135,15 @@ func newKubeFixture(t *testing.T) *kubeFixture {
 
 	f.svc = newService()
 	m := f.svc.kube
+	// Before the HOME above is handed back: a removal's release, or an
+	// image collection, may still be writing under it.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if !m.waitCleanups(ctx) {
+			t.Error("a background image collection outlived the test")
+		}
+	})
 	m.configurePool = func(records []fleet.KubeCluster) {
 		f.pooledMu.Lock()
 		f.pooled = append([]fleet.KubeCluster(nil), records...)
