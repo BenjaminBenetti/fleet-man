@@ -140,18 +140,32 @@ func (f *sharePodsFake) install(c *cluster) {
 func TestDeepSharePods(t *testing.T) {
 	defer func(a, b, c time.Duration) { sharePodsTimeout, sharePodsMount, sharePodsPoll = a, b, c }(sharePodsTimeout, sharePodsMount, sharePodsPoll)
 	sharePodsTimeout, sharePodsMount, sharePodsPoll = 5*time.Second, 50*time.Millisecond, time.Millisecond
+	// ended makes the second pod end with its script's termination message.
+	ended := func(phase corev1.PodPhase, message string) func(*corev1.Pod) {
+		return func(p *corev1.Pod) {
+			p.Status.Phase = phase
+			p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "probe", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Message: message}}}}
+		}
+	}
+	const label = "system_u:system_r:container_t:s0:c12,c345"
 	for _, tc := range []struct {
 		name   string
 		second func(*corev1.Pod)
 		result fleetgrpc.KubeCheckResult
 		mode   string
 		rwo    bool
+		detail string
 	}{
-		{"mounted", func(p *corev1.Pod) { p.Status.Phase = corev1.PodSucceeded }, fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, "single-node", true},
+		{"mounted", func(p *corev1.Pod) { p.Status.Phase = corev1.PodSucceeded }, fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, "single-node", true, "two pods on one node mounted one ReadWriteOnce volume"},
+		{"off SELinux", ended(corev1.PodSucceeded, "selinux=shared label=\n"), fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, "single-node", true, "mounted one ReadWriteOnce volume"},
+		{"shared under SELinux", ended(corev1.PodSucceeded, "selinux=shared label="+label+"\n"), fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, "single-node", true,
+			"under SELinux, at one level (s0:c12,c345), the second read the first's file"},
+		{"denied under SELinux", ended(corev1.PodFailed, "selinux=denied label="+label+" err=cat: can't open '/data/.fleet-probe': Permission denied\n"),
+			fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, "copy", false, "at the first pod's SELinux level (" + label + ") could not read the file the first wrote there (cat: can't open '/data/.fleet-probe': Permission denied)"},
 		{"never mounted", func(p *corev1.Pod) {
 			p.Status.Phase = corev1.PodPending
 			p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "probe", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}}}
-		}, fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, "copy", false},
+		}, fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, "copy", false, "Multi-Attach error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath", isDefault))
@@ -169,8 +183,11 @@ func TestDeepSharePods(t *testing.T) {
 			if got.GetResult() != tc.result {
 				t.Fatalf("share_pods %v", got)
 			}
-			if tc.result == fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL && !strings.Contains(got.GetDetail(), "Multi-Attach error") {
-				t.Fatalf("a failed probe does not name the kubelet's error: %v", got)
+			if !strings.Contains(got.GetDetail(), tc.detail) {
+				t.Fatalf("share_pods detail %q, want %q", got.GetDetail(), tc.detail)
+			}
+			if tc.name == "off SELinux" && strings.Contains(got.GetDetail(), "SELinux") {
+				t.Fatalf("a node without SELinux labels was reported under SELinux: %q", got.GetDetail())
 			}
 			if r.caps.GetShareMode() != tc.mode || r.res.MultiPodRWO == nil || *r.res.MultiPodRWO != tc.rwo {
 				t.Fatalf("share mode %q, multi-pod %v", r.caps.GetShareMode(), r.res.MultiPodRWO)
@@ -183,6 +200,18 @@ func TestDeepSharePods(t *testing.T) {
 			}
 			if second == nil || second.Spec.NodeName != "minikube" || second.Spec.Volumes[0].PersistentVolumeClaim == nil {
 				t.Fatalf("the second pod %+v is not pinned to the first's node with the volume", second)
+			}
+			// Both at one SELinux level, as a fleet's pods are; the first
+			// writes the file the second reads.
+			var levels []string
+			for name, p := range f.created {
+				levels = append(levels, p.Spec.SecurityContext.SELinuxOptions.Level)
+				if strings.HasSuffix(name, "-a") && !strings.Contains(strings.Join(p.Spec.Containers[0].Command, " "), "> "+sharePodsFile) {
+					t.Fatalf("the first pod writes no probe file: %q", p.Spec.Containers[0].Command)
+				}
+			}
+			if len(levels) != 2 || levels[0] == "" || levels[0] != levels[1] {
+				t.Fatalf("the probe pods' SELinux levels %q, want one level for both", levels)
 			}
 			if len(f.deleted) != 3 {
 				t.Fatalf("deleted %v, want both pods and the volume", f.deleted)

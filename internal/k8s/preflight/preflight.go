@@ -247,8 +247,9 @@ type run struct {
 	classObjs         map[string]*storagev1.StorageClass
 	classesUnreadable bool
 	// multiPodRWO is the two-pod probe's word: the last deep test's, then
-	// this one's.
-	multiPodRWO *bool
+	// this one's; sharePodsSELinux what its second pod found of SELinux.
+	multiPodRWO      *bool
+	sharePodsSELinux sharePodsVerdict
 	// storage are the multi-node test results of this run, by class;
 	// storageFresh the keys tested in it.
 	storage      map[string]StorageTest

@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/topology"
 )
 
@@ -391,7 +392,16 @@ func (r *run) reportSharePods(ctx context.Context, mounted bool, why string, err
 		yes := true
 		r.multiPodRWO = &yes
 		r.res.MultiPodRWO = &yes
-		r.pass(CheckSharePods, "two pods on one node mounted one ReadWriteOnce volume")
+		detail := "two pods on one node mounted one ReadWriteOnce volume"
+		if v := r.sharePodsSELinux; selinuxLabelled(v.label) {
+			switch v.selinux {
+			case "shared":
+				detail += "; under SELinux, at one level (" + levelOf(v.label) + "), the second read the first's file"
+			case "untested":
+				detail += "; under SELinux (" + levelOf(v.label) + "), not tested: the first could not write on the volume's root"
+			}
+		}
+		r.pass(CheckSharePods, detail)
 	default:
 		no := false
 		r.multiPodRWO = &no
@@ -404,9 +414,64 @@ func (r *run) reportSharePods(ctx context.Context, mounted bool, why string, err
 	r.sharedStorage(ctx)
 }
 
+// The two-pod probe's SELinux check: both pods run at one MCS level, as a
+// fleet's pods do; the first writes a file onto the volume, the second reads
+// it and says (its termination message) what it found and at which label.
+// A node that does not enforce SELinux shows no label; a class whose volumes
+// the runtime relabels for each pod at its own level (or not at all, where
+// the files keep a level the pods lack) denies the read: the CSIDriver's
+// seLinuxMount says nothing of that, only a pod finds out (no AVC is logged
+// for an MCS denial either).
+const (
+	sharePodsFile = "/data/.fleet-probe"
+	// sharePodsSecond is the second pod's script.
+	sharePodsSecond = `l=$(tr -d '\000' < /proc/self/attr/current 2>/dev/null)
+for i in 1 2 3 4 5; do [ -e ` + sharePodsFile + ` ] && break; sleep 1; done
+if [ ! -e ` + sharePodsFile + ` ]; then echo "selinux=untested label=$l" > /dev/termination-log; exit 0; fi
+if ! e=$(cat ` + sharePodsFile + ` 2>&1 >/dev/null); then echo "selinux=denied label=$l err=$e" > /dev/termination-log; exit 13; fi
+echo "selinux=shared label=$l" > /dev/termination-log`
+)
+
+// sharePodsVerdict is what the second pod of the probe said: "shared" (it
+// read the first's file), "denied" (it could not, with the error), or
+// "untested" (the first could not write one: the volume's root is not the
+// probe user's), and the label it ran at ("" off SELinux).
+type sharePodsVerdict struct {
+	selinux, label, err string
+}
+
+// parseSharePodsVerdict reads the second pod's termination message.
+func parseSharePodsVerdict(msg string) sharePodsVerdict {
+	var v sharePodsVerdict
+	msg = strings.TrimSpace(msg)
+	if rest, ok := strings.CutPrefix(msg, "selinux="); ok {
+		v.selinux, rest, _ = strings.Cut(rest, " ")
+		if rest, ok = strings.CutPrefix(rest, "label="); ok {
+			v.label, rest, _ = strings.Cut(rest, " ")
+			v.err, _ = strings.CutPrefix(rest, "err=")
+		}
+	}
+	return v
+}
+
+// selinuxLabelled reports whether a process label is an SELinux one with an
+// MCS level (unconfined or no label at all off SELinux).
+func selinuxLabelled(label string) bool { return strings.Count(label, ":") >= 3 }
+
+// terminatedMessage is the termination message of pod's first container.
+func terminatedMessage(p *corev1.Pod) string {
+	for _, cs := range p.Status.ContainerStatuses {
+		if t := cs.State.Terminated; t != nil {
+			return t.Message
+		}
+	}
+	return ""
+}
+
 // probeSharePods mounts one small RWO volume of class from two pods on one
-// node; mounted reports whether the second did (why not, when not).
-// Everything it made is deleted before it returns.
+// node; mounted reports whether the second did and, on an SELinux node,
+// could read the first's file (why not, when not). Everything it made is
+// deleted before it returns.
 func (r *run) probeSharePods(ctx context.Context, class string) (mounted bool, why string, err error) {
 	ns := r.t.Cluster.Namespace
 	cs := r.t.Client
@@ -439,6 +504,13 @@ func (r *run) probeSharePods(ctx context.Context, class string) (mounted bool, w
 	if err != nil {
 		return false, "", fmt.Errorf("creating the probe's volume: %s", Message(err))
 	}
+	// One SELinux level for both, and the MountOption relabel where the
+	// class's driver takes it: as a fleet's pods get them (podspec.Harden).
+	level := podspec.SELinuxLevel("probe-" + id)
+	selinuxMount := false
+	if c, _, ok := r.listedClass(class); ok && c.GetSelinuxMount() {
+		selinuxMount = podspec.SELinuxMountSupported(r.caps.GetVersion())
+	}
 	mount := func(name, probe string, command []string, node string) (*corev1.Pod, error) {
 		pod, err := r.probePod(name, probe, command)
 		if err != nil {
@@ -447,9 +519,17 @@ func (r *run) probeSharePods(ctx context.Context, class string) (mounted bool, w
 		pod.Spec.Volumes = []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim}}}}
 		pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: "data", MountPath: "/data"}}
 		pod.Spec.NodeName = node
+		if pod.Spec.SecurityContext.SELinuxOptions == nil {
+			pod.Spec.SecurityContext.SELinuxOptions = &corev1.SELinuxOptions{}
+		}
+		pod.Spec.SecurityContext.SELinuxOptions.Level = level
+		if selinuxMount {
+			policy := corev1.SELinuxChangePolicyMountOption
+			pod.Spec.SecurityContext.SELinuxChangePolicy = &policy
+		}
 		return pod, nil
 	}
-	a, err := mount(first, id+"-a", []string{"sleep", "600"}, "")
+	a, err := mount(first, id+"-a", []string{"sh", "-c", "echo fleet > " + sharePodsFile + " 2>/dev/null; exec sleep 600"}, "")
 	if err != nil {
 		return false, "", err
 	}
@@ -465,7 +545,7 @@ func (r *run) probeSharePods(ctx context.Context, class string) (mounted bool, w
 	if err != nil {
 		return false, "", err
 	}
-	b, err := mount(second, id+"-b", []string{"ls", "/data"}, node)
+	b, err := mount(second, id+"-b", []string{"sh", "-c", sharePodsSecond}, node)
 	if err != nil {
 		return false, "", err
 	}
@@ -484,10 +564,19 @@ func (r *run) probeSharePods(ctx context.Context, class string) (mounted bool, w
 		cancel()
 		if err == nil {
 			switch got.Status.Phase {
-			case corev1.PodSucceeded, corev1.PodRunning:
+			case corev1.PodSucceeded:
+				r.sharePodsSELinux = parseSharePodsVerdict(terminatedMessage(got))
 				return true, "", nil
 			case corev1.PodFailed:
+				v := parseSharePodsVerdict(terminatedMessage(got))
+				if v.selinux == "denied" {
+					r.sharePodsSELinux = v
+					return false, fmt.Sprintf("it mounted the volume, but at the first pod's SELinux level (%s) could not read the file the first wrote there (%s): the runtime labels this class's volumes for each pod", v.label, v.err), nil
+				}
 				return false, "it failed: " + got.Status.Message, nil
+			case corev1.PodRunning:
+				// Mounted; its verdict comes as it ends.
+				last = "running"
 			}
 			if w := waitingOf(got); w != nil {
 				last = w.Reason
@@ -497,6 +586,9 @@ func (r *run) probeSharePods(ctx context.Context, class string) (mounted bool, w
 			}
 		}
 		if time.Now().After(deadline) {
+			if last == "running" {
+				return true, "", nil
+			}
 			if ev := r.mountEvent(ctx, second); ev != "" {
 				last = ev
 			}
@@ -508,6 +600,15 @@ func (r *run) probeSharePods(ctx context.Context, class string) (mounted bool, w
 		case <-time.After(sharePodsPoll):
 		}
 	}
+}
+
+// levelOf is the MCS level of an SELinux label (user:role:type:level).
+func levelOf(label string) string {
+	parts := strings.SplitN(label, ":", 4)
+	if len(parts) < 4 {
+		return label
+	}
+	return parts[3]
 }
 
 // waitRunning waits for pod name to run and returns its node.
