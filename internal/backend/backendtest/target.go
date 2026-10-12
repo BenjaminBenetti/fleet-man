@@ -57,6 +57,13 @@ type Target struct {
 	// container first, so the rebuild-rollback case skips elsewhere.
 	RebuildRollsBack bool
 
+	// UpOnce says the daemon runs Up once per instance: every create gets an
+	// instance key of its own, and a failed or interrupted create is retried
+	// by a rebuild (a new generation), never by a second Up on the key
+	// (Kubernetes). The up-again case, a second Up on a workspace that has
+	// a container, has nothing to check there and skips.
+	UpOnce bool
+
 	// Skip names cases this target cannot run yet (by Case.Name), each with
 	// the reason the case prints when it skips.
 	Skip map[string]string

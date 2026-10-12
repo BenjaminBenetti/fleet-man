@@ -49,6 +49,9 @@ func caseUp(c *C) {
 // second one behind. The teardown's empty Leftovers proves nothing was
 // orphaned.
 func caseUpAgain(c *C) {
+	if c.Target().UpOnce {
+		c.Skipf("%s runs Up once per instance: every create gets a key of its own and a retry is a rebuild, so nothing is there to adopt or prune", c.Target().Name)
+	}
 	i := c.NewInstance(Fixture{})
 	first := i.ID()
 

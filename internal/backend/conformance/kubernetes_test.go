@@ -148,9 +148,7 @@ func kubernetesTarget(t *testing.T, sel backendtest.Selection) backendtest.Targe
 		Sizes:            backendtest.PlanSizes(),
 		ListSessionsP95:  15 * time.Millisecond,
 		RebuildRollsBack: true,
-		Skip: map[string]string{
-			"up-again": "a cluster create always gets a key of its own: the daemon never runs a second Up on one, so there is nothing to adopt or prune",
-		},
+		UpOnce:           true,
 	}
 }
 

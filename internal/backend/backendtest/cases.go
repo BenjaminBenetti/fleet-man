@@ -30,13 +30,13 @@ type Case struct {
 // Cases lists every conformance case in the order Run runs them: the method
 // cases, then the scenarios.
 //
-// Not covered yet, each waiting on the unit that brings what it needs: the
-// daemon-level scenarios (a create interrupted by a fleetd kill then
-// rebuilt, a daemon kill mid-rebuild reconciled: bash itests 820-822 on a
-// cluster), the DinD volume
-// and the image-cache mirror across stop/start and rebuild, the mic sink and
-// audio output EOF, CopyFile while audio output streams, and the fleet binary
-// after a rebuild (provisioning, above the Backend).
+// The plan's other conformance checks need the daemon or provisioning above
+// the Backend, so bash itests on both backends cover them: a create
+// interrupted by a fleetd kill then rebuilt, a rebuild rolled back, a daemon
+// kill mid-rebuild reconciled (820-822, cluster only), the DinD volume and the
+// image-cache mirror across stop/start and rebuild (714, 718), the mic sink
+// and audio output ending (543, 745), CopyFile while audio output is on
+// (815, cluster only), and the fleet binary after a rebuild (702).
 func Cases() []Case {
 	return []Case{
 		{Name: "up", Kind: Method, Run: caseUp},
