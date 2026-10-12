@@ -279,6 +279,74 @@ func TestDryRun(t *testing.T) {
 	}
 }
 
+// An admission that gives the instance's pod an fsGroup fleet did not
+// render (an OpenShift SCC sets one from the namespace's range) is a warning
+// of the render: the kubelet re-owns the pod's volumes to that group, so the
+// share's 0600 logins become 0660. Fleet's own fsGroup (tier C) and none at
+// all are no warning; another group in place of fleet's is.
+func TestDryRunWarnsOfAnInjectedFSGroup(t *testing.T) {
+	inject := func(gid *int64) func(string, string, runtime.Object) error {
+		return func(_, resource string, obj runtime.Object) error {
+			if p, ok := obj.(*corev1.Pod); ok && gid != nil {
+				if p.Spec.SecurityContext == nil {
+					p.Spec.SecurityContext = &corev1.PodSecurityContext{}
+				}
+				p.Spec.SecurityContext.FSGroup = gid
+			}
+			return nil
+		}
+	}
+	scc := ptr(int64(1000650000))
+	for _, tt := range []struct {
+		name    string
+		nonRoot bool
+		admits  *int64
+		want    string
+	}{
+		{"none rendered, none given", false, nil, ""},
+		{"an SCC's over none", false, scc, "fsGroup 1000650000 (fleet sets none"},
+		{"fleet's own kept", true, ptr(int64(1000)), ""},
+		{"another in place of fleet's", true, scc, "fsGroup 1000650000 (fleet sets 1000"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			o := mustRender(t, nil, func(_ *Input, r *RenderInput) {
+				if tt.nonRoot {
+					r.Identity = Identity{NonRoot: true, UID: ptr(int64(1000)), GID: ptr(int64(1000))}
+				}
+			})
+			cs, _ := fakeAdmission(t, inject(tt.admits))
+			if err := DryRun(context.Background(), cs, o); err != nil {
+				t.Fatal(err)
+			}
+			got := ""
+			for _, w := range o.Warnings {
+				if strings.Contains(w, "fsGroup") {
+					got = w
+				}
+			}
+			switch {
+			case tt.want == "" && got != "":
+				t.Errorf("warned %q", got)
+			case tt.want != "" && (!strings.Contains(got, tt.want) || !strings.Contains(got, "0660")):
+				t.Errorf("warning %q, want one with %q", got, tt.want)
+			}
+			// Asked again, the warning is there once.
+			if err := DryRun(context.Background(), cs, o); err != nil {
+				t.Fatal(err)
+			}
+			n := 0
+			for _, w := range o.Warnings {
+				if strings.Contains(w, "fsGroup") {
+					n++
+				}
+			}
+			if n > 1 {
+				t.Errorf("the warning is there %d times", n)
+			}
+		})
+	}
+}
+
 // baselinePSA refuses what baseline pod security refuses that the tests
 // render: the debug grants and privileged pods.
 func baselinePSA(_, resource string, obj runtime.Object) error {

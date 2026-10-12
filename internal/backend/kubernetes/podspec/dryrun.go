@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -65,9 +67,12 @@ func DryRun(ctx context.Context, api kubernetes.Interface, o *Objects) error {
 	}
 	pod := o.Pod()
 	pod.Name, pod.GenerateName = "", pod.Name+"-"
+	rendered := fsGroupOf(&o.StatefulSet.Spec.Template.Spec)
+	var admitted *corev1.Pod
 	checks := []check{
 		{object: "Pod " + names.Pod(o.StatefulSet.Name), run: func() error {
-			_, err := api.CoreV1().Pods(ns).Create(ctx, pod, create)
+			got, err := api.CoreV1().Pods(ns).Create(ctx, pod, create)
+			admitted = got
 			return err
 		}},
 		{object: "StatefulSet " + o.StatefulSet.Name, run: func() error {
@@ -150,9 +155,41 @@ func DryRun(ctx context.Context, api kubernetes.Interface, o *Objects) error {
 		ds = addDenial(ds, d)
 	}
 	if len(ds) == 0 {
+		if w := injectedFSGroupWarning(rendered, admitted); w != "" && !slices.Contains(o.Warnings, w) {
+			o.Warnings = append(o.Warnings, w)
+		}
 		return nil
 	}
 	return &denials{ds: ds}
+}
+
+// fsGroupOf is a pod spec's fsGroup, nil without one.
+func fsGroupOf(spec *corev1.PodSpec) *int64 {
+	if spec.SecurityContext == nil {
+		return nil
+	}
+	return spec.SecurityContext.FSGroup
+}
+
+// injectedFSGroupWarning is the warning of an admission that gives the
+// instance's pod an fsGroup fleet did not render (rendered; an OpenShift SCC
+// sets one from the namespace's range): the kubelet then re-owns the pod's
+// volumes to that group as they mount and makes their files group-readable
+// and writable, so the share's 0600 agent logins become 0660, readable by
+// every pod the cluster gives that group. "" when it set none, or fleet's.
+func injectedFSGroupWarning(rendered *int64, admitted *corev1.Pod) string {
+	if admitted == nil {
+		return ""
+	}
+	got := fsGroupOf(&admitted.Spec)
+	if got == nil || (rendered != nil && *rendered == *got) {
+		return ""
+	}
+	fleets := "none"
+	if rendered != nil {
+		fleets = strconv.FormatInt(*rendered, 10)
+	}
+	return fmt.Sprintf("the cluster's admission gives the instance's pod fsGroup %d (fleet sets %s; an OpenShift SCC or another mutating policy): Kubernetes re-owns the pod's volumes to group %d as they mount and makes their files group-readable and writable, so the fleet's share's private files (agent logins, 0600) become 0660, readable by every pod the cluster gives group %d", *got, fleets, *got, *got)
 }
 
 // Admitted is a translation and its render, admitted by the API server.
