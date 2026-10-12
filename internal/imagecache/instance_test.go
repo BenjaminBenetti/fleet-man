@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
 
 // scriptRig runs the probe and configure scripts for real under root: the
@@ -205,12 +207,15 @@ func TestConfigurePodEngine(t *testing.T) {
 			}
 		})
 	}
-	t.Run("keys and no tools: left alone", func(t *testing.T) {
+	t.Run("keys and no tools: the script leaves the merge to fleet", func(t *testing.T) {
 		r := newScriptRig(t)
 		r.podEngine(`{"mtu": 1450}`)
-		r.configure()
+		out, err := r.run(configureScript("http://fs-alpha-1a2b3c4d-imgcache:5000", "fs-alpha-1a2b3c4d-imgcache:5000"))
+		if err != nil || !strings.Contains(out, mergeMarkerNoTool) {
+			t.Fatalf("configure: %q, %v; want the no-tool marker", out, err)
+		}
 		if got := r.read(PodEngineConfig); got != `{"mtu": 1450}` {
-			t.Fatalf("daemon.json = %q, want it untouched", got)
+			t.Fatalf("daemon.json = %q, want it untouched by the script", got)
 		}
 	})
 	t.Run("found by its socket", func(t *testing.T) {
@@ -229,6 +234,76 @@ func TestConfigurePodEngine(t *testing.T) {
 		}
 		if kills := r.read("/kills"); kills != "" {
 			t.Fatalf("signalled %q", kills)
+		}
+	})
+}
+
+// ExecCommand runs an instance command (sh -c <script>) in the rig, as the
+// backend would in the instance.
+func (r *scriptRig) ExecCommand(_ string, command []string) *backend.Cmd {
+	script := command[len(command)-1]
+	for _, p := range []string{"/etc/docker", "/opt/fleet/docker", "/proc/[0-9]*"} {
+		script = strings.ReplaceAll(script, p, r.path(p))
+	}
+	cmd := exec.Command("/bin/sh", "-c", script)
+	cmd.Env = r.env
+	return backend.NewCmd(cmd, nil)
+}
+
+// An image with neither python3 nor jq (docker:dind's) whose daemon.json has
+// keys of its own (on a cluster pod-init writes the engine's MTU and cgroup
+// parent there) gets the mirror merged by fleet, its keys kept, and its
+// dockerd reloaded; before, it never got the mirror and was reported
+// configured. A second configure changes nothing.
+func TestConfigureWithoutPythonOrJq(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		engine bool
+	}{{"the instance's dockerd", false}, {"the pod's engine", true}} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newScriptRig(t, "base64")
+			file := "/etc/docker/daemon.json"
+			if tt.engine {
+				r.podEngine(`{"mtu": 1450, "registry-mirrors": ["http://other:5000"]}`)
+				file = PodEngineConfig
+			} else {
+				r.write(file, `{"mtu": 1450, "registry-mirrors": ["http://other:5000"]}`, 0o644)
+			}
+			r.dockerd("4242")
+			if err := ConfigureInstanceDocker(r, "/ws", "http://fs-alpha-1a2b3c4d-imgcache:5000", "fs-alpha-1a2b3c4d-imgcache:5000"); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{
+				"mtu":                 float64(1450),
+				"registry-mirrors":    []any{"http://other:5000", "http://fs-alpha-1a2b3c4d-imgcache:5000"},
+				"insecure-registries": []any{"fs-alpha-1a2b3c4d-imgcache:5000"},
+			}
+			sameJSON(t, file, r.read(file), want)
+			kills := strings.TrimSpace(r.read("/kills"))
+			if tt.engine != (kills == "") || (!tt.engine && kills != "-HUP 4242") {
+				t.Fatalf("kills %q", kills)
+			}
+			if left, _ := filepath.Glob(r.path(file) + ".*"); len(left) != 0 {
+				t.Fatalf("temp files left: %v", left)
+			}
+			before := r.read(file)
+			if err := ConfigureInstanceDocker(r, "/ws", "http://fs-alpha-1a2b3c4d-imgcache:5000", "fs-alpha-1a2b3c4d-imgcache:5000"); err != nil {
+				t.Fatal(err)
+			}
+			if r.read(file) != before || strings.Count(r.read("/kills"), "HUP") > 1 {
+				t.Fatalf("a second configure rewrote %s or reloaded again", file)
+			}
+		})
+	}
+	t.Run("not an object: left alone, an error", func(t *testing.T) {
+		r := newScriptRig(t, "base64")
+		r.write("/etc/docker/daemon.json", `["no"]`, 0o644)
+		r.dockerd("4242")
+		if err := ConfigureInstanceDocker(r, "/ws", "http://m:5000", "m:5000"); err == nil || !strings.Contains(err.Error(), "not a JSON object") {
+			t.Fatalf("ConfigureInstanceDocker = %v, want the refusal", err)
+		}
+		if got := r.read("/etc/docker/daemon.json"); got != `["no"]` {
+			t.Fatalf("daemon.json = %q", got)
 		}
 	})
 }
