@@ -56,6 +56,10 @@ type fleetPage struct {
 	// saveWarnings is what the daemon warned about the fleet settings it
 	// saved last (noteSaveWarnings).
 	saveWarnings []string
+	// removingFleets are the empty fleets whose removal job runs
+	// (removeEmptyFleet): kept off the list until it ends, though the
+	// daemon lists them until then.
+	removingFleets map[string]bool
 	// kubeRecovery is the Kubernetes recovery dialog (mode == viewKubeRecovery).
 	kubeRecovery kubeRecoveryState
 	// vscodeDlg is the VS Code Remote-SSH consent dialog (mode == viewEditorConsent).
@@ -182,6 +186,10 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.applyEditorResult(m, msg.(editorFinishedMsg))
 
 	case operationDoneMsg:
+		if done := msg.(operationDoneMsg); done.instance == "" {
+			// A fleet's removal ended: what the daemon still lists shows.
+			delete(fleetPage.removingFleets, done.fleet)
+		}
 		fleetPage.buildRows(m)
 		return nil
 

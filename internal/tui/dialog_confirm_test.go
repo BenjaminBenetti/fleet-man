@@ -44,10 +44,32 @@ func TestRemovingAnEmptyFleetRunsOffTheUILoop(t *testing.T) {
 		if _, still := m.st.Fleets["alpha"]; still || fp.mode != viewNormal {
 			t.Fatalf("%v: the fleet is still listed (mode %v)", mode, fp.mode)
 		}
+		// The daemon lists the fleet until its job ends (the job's start
+		// pushes the state): it stays off the list meanwhile.
+		m.st = &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}
+		fp.buildRows(m)
+		if listsFleet(fp, "alpha") {
+			t.Fatalf("%v: a state push put the fleet being removed back on the list", mode)
+		}
 		close(release)
 		done, ok := cmd().(operationDoneMsg)
 		if !ok || done.err != nil || !strings.Contains(done.message, "Removed fleet alpha") || !strings.Contains(done.message, "objects stay") {
 			t.Fatalf("%v: result %+v", mode, done)
 		}
+		// Once the job ended, what the daemon still lists shows again (a
+		// removal that failed).
+		fp.Update(m, done)
+		if !listsFleet(fp, "alpha") {
+			t.Fatalf("%v: a fleet the daemon still lists after its removal ended is not shown", mode)
+		}
 	}
+}
+
+func listsFleet(fp *fleetPage, name string) bool {
+	for _, r := range fp.rows {
+		if r.kind == rowFleetHeader && r.fleetName == name {
+			return true
+		}
+	}
+	return false
 }

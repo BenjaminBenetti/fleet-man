@@ -52,10 +52,16 @@ func (fleetPage *fleetPage) updateConfirmDelete(m *model, msg tea.Msg) tea.Cmd {
 // removeEmptyFleet takes a fleet with no instances off the list at once and
 // removes it on the daemon off the UI loop: the destroy_fleet job tears its
 // caches, network and shares down on every runtime it has (a cluster may be
-// slow, or away), and operationDoneMsg reloads what is left.
+// slow, or away), and operationDoneMsg reloads what is left. The daemon lists
+// the fleet until the job ends, so the list leaves it out until then
+// (removingFleets).
 func (fleetPage *fleetPage) removeEmptyFleet(m *model, name string) tea.Cmd {
 	delete(m.st.Fleets, name)
 	delete(fleetPage.collapsed, name)
+	if fleetPage.removingFleets == nil {
+		fleetPage.removingFleets = map[string]bool{}
+	}
+	fleetPage.removingFleets[name] = true
 	fleetPage.buildRows(m)
 	m.message = fmt.Sprintf("Removing fleet %s…", name)
 	return deleteFleetCmd(name, nil, m.portForwards)
