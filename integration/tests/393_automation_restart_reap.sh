@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: automation runs survive a daemon restart — a fired trigger's agent
 # is launched, fleetd is killed mid-run (SIGKILL, so nothing is flushed on the way
 # out), and the restarted daemon reloads ~/.fleet/automation/watch.json and still
 # reaps the idle run. Before the watch list was persisted, a restart left every
 # running automation instance unreaped for good. Also checks the restarted daemon
 # does not fire the trigger a second time.
+#
+# On kubernetes the agent runs on the run's connection: the pod and its tmux
+# outlive fleetd, and the restarted daemon reaches the agent again once its
+# pool reconnects (the idle clock restarts with the daemon; a probe that cannot
+# reach the pod yet neither resets nor spends it).
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -38,6 +44,14 @@ wait_no_daemon || fail "a lingering daemon would not exit"
 
 MARKER="RESTARTREAPMARKER393"
 
+# The agent's target, as in 391: devcontainer, or the run's connection on
+# kubernetes, where the command's API key passes the automation login check
+# (the fake claude ignores it).
+agent_target='"backend": "devcontainer"'
+if itest_backend_is kubernetes; then
+  agent_target="\"backend\": \"kubernetes\", \"kube_cluster\": \"$(_be_cluster_id)\""
+fi
+
 # A cron matching only the current minute, fired by the daemon's startup tick
 # (see 391 for why we align to the top of a fresh minute first).
 sec="10#$(date +%S)"
@@ -55,9 +69,9 @@ cat > "${HOME}/.fleet/state.json" <<EOF
         "agents": [
           {
             "name": "writer",
-            "command": "claude --system-prompt '\${SYS_PROMPT}' '\${PROMPT}'",
+            "command": "ANTHROPIC_API_KEY=itest claude --system-prompt '\${SYS_PROMPT}' '\${PROMPT}'",
             "systemPrompt": "be-terse",
-            "backend": "devcontainer"
+            ${agent_target}
           }
         ],
         "triggers": [
@@ -89,9 +103,11 @@ done
 [ -n "${inst}" ] || fail "scheduler never spawned an automation instance"
 info "spawned instance: ${inst}"
 
+# A cluster's first create also delivers the image to the node (see 391).
 info "waiting for the agent to launch and receive the prompt"
 out=""
-for _ in $(seq 1 80); do
+deadline=$(( $(date +%s) + $(_scale_timeout 600) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
   out=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/${inst}" -- cat /tmp/automation_agent_out 2>/dev/null || true)
   [ -n "${out}" ] && break
   sleep 3
@@ -128,9 +144,13 @@ new_pid=$(pgrep -f "${FLEET_BIN} server" | head -1 || true)
 [ -n "${new_pid}" ] || fail "daemon did not come back"
 [ "${new_pid}" != "${old_pid}" ] || fail "daemon pid unchanged (${new_pid}); it was not restarted"
 
+# The 60s idle runs from the restart; the reap waits for the first probe
+# that reaches the agent after it, then the destroy (a StatefulSet and its
+# disk on kubernetes).
 info "waiting for the restarted daemon to reap the idle run"
 reaped=""
-for _ in $(seq 1 60); do
+deadline=$(( $(date +%s) + $(_scale_timeout 240) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
   if ! grep -qF -- "\"${inst}\"" "${HOME}/.fleet/state.json" 2>/dev/null; then
     reaped=1
     break
