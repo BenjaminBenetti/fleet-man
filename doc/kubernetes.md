@@ -494,9 +494,12 @@ server.
   are bound in the pod by the agent and relayed to the exact host path recorded
   at create. Each is owned by the remote user with the host socket's mode
   (bound as root only in a folder that only root can change); missing parent
-  folders are made 0700, owned by the remote user. A socket folder is listed at
-  create: sockets made in it later need a rebuild. Binds under `/proc`, `/sys`,
-  `/dev` and `/opt/fleet` are refused.
+  folders are made 0700, owned by the remote user. A bound socket folder
+  (`/tmp/.X11-unix`, a gpg agent's) follows the host: fleetd lists it every
+  second while a pod that binds it has a session, so a socket made or removed
+  there later comes and goes in the pod too (at most 16 folders and 64
+  sockets per pod). A socket under `/dev` (`/dev/log`) is relayed like any
+  other; binds under `/proc`, `/sys` and `/opt/fleet` are refused.
 - **The SSH agent** reaches pods through `/fleet-mounts/control/ssh-agent.sock`,
   relayed like Docker's. `FLEET_SSH_AGENT_SOCK` set to a live socket on the
   daemon host serves pods that agent instead (through the same allowlist);
@@ -610,8 +613,12 @@ memory request is evicted first under node memory pressure: raise
    success the trash is deleted in the background (`<sts>-cmit-g<n>`).
 
 A failed create retries the same way. Rebuilding a failed clone destination
-does a fresh checkout. An interrupted rebuild is rolled back by the next
-fleetd.
+does a fresh checkout. A rebuild the daemon stopped before it changed the
+instance leaves it as it was; one stopped later is rolled back by the next
+fleetd. An instance whose StatefulSet was deleted outside fleet (its disk
+kept) is rebuilt as a stopped one, over that disk. Each run of the lifecycle
+hooks (create, rebuild, start) has a ceiling, `FLEET_KUBE_SETUP_TIMEOUT` (1h),
+past which it fails `kubernetes:timeout`, naming what still runs in the pod.
 
 <a id="clone"></a>**Clone** (`C`, `fleet clone`) copies the source's disk:
 snapshot first, then a CSI clone, then a copier Job, whichever the connection
@@ -808,6 +815,7 @@ Read by fleetd (set them where the daemon starts). Durations are Go durations
 | `FLEET_KUBE_SHARED_STATE_TIMEOUT` | 60s | the Ready gate |
 | `FLEET_KUBE_SNAPSHOT_TIMEOUT` | 30m | a clone's snapshot |
 | `FLEET_KUBE_COPY_TIMEOUT` | 2h | a clone's copier Job |
+| `FLEET_KUBE_SETUP_TIMEOUT` | 1h | one run of the lifecycle hooks (create, rebuild, start) |
 | `FLEET_KUBE_SEED_CACHE` | | `off` seeds every automation run in full |
 | `FLEET_AUTOMATION_CREATE_TIMEOUT` | 20m | a cluster automation run's create |
 | `FLEET_AUTOMATION_LOGIN_CHECK` | | `off` skips the cluster agent login check |
@@ -836,8 +844,7 @@ In instances: `FLEET_PEER_DOMAIN` (sibling DNS) and, with DooD,
   the disk.
 - Shared folders are eventually consistent, within seconds, and pause while
   fleetd is down ([section 7](#7-shared-folders-logins-and-sync)).
-- Host sockets in a socket folder are the ones there at create; a host-gateway
-  mirror reaches loopback-only host services.
+- A host-gateway mirror reaches loopback-only host services.
 - On a privileged pod, everything a user runs is in the pod's `fleet-user`
   cgroup, under its `memory.max`. On containerd and CRI-O, the
   docker-in-docker feature's entrypoint still creates an empty `init` cgroup at
