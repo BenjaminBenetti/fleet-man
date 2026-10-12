@@ -4,8 +4,9 @@ name: Nightly (Kubernetes)
 # (placement, drains, a ReadWriteMany class across nodes), an SELinux-
 # enforcing node, an overlay network that enforces policies at a small MTU,
 # snapshot clones and the conformance suite on two classes, a node that
-# takes few volumes, a WAN between fleetd and the cluster, fleetd at 100 and
-# 300 pods with the reconnect storm of a restart, and the long property and
+# takes few volumes, volumes that fill and grow, a WAN between fleetd and
+# the cluster, fleetd at 100 and 300 pods with the reconnect storm of a
+# restart, a poll pass over bound files on macOS, and the long property and
 # fuzz runs. Each job runs one integration/nightly/*.sh, as a local run in
 # the QA container does (DEVELOPMENT.md "Nightly jobs"); its output folder
 # (summary, budgets.tsv, failed tests' artifacts, cluster dumps) is the
@@ -186,6 +187,31 @@ jobs:
         if: always()
         with:
           name: nightly-scale-300
+          path: ${{ runner.temp }}/nightly
+          if-no-files-found: ignore
+
+  # What bound files cost a side without inotify, which polls: a pass over
+  # a big host folder within budget on macOS (no BSD runner exists).
+  poll-cost:
+    name: nightly poll cost (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run integration/nightly/poll-cost.sh
+        env:
+          FLEET_NIGHTLY_OUT: ${{ runner.temp }}/nightly
+        run: ./integration/nightly/poll-cost.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-poll-cost
           path: ${{ runner.temp }}/nightly
           if-no-files-found: ignore
 
