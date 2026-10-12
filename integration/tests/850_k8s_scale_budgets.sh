@@ -69,7 +69,9 @@ exec_total() { metric_sum apiserver_request_total '/verb="CONNECT"/ && /subresou
 server_pid() { pgrep -f "${FLEET_BIN} server" 2>/dev/null | head -n1 || true; }
 # alive <pid> — the process runs (a zombie waiting for its reaper does not).
 alive() { local st; st=$(ps -o stat= -p "$1" 2>/dev/null || true); [ -n "${st}" ] && [ "${st#Z}" = "${st}" ]; }
-running_count() { "${FLEET_BIN}" ls 2>/dev/null | awk -v f="${FIXTURE_REPO_NAME}" '$1 == f && $3 == "running" { n++ } END { print n + 0 }'; }
+# running_count — the fleet's running instances (named: a bare `fleet ls`
+# lists only the fleet of the checkout it runs in, on CI fleet-man's own).
+running_count() { "${FLEET_BIN}" ls "${FIXTURE_REPO_NAME}" 2>/dev/null | awk -v f="${FIXTURE_REPO_NAME}" '$1 == f && $3 == "running" { n++ } END { print n + 0 }'; }
 
 mkdir -p "${workdir}/fixture/.devcontainer"
 printf '{ "name": "fleet scale fixture", "image": "%s" }\n' "${image}" > "${workdir}/fixture/.devcontainer/devcontainer.json"
@@ -146,7 +148,7 @@ until [ "$(agent_execs)" -lt "${n}" ]; do
 done
 before=$(exec_total)
 restart=$(date +%s%N)
-"${FLEET_BIN}" ls >/dev/null
+"${FLEET_BIN}" ls "${FIXTURE_REPO_NAME}" >/dev/null
 peak=0
 last=${before}
 last_at=${restart}
