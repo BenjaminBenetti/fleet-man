@@ -38,6 +38,8 @@ can make it fail on purpose. Each failed only under heavy host load.
 | `internal/podagent` `TestTakeoverHungHolder` | once, load average ~50 | the SIGSTOPped agent ends with exit 0, not SIGKILL; 60/60 under CPU stress since |
 | `internal/mcpbridge` `TestBridgeWithGoSDK` | once | "lost the connection to the fleet daemon" for the call after the restart |
 | `internal/server` `TestGitHostKeyStreamRequiresRemoteToken` | on CI | `Send` meets `io.EOF` before the refusal |
+| `internal/server` `TestEditorSessionWritesTheConfigAndLogs` | once, `-race` beside ten clusters | the creation log read before its unfinished line was ended |
+| `internal/server` `TestShareSyncRPCs` | once, `-race` beside ten clusters | `WaitShareSync` with a deaf spoke answered synced |
 | `integration/tests/716_deb_cache.sh` (kubernetes) | 2 of 4 runs beside other clusters | `hits 0 -> 0`: the apt detector answered DIRECT |
 | `integration/tests/809_k8s_relay_failure_logged.sh` | once | the TUI's tmux server went away after C-c in the log stream |
 

@@ -49,7 +49,7 @@ up() {
   rm -f "${manifest}"
   k -n kube-system rollout status daemonset/openebs-lvm-node --timeout=300s >/dev/null
   k -n kube-system rollout status deployment/openebs-lvm-controller --timeout=300s >/dev/null
-  plugin "vgs fleetvg >/dev/null 2>&1 || { pvcreate -q ${dev} && vgcreate -q fleetvg ${dev}; }"
+  plugin "vgs fleetvg >/dev/null 2>&1 || { pvcreate -q ${dev} && vgcreate -q fleetvg ${dev}; }" >&2
   k apply -f - >/dev/null <<'EOF'
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
