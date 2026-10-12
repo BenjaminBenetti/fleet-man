@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: no-docker
-# Description: a remote TUI over the fleet gateway connects a cluster from fleetd's host kubeconfig and sets Allow privileged and Extra PATH exactly as a local TUI does; [L] Run login here is not offered remotely
+# Description: a remote TUI over the fleet gateway connects a cluster from fleetd's host kubeconfig and sets the Storage pickers (shared and instance-disk classes), Allow privileged and Extra PATH exactly as a local TUI does; [L] Run login here is not offered remotely
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -109,10 +109,26 @@ tui_wait_for_absent "Connect a Kubernetes cluster" 20
 tui_wait_for "☸ itest-dead" 5
 [ "$(itest_kube_clusters 'print scalar @c')" = 1 ] || fail "fleetd should hold one connection"
 
-info "the remote editor sets Allow privileged and Extra PATH"
+info "the remote editor sets the Storage pickers, Allow privileged and Extra PATH"
 tui_cursor_to '☸ itest-dead'
 tui_send Enter
 tui_wait_for "Edit cluster ☸ itest-dead" 5
+# The Storage pickers: fleetd lists no class for a dead context, so each
+# takes a typed name, as a cluster that forbids listing them does.
+tui_cursor_to 'Shared storage:'
+tui_send Enter
+sleep 0.3
+tui_send_text "itest-shared"
+tui_send Enter
+tui_wait_for "Saved Shared storage" 15
+tui_cursor_to 'Instance disks:'
+tui_send Enter
+sleep 0.3
+tui_send_text "itest-disks"
+tui_send Enter
+tui_wait_for "Saved Instance disks" 15
+[ "$(itest_kube_clusters 'print "$c[0]{shared_storage_class} $c[0]{storage_class}"')" = "itest-shared itest-disks" ] \
+  || fail "the storage classes picked over the gateway were not saved: $(itest_kube_clusters 'print "$c[0]{shared_storage_class} $c[0]{storage_class}"')"
 tui_cursor_to 'Allow privileged:'
 tui_send Right
 tui_wait_for "Privileged pods allowed" 15
@@ -139,4 +155,4 @@ tui_send Enter
 tui_wait_for "Disconnected ☸ itest-dead" 20
 [ "$(itest_kube_clusters 'print scalar @c')" = 0 ] || fail "the connection must be gone"
 
-pass "a remote TUI over the gateway connects, edits (Allow privileged, Extra PATH) and disconnects a cluster as a local one does"
+pass "a remote TUI over the gateway connects, edits (Storage pickers, Allow privileged, Extra PATH) and disconnects a cluster as a local one does"
