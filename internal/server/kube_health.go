@@ -782,6 +782,9 @@ func (w *kubeWorker) applyFull(rec fleet.KubeCluster, link *kubeLink, res prefli
 			flog.Info("kube: the connection reaches another cluster now", "cluster", rec.ID, "was", rec.ClusterUID, "now", uid)
 		}
 	}
+	if n := w.m.instanceCount(rec.ID); n > kubeManyInstances {
+		res.Warnings = append(append([]string(nil), res.Warnings...), kubeManyInstancesWarning(n))
+	}
 	w.mu.Lock()
 	if started.Before(w.fullStarted) || kubeConnectionKey(w.rec) != kubeConnectionKey(rec) {
 		w.mu.Unlock()
@@ -834,6 +837,36 @@ func (m *kubeManager) instancesOn(id string) bool {
 	}
 	users, err := m.svc.kubeUsers(id)
 	return err != nil || hasInstances(users)
+}
+
+// kubeManyInstances is how many instances a connection holds before it
+// warns: fleetd's memory and its reconnect after a restart grow with each
+// (the nightly scale run's budgets hold at 300).
+const kubeManyInstances = 150
+
+// kubeManyInstancesWarning is the warning of a connection holding n
+// instances, more than kubeManyInstances.
+func kubeManyInstancesWarning(n int) string {
+	return fmt.Sprintf("%d instances on this connection (more than %d): each adds to the daemon's memory and to its reconnect after a restart", n, kubeManyInstances)
+}
+
+// instanceCount is how many instances connection id holds (0 when the state
+// cannot be read: a warning, not a refusal).
+func (m *kubeManager) instanceCount(id string) int {
+	if m.svc == nil {
+		return 0
+	}
+	users, err := m.svc.kubeUsers(id)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, u := range users {
+		if u.GetInstance() != "" {
+			n++
+		}
+	}
+	return n
 }
 
 func shortClusterUID(uid string) string {

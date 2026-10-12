@@ -361,6 +361,35 @@ func TestKubeClusterUIDFollowsARecreatedCluster(t *testing.T) {
 	}
 }
 
+// A connection holding more instances than fleetd's scale budgets are
+// measured at warns, from its next full run on; one at the limit does not.
+func TestKubeConnectionWarnsOfManyInstances(t *testing.T) {
+	f := newKubeFixture(t)
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
+	many := func() string {
+		t.Helper()
+		w := f.svc.kube.newWorker(f.stored(id))
+		w.runFull(context.Background(), nil)
+		for _, warning := range w.status().GetWarnings() {
+			if strings.Contains(warning, "instances on this connection") {
+				return warning
+			}
+		}
+		return ""
+	}
+	for i := range kubeManyInstances {
+		inst := fmt.Sprintf("i%d", i)
+		seedKubeInstance(t, "alpha", inst, id, names.InstanceKey(testIdentity.DaemonID, "alpha", inst, time.Unix(1700000000, 0)))
+	}
+	if w := many(); w != "" {
+		t.Fatalf("%d instances warned %q", kubeManyInstances, w)
+	}
+	seedKubeInstance(t, "beta", "one", id, names.InstanceKey(testIdentity.DaemonID, "beta", "one", time.Unix(1700000000, 0)))
+	if w, want := many(), fmt.Sprintf("%d instances on this connection (more than %d)", kubeManyInstances+1, kubeManyInstances); !strings.HasPrefix(w, want) {
+		t.Fatalf("warning %q, want %q...", w, want)
+	}
+}
+
 // orderLease records the Lease calls of the connection's successive targets.
 type orderLease struct {
 	n   int
