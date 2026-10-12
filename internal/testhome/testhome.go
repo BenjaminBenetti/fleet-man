@@ -42,10 +42,13 @@ func Run(m *testing.M) int {
 	}
 	restore := Use(home)
 	code := m.Run()
-	restore()
+	// Removed before HOME is handed back, so work the tests left running
+	// writes into home while it goes, not into the real one (Main exits
+	// right after).
 	if err := os.RemoveAll(home); err != nil {
 		fmt.Fprintf(os.Stderr, "testhome: leaving %s: %v\n", home, err)
 	}
+	restore()
 	return code
 }
 
