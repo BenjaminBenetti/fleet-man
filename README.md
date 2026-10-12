@@ -152,7 +152,8 @@ Enabling a fleet's **Codex mount** shares `~/.codex` and installs Codex in each
 instance. Creation and rebuilds also configure Codex's default permissions for
 [automatic approval review](https://learn.chatgpt.com/docs/sandboxing/auto-review)
 ("Approve for me"): `approval_policy = "on-request"`,
-`approvals_reviewer = "auto_review"`, and `sandbox_mode = "workspace-write"`.
+`approvals_reviewer = "auto_review"`, and `sandbox_mode = "danger-full-access"`
+(the instance is the sandbox, so Codex's own is off).
 These three top-level settings are reset on every create/rebuild of any instance
 in the fleet, including when Codex is already installed in the image. Use a named
 Codex profile for a different permission mode; other settings and named profiles
