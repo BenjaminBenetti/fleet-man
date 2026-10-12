@@ -418,6 +418,12 @@ func (c *copier) copyXattrs(src, dst string, inFD, outFD int, isLink bool) ([]by
 
 // finishDirs applies every copied dir's metadata, deepest first.
 func (c *copier) finishDirs() error {
+	return c.finishDirsSkipping(func(error) bool { return false })
+}
+
+// finishDirsSkipping is finishDirs, leaving out a dir whose metadata fails
+// to copy with an error skip accepts.
+func (c *copier) finishDirsSkipping(skip func(error) bool) error {
 	c.mu.Lock()
 	dirs := slices.Clone(c.dirs)
 	c.dirs = nil
@@ -425,6 +431,9 @@ func (c *copier) finishDirs() error {
 	sort.SliceStable(dirs, func(i, j int) bool { return len(dirs[i].dst) > len(dirs[j].dst) })
 	for _, d := range dirs {
 		if err := c.applyMeta(d.src, d.dst, -1, -1, &d.st); err != nil {
+			if skip(err) {
+				continue
+			}
 			return fmt.Errorf("copy %s: %w", c.imagePath(d.src), err)
 		}
 		if err := setTimes(d.dst, &d.st); err != nil {

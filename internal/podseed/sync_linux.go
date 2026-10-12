@@ -436,6 +436,13 @@ func (s *syncer) replaceFile(src, dst string, st *unix.Stat_t) error {
 	return nil
 }
 
+// finishDirs gives the pass's dirs their metadata. A live copy leaves out a
+// dir the source lost since the walk listed it (a git gc emptying
+// objects/<xx>): the next pass removes its copy.
+func (s *syncer) finishDirs() error {
+	return s.finishDirsSkipping(func(err error) bool { return s.vanished(err) == nil })
+}
+
 // vanished is nil for err on a live copy whose source entry went away while
 // it was copied; err otherwise.
 func (s *syncer) vanished(err error) error {

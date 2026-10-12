@@ -116,6 +116,35 @@ func TestSyncLeavesExcludedPathsAlone(t *testing.T) {
 	}
 }
 
+// A live copy's pass leaves out a dir the source lost after the walk listed
+// it (a git gc emptying objects/<xx> while the source runs): its metadata is
+// no error, and the next pass removes the copy.
+func TestALiveCopySkipsADirGoneBeforeItsMetadata(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	writeTree(t, src, map[string]string{"ws/r/.git/objects/c5/1234": "object", "ws/a": "a"})
+	var stats copyStats
+	s, err := newSyncer(src, dst, true, 4, &stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.onList = func(rel string) {
+		if rel == "ws/r/.git/objects/c5" {
+			if err := os.RemoveAll(filepath.Join(src, rel)); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	syncPass(t, s, "ws")
+	s.onList = nil
+	syncPass(t, s, "ws")
+	if _, err := os.Lstat(filepath.Join(dst, "ws/r/.git/objects/c5")); !os.IsNotExist(err) {
+		t.Errorf("the copy of the dir the source lost, after the next pass: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "ws/a")); string(got) != "a" {
+		t.Errorf("ws/a = %q", got)
+	}
+}
+
 func TestALiveCopyLeavesGitLocksOut(t *testing.T) {
 	src, dst := t.TempDir(), t.TempDir()
 	writeTree(t, src, map[string]string{
