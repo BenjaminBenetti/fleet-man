@@ -360,9 +360,12 @@ mounts, named volumes. Auto tests classes and picks the mode:
 |---|---|---|
 | multi-node | a ReadWriteMany class passes the multi-node test (two pods on two nodes, plus a POSIX self-test: rename, symlinks, chmod/chown, uid, unix sockets, O_APPEND, flock) | instances schedule anywhere the share's volume reaches. Codex's SQLite moves pod-local (`CODEX_SQLITE_HOME`); a socket inside a shared folder connects only from the same node; writes made on another node reach watchers a little later |
 | single-node | no class passes | all of a fleet's pods run on the node holding its share; the cluster shows `⚠ Each fleet's instances run together on one node (cap N)`, N from node capacity and the volume attach limit. Different fleets can use different nodes |
-| copy | one volume cannot be mounted by two pods on one node (deep test) | no share: each instance keeps its own copy, and logins may need repeating per instance (limited) |
+| copy | one volume cannot be mounted by two pods on one node (the deep test's `share_pods`) | no share: each instance keeps its own copy, and logins may need repeating per instance (limited) |
 
-The test takes about a minute per class and is cached; `fleet cluster test
+The first create that makes a fleet share on a connection no deep test has told
+runs it first (the create's `testing the cluster` step; concurrent creates
+share one run), so the share gets the mode the cluster supports. The multi-node
+test takes about a minute per class and is cached; `fleet cluster test
 --storage <class>` runs it now. A class with a large minimum size (Filestore)
 asks before Auto tests it. The editor says what to expect of common classes:
 SMB (Azure Files' built-in classes) keeps no owners or symlinks and EFS access
@@ -447,6 +450,10 @@ sync pauses while fleetd is down and catches up when it returns.
   cannot be bound.
 - **Named volumes** live on the share under `.vol/` and are never synced to
   the host. The last instance using one removes it.
+- **An injected fsGroup** (an OpenShift SCC, or another mutating admission
+  policy) has Kubernetes re-own the share's files to that group as they mount:
+  0600 agent logins become 0660, readable by every pod given the group. The
+  create warns when admission gives the pod an fsGroup fleet did not set.
 - **Destroying a fleet** flushes the sync, then deletes the share
   (`share_retention=delete`). A share whose flush failed is kept and labelled
   `fleet.dev/orphan=flush-failed`; Settings counts it and `fleet cluster gc`
@@ -518,8 +525,9 @@ server.
   dockerd, fleet writes its `daemon.json` before it starts: the pod network's
   MTU (so nested networks never fragment under an overlay CNI),
   `dind_address_pool`, and on a privileged pod a cgroup parent inside the pod,
-  so the engine's containers count against it. Clearing `dind_address_pool`
-  later does not remove pools an earlier start wrote.
+  so the engine's containers count against it. It records what it set, so a
+  setting it stops making (a cleared `dind_address_pool`) goes back to what
+  the file had before, unless someone changed it since.
 - **Docker outside of Docker** (the docker-outside-of-docker feature, a
   docker.sock bind, `--use-api-socket`): a pod never gets the daemon host's
   engine. It gets its own, the `fleet-docker` sidecar (privileged, or under
@@ -529,7 +537,9 @@ server.
   It needs Kubernetes 1.29+, is refused with `--network host`, and
   `service_images.dind` must be a `docker:<version>-dind` image. `fleet logs`
   shows the dev container only; the sidecar's log is `kubectl logs <pod> -c
-  fleet-docker`. A LimitRange's defaults apply to the sidecar.
+  fleet-docker`. The sidecar requests 50m CPU and 128Mi and takes the dev
+  container's limits (the containers it runs share its cgroup), so a
+  ResourceQuota admits it without a LimitRange.
 - **Shared Buildkit** follows the fleet's own toggle, where the connection's
   `allow_shared_buildkit` permits it. The server runs rootless unless
   privileged pods are allowed, and is reached over mutual TLS: each instance
@@ -540,15 +550,18 @@ server.
   is rotated when the fleet leaves the connection, and its private key is in
   the hourly backup (`kube/<cluster>/buildkit/<fleet>.json`, a secret).
   buildkitd does not log client certificates; fleetd logs each one it issues.
-  Its GC keeps the cache under 80% of its volume.
+  Its GC keeps the cache under 80% of its volume. Its cache volume belongs to
+  one shape: when `allow_privileged` flips, the server of the other shape
+  starts on an empty cache.
 - **The deb and image caches** run in the namespace as per-fleet Deployments
   on their own volumes, kept when the fleet is destroyed (unless
   `delete_cache_volumes_on_destroy`) and deleted with the connection.
   Instances reach them by short Service name. apt uses them through a
   Proxy-Auto-Detect script that falls back to DIRECT while the cache is down
-  (a dropped connection costs up to 2s once per host per apt run). A DooD
-  engine gets the image mirror through `FLEET_DOCKERD_CONFIG`; a DinD image
-  needs `python3` or `jq` for fleet to add it. The caches are
+  (the probe keeps trying for 8s first, so a cache that is really down costs
+  that once per host per apt run). A DooD engine gets the image mirror through
+  `FLEET_DOCKERD_CONFIG`, and fleet merges it into a DinD engine's
+  `daemon.json`. The caches are
   unauthenticated: NetworkPolicy labels keep other pods out, and anyone who can
   label a pod in the namespace gets in.
 
@@ -623,15 +636,16 @@ past which it fails `kubernetes:timeout`, naming what still runs in the pod.
 <a id="clone"></a>**Clone** (`C`, `fleet clone`) copies the source's disk:
 snapshot first, then a CSI clone, then a copier Job, whichever the connection
 supports (`clone_method` forces one). On a privileged source pod, the source's
-processes are frozen while the snapshot is cut or the copier takes its final
-pass; a watchdog thaws them 30s after fleetd's last renewal and after 2 minutes
-at most. Without the freeze a snapshot is crash-consistent, and a copy of a
-running source is best-effort (a live pass, then a final delta; the clone is
-marked so). Git refs are copied before objects, so a copied ref never names a
-missing object. `clone_consistency=stop-source` stops the source for the clone
-instead. A second clone of one source waits for the first. Very large clones
-on csi-hostpath fall back to the copier. A clone keeps the source's root and
-runs no lifecycle hooks.
+processes, Docker-in-Docker's containers included, are frozen while the
+snapshot is cut or the copier takes its final pass; a watchdog thaws them 30s
+after fleetd's last renewal and after 2 minutes at most. Without the freeze a
+snapshot is crash-consistent, and a copy of a running source is best-effort (a
+live pass, then a final delta; the clone is marked so). Git refs are copied
+before objects, so a copied ref never names a missing object.
+`clone_consistency=stop-source` stops the source for the clone instead. A
+second clone of one source waits for the first. Very large clones on
+csi-hostpath fall back to the copier. A clone keeps the source's root and runs
+no lifecycle hooks.
 
 **Destroy** deletes everything the instance made, by its key, even when the
 create never finished. `fleet cluster gc <c>` lists objects labelled for this

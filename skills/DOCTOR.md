@@ -556,6 +556,8 @@ kubectl --context <ctx> -n <ns> auth can-i --list      # everything fleet's iden
 - `fleet cluster test --storage <class> <name>` runs the multi-node share test
   on a class now. A limited `each fleet on one node` means no class passed: each
   fleet's instances share one node (a fleet-size cap applies).
+- The first create of a fleet on a connection no deep test has told runs one
+  first (the `testing the cluster` step, minutes): that wait is expected.
 
 ### 17.6 Image delivery
 
