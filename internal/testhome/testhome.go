@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,7 +36,14 @@ func Main(m *testing.M) {
 
 // Run is Main without the exit, for a TestMain that does more around it.
 func Run(m *testing.M) int {
-	home, err := os.MkdirTemp("", "fleet-test-home-")
+	if inherited() {
+		// A test binary a test started again (a helper process) runs in
+		// that test's HOME, already one of these: it keeps it, and leaves
+		// it to the parent to remove (a helper often ends in os.Exit, past
+		// any cleanup of its own).
+		return m.Run()
+	}
+	home, err := os.MkdirTemp("", homePrefix)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "testhome:", err)
 		return 1
@@ -50,6 +58,17 @@ func Run(m *testing.M) int {
 	}
 	restore()
 	return code
+}
+
+// homePrefix names the homes Run makes in the temp dir.
+const homePrefix = "fleet-test-home-"
+
+// inherited reports whether HOME is already a home Run made (this process
+// was started by a test running in it).
+func inherited() bool {
+	home := os.Getenv("HOME")
+	return home != "" && strings.HasPrefix(filepath.Base(home), homePrefix) &&
+		filepath.Dir(filepath.Clean(home)) == filepath.Clean(os.TempDir())
 }
 
 // Use points HOME at home, keeping the tool configurations of the real one
