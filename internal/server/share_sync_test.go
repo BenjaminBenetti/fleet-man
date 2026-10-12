@@ -53,6 +53,9 @@ type fakeSpokes struct {
 	// rescan.
 	full map[string]bool
 	deaf map[string]bool
+	// onRetire, when set, runs in each retire (a destroy's retireFleet,
+	// between closing the fleet's sync and saving its marks).
+	onRetire func()
 }
 
 func newFakeSpokes(t *testing.T) *fakeSpokes {
@@ -167,6 +170,12 @@ func (f *fakeSpokes) usage(_ context.Context, cluster, fleetName string) (fleet.
 }
 
 func (f *fakeSpokes) retire(_ context.Context, cluster, fleetName string, keep bool) (string, error) {
+	f.mu.Lock()
+	hook := f.onRetire
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.retired = append(f.retired, fmt.Sprintf("%s/%s keep=%v", cluster, fleetName, keep))
@@ -682,6 +691,37 @@ func TestShareSyncAKeptShareStaysKept(t *testing.T) {
 	}
 	r.instance("gamma", "cccccccc", claim, fleet.StatusDeleting)
 	r.spokes.retired = nil
+	r.m.retireFleet(r.fleet, r.m.beforeDestroy(r.fleet, "", true))
+	if got := r.spokes.retired; len(got) != 1 || !strings.HasSuffix(got[0], "keep=true") {
+		t.Errorf("retired %v, want the share kept again", got)
+	}
+}
+
+// TestShareSyncASyncOpenedMidRetireTakesItsMarks: a reconcile that opens the
+// fleet's sync again while its destroy retires the share (the records stay
+// in state.json until the destroy's end) leaves that sync the marks the
+// retire saved, so destroying the fleet again keeps the share.
+func TestShareSyncASyncOpenedMidRetireTakesItsMarks(t *testing.T) {
+	r := newSyncRig(t)
+	r.hostLayout()
+	claim := "fs-f-1a2b3c4d-share"
+	r.spokes.deaf[shareSide(claim)] = true
+	r.instance("alpha", "aaaaaaaa", claim, fleet.StatusRunning)
+	r.spokes.up("aaaaaaaa")
+	r.setStatus("alpha", fleet.StatusDeleting)
+	ff := r.m.beforeDestroy(r.fleet, "", true)
+	r.spokes.down("aaaaaaaa")
+	r.spokes.mu.Lock()
+	r.spokes.onRetire = func() { r.m.reconcile(context.Background()) }
+	r.spokes.mu.Unlock()
+	r.m.retireFleet(r.fleet, ff)
+	r.spokes.mu.Lock()
+	r.spokes.onRetire, r.spokes.retired = nil, nil
+	r.spokes.mu.Unlock()
+	if r.m.fleetOf(r.fleet) == nil {
+		t.Fatal("the reconcile during the retire did not open the fleet's sync again")
+	}
+
 	r.m.retireFleet(r.fleet, r.m.beforeDestroy(r.fleet, "", true))
 	if got := r.spokes.retired; len(got) != 1 || !strings.HasSuffix(got[0], "keep=true") {
 		t.Errorf("retired %v, want the share kept again", got)

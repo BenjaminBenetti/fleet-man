@@ -1420,21 +1420,22 @@ func sortedKeys(set map[string]bool) []string {
 // keeps it as it is. The fleet's sync closes (its state on the daemon host
 // stays, logins included).
 func (m *shareSync) retireFleet(fleetName string, ff fleetFlush) []string {
+	dir := state.SyncFleetDir(fleetName)
 	m.recMu.Lock()
 	m.mu.Lock()
 	fs := m.fleets[fleetName]
 	delete(m.fleets, fleetName)
 	m.mu.Unlock()
+	unflushed := loadUnflushed(dir)
 	if fs != nil {
 		m.closeFleet(fs)
 	}
 	m.recMu.Unlock()
-	dir := state.SyncFleetDir(fleetName)
 	// What stays marked unflushed past the destroy: the shares it kept, and
 	// what was marked on the connections it did not retire (out of reach, or
 	// retaining shares), so a fleet made again under the name keeps them
 	// too until a flush has them (forgetUnflushed).
-	unflushed, next, retired := loadUnflushed(dir), map[string]bool{}, map[string]bool{}
+	next, retired := map[string]bool{}, map[string]bool{}
 	var warnings []string
 	for _, rec := range m.records() {
 		id := rec.ID
@@ -1465,7 +1466,17 @@ func (m *shareSync) retireFleet(fleetName string, ff fleetFlush) []string {
 			next[side] = true
 		}
 	}
+	// A reconcile may have opened the fleet's sync again since it closed
+	// above (the destroy drops the fleet's records from state.json only
+	// after this), reading the marks from before: it takes these, saved
+	// under the same lock, or a destroy of the fleet made again under the
+	// name would trust its stale set and delete a share this one kept.
+	m.recMu.Lock()
 	saveUnflushed(dir, next)
+	if again := m.fleetOf(fleetName); again != nil {
+		again.unflushed = maps.Clone(next)
+	}
+	m.recMu.Unlock()
 	return warnings
 }
 
