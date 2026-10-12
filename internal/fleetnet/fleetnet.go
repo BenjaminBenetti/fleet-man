@@ -17,8 +17,16 @@
 package fleetnet
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/binary"
 	"fmt"
+	"math/bits"
+	"net"
+	"net/netip"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -33,6 +41,66 @@ var execCommand = exec.Command
 // fleetNameMaxLen caps the sanitized fleet segment of the network name (matches
 // internal/buildkit's container-name cap).
 const fleetNameMaxLen = 40
+
+// A fleet network takes a /24 of subnetBase rather than docker's choice.
+// docker gives a new network the first free /16 of its default pools
+// (172.18.0.0/16 on a host with only its default bridge), and a
+// docker-in-docker instance's own dockerd, up before the instance joins the
+// network, gave its docker0 that same /16 (the first one its default bridge
+// does not cover): `docker network connect` then refuses the instance
+// ("conflicts with existing route"), and neither cache reaches it. No docker
+// engine hands out 172.16.0.0/16 itself (its pools start at 172.17.0.0/16),
+// so a nested engine's networks never meet a fleet network there.
+var subnetBase = netip.MustParsePrefix("172.16.0.0/16")
+
+const subnetBits = 24
+
+// procNetRoute is the Linux routing table hostNetworks reads.
+const procNetRoute = "/proc/net/route"
+
+// hostNetworks are the networks this host already reaches, which a fleet
+// network must not take over: its interfaces' and, on Linux, its routes' (a
+// VPN's routed ranges hold none of the host's addresses). docker checks a
+// subnet it is given against its own networks only. A package var so tests
+// can stand in for the host.
+var hostNetworks = func() []netip.Prefix {
+	var nets []netip.Prefix
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok {
+				if p, err := netip.ParsePrefix(ipn.String()); err == nil {
+					nets = append(nets, p.Masked())
+				}
+			}
+		}
+	}
+	if table, err := os.ReadFile(procNetRoute); err == nil {
+		nets = append(nets, routedNetworks(table)...)
+	}
+	return nets
+}
+
+// routedNetworks are the destinations of a /proc/net/route table but its
+// default route.
+func routedNetworks(table []byte) []netip.Prefix {
+	var nets []netip.Prefix
+	sc := bufio.NewScanner(bytes.NewReader(table))
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) < 8 {
+			continue
+		}
+		dst, err1 := strconv.ParseUint(f[1], 16, 32)
+		mask, err2 := strconv.ParseUint(f[7], 16, 32)
+		if err1 != nil || err2 != nil || mask == 0 {
+			continue // the header, or the default route
+		}
+		var ip [4]byte
+		binary.LittleEndian.PutUint32(ip[:], uint32(dst))
+		nets = append(nets, netip.PrefixFrom(netip.AddrFrom4(ip), bits.OnesCount32(uint32(mask))).Masked())
+	}
+	return nets
+}
 
 // runDocker runs `docker <args...>` and returns its combined output (trimmed)
 // and error. Package var so tests can stub the docker interaction without a
@@ -61,8 +129,9 @@ func NetworkName(fleetName string) string {
 
 // EnsureNetwork makes the fleet's shared cache network exist, returning its
 // name. Idempotent and safe to call on every cache ensure / instance connect: a
-// present network is reused, an absent one is created. Serialized per fleet so
-// concurrent creates don't race on `docker network create`.
+// present network is reused, an absent one is created (on a subnet of
+// subnetBase). Serialized per fleet so concurrent creates don't race on
+// `docker network create`.
 func EnsureNetwork(fleetName string) (string, error) {
 	lock := fleetLock(fleetName)
 	lock.Lock()
@@ -72,7 +141,7 @@ func EnsureNetwork(fleetName string) (string, error) {
 	if networkExists(name) {
 		return name, nil
 	}
-	if out, err := runDocker("network", "create", name); err != nil {
+	if subnet, out, err := createNetwork(name); err != nil {
 		// A concurrent (cross-process) or manual create may have won the name
 		// race; if the network exists now, treat it as success.
 		if !networkExists(name) {
@@ -80,9 +149,48 @@ func EnsureNetwork(fleetName string) (string, error) {
 		}
 		flog.Info("fleet network already present", "fleet", fleetName, "network", name)
 	} else {
-		flog.Info("fleet network created", "fleet", fleetName, "network", name)
+		flog.Info("fleet network created", "fleet", fleetName, "network", name, "subnet", subnet)
 	}
 	return name, nil
+}
+
+// createNetwork creates the network name on the first /24 of subnetBase that
+// no host network overlaps and docker has not given another network, or, with
+// none left, wherever docker chooses. subnet is the one it asked for ("" for
+// docker's choice).
+func createNetwork(name string) (subnet, out string, err error) {
+	taken := hostNetworks()
+	for s := subnetBase.Addr(); subnetBase.Contains(s); s = nextSubnet(s) {
+		p := netip.PrefixFrom(s, subnetBits)
+		if overlapsAny(p, taken) {
+			continue
+		}
+		out, err = runDocker("network", "create", "--subnet", p.String(), name)
+		// docker: "invalid pool request: Pool overlaps with other one on
+		// this address space" (another network has it).
+		if err == nil || !strings.Contains(out, "overlaps") {
+			return p.String(), out, err
+		}
+	}
+	out, err = runDocker("network", "create", name)
+	return "", out, err
+}
+
+// nextSubnet is the first address of the /subnetBits after the one at s.
+func nextSubnet(s netip.Addr) netip.Addr {
+	b := s.As4()
+	v := binary.BigEndian.Uint32(b[:]) + 1<<(32-subnetBits)
+	binary.BigEndian.PutUint32(b[:], v)
+	return netip.AddrFrom4(b)
+}
+
+func overlapsAny(p netip.Prefix, nets []netip.Prefix) bool {
+	for _, n := range nets {
+		if p.Overlaps(n) {
+			return true
+		}
+	}
+	return false
 }
 
 // ConnectInstance attaches a container to the fleet's shared cache network

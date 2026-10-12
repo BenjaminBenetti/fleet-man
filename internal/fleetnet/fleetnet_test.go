@@ -2,6 +2,8 @@ package fleetnet
 
 import (
 	"fmt"
+	"net/netip"
+	"slices"
 	"testing"
 )
 
@@ -11,6 +13,29 @@ func stubDocker(t *testing.T, handler func(args []string) (string, error)) {
 	orig := runDocker
 	runDocker = func(args ...string) (string, error) { return handler(args) }
 	t.Cleanup(func() { runDocker = orig })
+}
+
+// stubHost replaces hostNetworks with nets (CIDRs) for the duration of the test.
+func stubHost(t *testing.T, nets ...string) {
+	t.Helper()
+	orig := hostNetworks
+	var prefixes []netip.Prefix
+	for _, n := range nets {
+		prefixes = append(prefixes, netip.MustParsePrefix(n))
+	}
+	hostNetworks = func() []netip.Prefix { return prefixes }
+	t.Cleanup(func() { hostNetworks = orig })
+}
+
+// creates are the `docker network create` calls among calls.
+func creates(calls [][]string) [][]string {
+	var out [][]string
+	for _, c := range calls {
+		if len(c) >= 2 && c[0] == "network" && c[1] == "create" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func hasCall(calls [][]string, sub ...string) bool {
@@ -45,6 +70,7 @@ func TestNetworkName(t *testing.T) {
 }
 
 func TestEnsureNetworkCreatesWhenAbsent(t *testing.T) {
+	stubHost(t)
 	var calls [][]string
 	stubDocker(t, func(args []string) (string, error) {
 		calls = append(calls, args)
@@ -63,6 +89,109 @@ func TestEnsureNetworkCreatesWhenAbsent(t *testing.T) {
 	}
 	if !hasCall(calls, "network", "create") {
 		t.Fatalf("expected a network create, calls=%v", calls)
+	}
+}
+
+// docker would give a new network the /16 a docker-in-docker instance's own
+// dockerd gives its docker0 (172.18.0.0/16 next to a default bridge on
+// 172.17), and the instance could then not join it: the network takes a
+// subnet no docker engine hands out itself.
+func TestEnsureNetworkTakesASubnetOutsideDockersPools(t *testing.T) {
+	stubHost(t, "172.17.0.0/16", "172.18.0.0/16", "10.1.0.0/16")
+	var calls [][]string
+	stubDocker(t, func(args []string) (string, error) {
+		calls = append(calls, args)
+		if args[1] == "inspect" {
+			return "", fmt.Errorf("Error: No such network")
+		}
+		return "", nil
+	})
+	if _, err := EnsureNetwork("alpha"); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	want := []string{"network", "create", "--subnet", "172.16.0.0/24", NetworkName("alpha")}
+	if got := creates(calls); len(got) != 1 || !slices.Equal(got[0], want) {
+		t.Fatalf("creates = %v, want [%v]", got, want)
+	}
+}
+
+// A subnet the host reaches (an interface's, a route's) is never asked for,
+// and one docker gave another network is passed over.
+func TestEnsureNetworkSkipsSubnetsInUse(t *testing.T) {
+	stubHost(t, "172.16.0.0/24")
+	var calls [][]string
+	stubDocker(t, func(args []string) (string, error) {
+		calls = append(calls, args)
+		if args[1] == "inspect" {
+			return "", fmt.Errorf("Error: No such network")
+		}
+		if slices.Contains(args, "172.16.1.0/24") {
+			return "Error response from daemon: invalid pool request: Pool overlaps with other one on this address space", fmt.Errorf("exit status 1")
+		}
+		return "", nil
+	})
+	if _, err := EnsureNetwork("alpha"); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	got := creates(calls)
+	if len(got) != 2 || !slices.Contains(got[0], "172.16.1.0/24") || !slices.Contains(got[1], "172.16.2.0/24") {
+		t.Fatalf("creates = %v, want 172.16.1.0/24 then 172.16.2.0/24", got)
+	}
+}
+
+// With every subnet of the base in use, docker chooses, as before.
+func TestEnsureNetworkFallsBackToDockersChoice(t *testing.T) {
+	stubHost(t, "172.16.0.0/12")
+	var calls [][]string
+	stubDocker(t, func(args []string) (string, error) {
+		calls = append(calls, args)
+		if args[1] == "inspect" {
+			return "", fmt.Errorf("Error: No such network")
+		}
+		return "", nil
+	})
+	if _, err := EnsureNetwork("alpha"); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	want := []string{"network", "create", NetworkName("alpha")}
+	if got := creates(calls); len(got) != 1 || !slices.Equal(got[0], want) {
+		t.Fatalf("creates = %v, want [%v]", got, want)
+	}
+}
+
+// A create that fails for another reason is not tried on the next subnet.
+func TestEnsureNetworkSurfacesACreateFailure(t *testing.T) {
+	stubHost(t)
+	var calls [][]string
+	stubDocker(t, func(args []string) (string, error) {
+		calls = append(calls, args)
+		if args[1] == "inspect" {
+			return "", fmt.Errorf("Error: No such network")
+		}
+		return "permission denied while trying to connect to the Docker daemon socket", fmt.Errorf("exit status 1")
+	})
+	if _, err := EnsureNetwork("alpha"); err == nil {
+		t.Fatal("EnsureNetwork should surface docker's failure")
+	}
+	if got := creates(calls); len(got) != 1 {
+		t.Fatalf("creates = %v, want one", got)
+	}
+}
+
+func TestRoutedNetworks(t *testing.T) {
+	table := "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n" +
+		"eth0\t00000000\t010011AC\t0003\t0\t0\t0\t00000000\t0\t0\t0\n" +
+		"eth0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n" +
+		"tun0\t000010AC\t00000000\t0001\t0\t0\t0\t0000F0FF\t0\t0\t0\n" +
+		"wg0\t0002A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+	got := routedNetworks([]byte(table))
+	want := []netip.Prefix{
+		netip.MustParsePrefix("172.17.0.0/16"),
+		netip.MustParsePrefix("172.16.0.0/12"),
+		netip.MustParsePrefix("192.168.2.0/24"),
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("routedNetworks = %v, want %v", got, want)
 	}
 }
 
