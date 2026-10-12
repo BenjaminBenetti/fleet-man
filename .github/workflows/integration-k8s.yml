@@ -78,13 +78,17 @@ jobs:
       fail-fast: false
       matrix:
         # Balanced by the k8s-marked tests' run times: the TUI ranges hold
-        # many short creates, the 8xx tests a few long ones.
+        # many short creates, the 8xx tests a few long ones, 391/393 wait
+        # out automation idle timeouts and 420-440 run the agent installers.
         range:
           - "0-100"
           - "100-200"
           - "200-300"
-          - "300-760"
-          - "760-802"
+          - "300-400"
+          - "400-500"
+          - "500-700"
+          - "700-735"
+          - "735-802"
           - "802-820"
           - "820-"
     steps:

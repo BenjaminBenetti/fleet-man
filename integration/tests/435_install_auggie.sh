@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Auggie CLI is installed in the container by the startup script.
 set -euo pipefail
 

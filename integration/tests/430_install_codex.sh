@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Codex CLI is installed by the startup script on an image WITHOUT node/npm.
 set -euo pipefail
 

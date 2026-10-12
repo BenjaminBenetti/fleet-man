@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: Launching the TUI installs the Fleet Admiral skill into ~/.claude/skills.
+#
+# Host-only: the install writes this machine's ~/.claude before the TUI asks
+# the daemon anything, and no instance is made, so a cluster run would test
+# nothing a docker-free run does not.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -48,7 +53,12 @@ if ! printf '%s' "${hash_body}" | grep -qE '^[0-9a-f]{64}$'; then
   fail ".hash is not a sha256 hex digest: [${hash_body}]"
 fi
 
-expected_hash="$(sha256sum "${SKILL_MD}" | cut -d' ' -f1)"
+# sha256sum is GNU; macOS has shasum.
+if command -v sha256sum >/dev/null 2>&1; then
+  expected_hash="$(sha256sum "${SKILL_MD}" | cut -d' ' -f1)"
+else
+  expected_hash="$(shasum -a 256 "${SKILL_MD}" | cut -d' ' -f1)"
+fi
 assert_equals "${expected_hash}" "${hash_body}" ".hash does not match installed SKILL.md content"
 
 pass "TUI startup installs the Fleet Admiral skill"

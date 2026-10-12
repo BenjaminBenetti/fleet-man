@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI automation mode (issue #188) — 'm' (or selecting the header's
 # mode-toggle icon, ↻/☰, with →/l and pressing enter) flips a fleet between its
 # instance view and its automation view (triggers + agents groups). Adding an
 # agent through the dialog persists it and shows it in the agents group, and 'm'
-# toggles back to the instance view.
+# toggles back to the instance view. A new agent's Backend row opens on the
+# remembered deploy target (the run's cluster connection on kubernetes) and
+# the saved agent's row names it.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -12,6 +15,14 @@ itest_begin
 
 setup_test
 fleet_up alpha
+
+# Where a new agent runs unless the dialog's Backend row is cycled: the
+# remembered deploy target, which a kubernetes run's setup makes its cluster.
+if itest_backend_is kubernetes; then
+  agent_target="$(itest_row_target)"
+else
+  agent_target="Devcontainer"
+fi
 
 tui_spawn
 tui_wait_for "alpha" 15
@@ -72,6 +83,7 @@ for _ in 1 2 3 4; do tui_send j; sleep 0.15; done
 tui_send Enter
 tui_wait_for "New agent" 5
 tui_assert_contains "Backend:" "agent dialog should expose the backend selector"
+tui_assert_contains "[ ${agent_target} ]" "the Backend row should open on the remembered deploy target"
 
 info "typing an agent name and saving"
 tui_send Enter         # activate the Name field
@@ -85,6 +97,7 @@ for _ in 1 2 3 4; do tui_send j; sleep 0.15; done
 tui_send Enter         # save
 tui_wait_for "agents (1)" 10
 tui_assert_contains "builder" "saved agent row should be visible"
+tui_assert_contains "${agent_target} · ← 0 triggers" "the agent row should name where the agent runs"
 
 # ===========================================
 # 'd' on a trigger/agent confirms before deleting (rather than deleting
