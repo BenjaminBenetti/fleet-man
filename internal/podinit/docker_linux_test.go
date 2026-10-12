@@ -79,7 +79,10 @@ while :; do sleep 1 & wait $!; done`
 	var suffix [4]byte
 	_, _ = rand.Read(suffix[:])
 	name := "fleet-podinit-test-" + hex.EncodeToString(suffix[:])
-	docker(t, "run", "-d", "--name", name, "--privileged", "--cgroupns="+cgroupns, "-m", "512m",
+	// No swap, as on a Kubernetes node: with -m alone docker lets the
+	// container swap as much again, and the hog swaps instead of meeting its
+	// limit (GitHub's runners have swap).
+	docker(t, "run", "-d", "--name", name, "--privileged", "--cgroupns="+cgroupns, "-m", "512m", "--memory-swap", "512m",
 		"-v", fleet+":/opt/fleet", image, "/opt/fleet/bin/fleet", "pod-init", "--spec", "/opt/fleet/spec/pid1.json")
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
