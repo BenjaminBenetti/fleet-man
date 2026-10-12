@@ -412,6 +412,48 @@ func TestRebuildThatFailsBeforeItChangedTheInstance(t *testing.T) {
 	}
 }
 
+// An instance whose StatefulSet was deleted outside fleet, its disk kept, is
+// rebuilt as a stopped one over that disk: load takes it (with a warning),
+// and the journal's anchor is the StatefulSet the rebuild makes, with no
+// replicas to restore. With its disk gone too, there is nothing to rebuild.
+func TestRebuildOfAnInstanceWhoseStatefulSetIsGone(t *testing.T) {
+	r := newHandleRig(t)
+	rb := rebuildRigOn(t, r, fleet.KubeCluster{ID: handleCluster})
+	if err := SaveInstanceRecord(rb.prev); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.cs.Tracker().Add(&corev1.PersistentVolumeClaim{ObjectMeta: handleMeta(rb.id.sts)}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := rb.load(ctx); err != nil {
+		t.Fatalf("load of an instance whose StatefulSet is gone: %v", err)
+	}
+	if !rb.lostSTS || rb.sts != nil || rb.running() {
+		t.Fatalf("lost %v sts %v running %v", rb.lostSTS, rb.sts, rb.running())
+	}
+	if w := strings.Join(rb.warningLines(), "\n"); !strings.Contains(w, "deleted outside fleet") {
+		t.Errorf("no warning that the StatefulSet is gone: %q", w)
+	}
+	if err := rb.begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	j := rb.jj.Journal()
+	if a, ok := j.Anchor(); !ok || a.Name != rb.id.sts || !a.Created || a.UID != "" || j.PrevReplicas != nil || j.PrevStatus != fleet.StatusStopped {
+		t.Fatalf("journal %+v", j)
+	}
+	rb.endJournal()
+
+	gone := rebuildRigOn(t, newHandleRig(t), fleet.KubeCluster{ID: handleCluster})
+	if err := SaveInstanceRecord(gone.prev); err != nil {
+		t.Fatal(err)
+	}
+	err := gone.load(context.Background())
+	if code, _ := kubeerr.Of(err); err == nil || !strings.Contains(err.Error(), "nothing of it is left to rebuild") || code != kubeerr.RebuildFailed {
+		t.Fatalf("an instance with neither StatefulSet nor disk: %v", err)
+	}
+}
+
 // An undo that fails keeps the journal, and its error starts the way the
 // reconciler claims such a record by at the next start.
 func TestRebuildWhoseUndoFails(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/devcli"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -287,6 +288,9 @@ func (rb *rebuilding) load(ctx context.Context) error {
 		return err
 	}
 	sts, err := rb.cs.AppsV1().StatefulSets(rb.ns).Get(ctx, prev.StatefulSet, metav1.GetOptions{})
+	if gone(err) {
+		return rb.loseStatefulSet(ctx)
+	}
 	if err != nil {
 		return classify(fmt.Errorf("reading the instance's StatefulSet: %w", err))
 	}
@@ -304,6 +308,25 @@ func (rb *rebuilding) load(ctx context.Context) error {
 	if sts.Spec.Replicas != nil {
 		rb.replicas = *sts.Spec.Replicas
 	}
+	return nil
+}
+
+// loseStatefulSet is load's answer to an instance whose StatefulSet was
+// deleted outside fleet while its disk stayed: the rebuild runs as that of a
+// stopped instance (its disk exported by a tool Job of its generation) and
+// makes the StatefulSet anew over the kept disk; undone, it leaves the
+// instance as it found it, with no StatefulSet. With the disk gone too there
+// is nothing to keep.
+func (rb *rebuilding) loseStatefulSet(ctx context.Context) error {
+	if _, err := rb.cs.CoreV1().PersistentVolumeClaims(rb.ns).Get(ctx, rb.prev.StatefulSet, metav1.GetOptions{}); err != nil {
+		if gone(err) {
+			return kubeerr.New(kubeerr.RebuildFailed, "the instance's StatefulSet %s/%s and its disk (PVC %s) were deleted outside fleet: nothing of it is left to rebuild; destroy the instance and create it again", rb.ns, rb.prev.StatefulSet, rb.prev.StatefulSet)
+		}
+		return classify(fmt.Errorf("reading the instance's disk: %w", err))
+	}
+	rb.lostSTS, rb.sts, rb.replicas = true, nil, 0
+	rb.warn(ctx, fmt.Sprintf("the instance's StatefulSet %s/%s was deleted outside fleet; the rebuild makes it again over the instance's disk", rb.ns, rb.prev.StatefulSet))
+	flog.Warn("kube rebuild: the instance's StatefulSet is gone; rebuilding over its disk", "fleet", rb.id.fleet, "instance", rb.id.name, "cluster", rb.id.cluster, "key", rb.id.key, "sts", rb.prev.StatefulSet)
 	return nil
 }
 
@@ -379,11 +402,20 @@ func (rb *rebuilding) begin(ctx context.Context) error {
 		status = fleet.StatusRunning
 	}
 	prev := rb.prev
+	anchor := JournalObject{Kind: KindStatefulSet, Name: rb.id.sts, Gen: rb.prevGen, Anchor: true}
+	prevReplicas := &replicas
+	if rb.lostSTS {
+		// None to restore: the one the rebuild makes is its own (an undo
+		// deletes it), and there are no replicas to put back.
+		anchor.Created, prevReplicas = true, nil
+	} else {
+		anchor.UID = string(rb.sts.UID)
+	}
 	jj, err := BeginJournal(Journal{
 		Op: OpRebuild, Fleet: rb.id.fleet, Instance: rb.id.name, Cluster: rb.id.cluster, Namespace: rb.ns, Key: rb.id.key,
 		Gen: rb.gen, Step: stepPrepare,
-		Objects:      []JournalObject{{Kind: KindStatefulSet, Name: rb.sts.Name, UID: string(rb.sts.UID), Gen: rb.prevGen, Anchor: true}},
-		PrevReplicas: &replicas, PrevSpecSecret: names.SpecSecret(rb.sts.Name, rb.prevGen),
+		Objects:      []JournalObject{anchor},
+		PrevReplicas: prevReplicas, PrevSpecSecret: names.SpecSecret(rb.id.sts, rb.prevGen),
 		PrevStatus: status, PrevRecord: &prev,
 	})
 	if errors.Is(err, ErrJournalExists) {
@@ -403,11 +435,11 @@ func (rb *rebuilding) reseed(ctx context.Context, adm *podspec.Admitted, r podsp
 		if err := rb.step(ctx, stepStop, fleet.StepBackendDown, "stopping the instance for its new root"); err != nil {
 			return nil, err
 		}
-		if err := rb.p.Scale(ctx, rb.id.cluster, rb.sts.Name, 0); err != nil {
+		if err := rb.p.Scale(ctx, rb.id.cluster, rb.id.sts, 0); err != nil {
 			return nil, classify(err)
 		}
 		s, _ := rb.scope()
-		if err := rb.p.waitPodGone(ctx, s, names.Pod(rb.sts.Name)); err != nil {
+		if err := rb.p.waitPodGone(ctx, s, names.Pod(rb.id.sts)); err != nil {
 			return nil, classify(err)
 		}
 	}
@@ -445,13 +477,17 @@ func (rb *rebuilding) reseed(ctx context.Context, adm *podspec.Admitted, r podsp
 // architecture, a runtime class) may be what it failed on, and must not keep
 // the rollback from scheduling on the disk's node too.
 func (rb *rebuilding) recordRollback(r podspec.RenderInput) error {
-	stsBody, err := statefulSetBody(rb.sts)
-	if err != nil {
-		return err
+	// An instance whose StatefulSet was gone gets none back.
+	var stsBody []byte
+	if !rb.lostSTS {
+		var err error
+		if stsBody, err = statefulSetBody(rb.sts); err != nil {
+			return err
+		}
 	}
 	ri := r
-	ri.Gen, ri.CreatedAt, ri.Image, ri.Seed = rb.prevGen, rb.prev.Created, liveImage(rb.sts, rb.prev), nil
-	job, err := podspec.RenderJob(toolResult(rb.sts), ri, podspec.JobInput{Name: names.RollbackJob(rb.sts.Name, rb.prevGen), Resources: toolResources()}, names.RoleTool)
+	ri.Gen, ri.CreatedAt, ri.Image, ri.Seed = rb.prevGen, rb.prev.Created, rb.liveImage(), nil
+	job, err := podspec.RenderJob(toolResult(rb.sts), ri, podspec.JobInput{Name: names.RollbackJob(rb.id.sts, rb.prevGen), Resources: toolResources()}, names.RoleTool)
 	if err != nil {
 		return classify(err)
 	}
@@ -477,6 +513,25 @@ func statefulSetBody(sts *appsv1.StatefulSet) ([]byte, error) {
 		ObjectMeta: metav1.ObjectMeta{Name: sts.Name, Namespace: sts.Namespace, Labels: sts.Labels, Annotations: annotations},
 		Spec:       *sts.Spec.DeepCopy(),
 	})
+}
+
+// liveImage is the image generation prevGen runs (liveImage), or for an
+// instance whose StatefulSet is gone, the one its delivery names.
+func (rb *rebuilding) liveImage() podspec.ImageRef {
+	if rb.sts != nil {
+		return liveImage(rb.sts, rb.prev)
+	}
+	if d, err := rb.env.images().Lookup(rb.id.cluster, rb.id.key); err == nil && d != nil {
+		return imageRefOf(d)
+	}
+	ref := podspec.ImageRef{Ref: rb.prev.Image}
+	if len(rb.prev.ImageDigests) > 0 {
+		ref.ID = rb.prev.ImageDigests[0]
+	}
+	if kubeimage.Strategy(rb.prev.Strategy) == kubeimage.StrategyNodeLoad {
+		ref.PullPolicy = corev1.PullNever
+	}
+	return ref
 }
 
 // liveImage is the image generation prevGen's pods run, as its StatefulSet
@@ -650,9 +705,9 @@ func (rb *rebuilding) deleteTrash(adm *podspec.Admitted, r podspec.RenderInput) 
 	}
 	log := rb.p.opts.Logger
 	for _, o := range []objectMeta{
-		{Kind: KindSecret, Name: names.SpecSecret(rb.sts.Name, rb.prevGen)},
-		{Kind: KindSecret, Name: names.EnvSecret(rb.sts.Name, rb.prevGen)},
-		{Kind: KindJob, Name: names.SeedJob(rb.sts.Name, rb.prevGen)},
+		{Kind: KindSecret, Name: names.SpecSecret(rb.id.sts, rb.prevGen)},
+		{Kind: KindSecret, Name: names.EnvSecret(rb.id.sts, rb.prevGen)},
+		{Kind: KindJob, Name: names.SeedJob(rb.id.sts, rb.prevGen)},
 	} {
 		if _, err := s.deleteAll(ctx, []objectMeta{o}); err != nil {
 			log.Warn("kube rebuild: deleting the previous generation's object", "cluster", rb.id.cluster, "object", objectRef(o.Kind, o.Name), "err", err)
@@ -668,7 +723,7 @@ func (rb *rebuilding) deleteTrash(adm *podspec.Admitted, r podspec.RenderInput) 
 // runCommit runs the commit Job (podseed's OpCommit of generation gen) on the
 // node the rebuilt pod runs on, which has the instance disk attached.
 func (rb *rebuilding) runCommit(ctx context.Context, s Scope, adm *podspec.Admitted, r podspec.RenderInput) error {
-	pod, err := rb.cs.CoreV1().Pods(rb.ns).Get(ctx, names.Pod(rb.sts.Name), metav1.GetOptions{})
+	pod, err := rb.cs.CoreV1().Pods(rb.ns).Get(ctx, names.Pod(rb.id.sts), metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -677,7 +732,7 @@ func (rb *rebuilding) runCommit(ctx context.Context, s Scope, adm *podspec.Admit
 	if node := pod.Spec.NodeName; node != "" {
 		ri.Affinity = onNode(node)
 	}
-	name := names.CommitJob(rb.sts.Name, rb.gen)
+	name := names.CommitJob(rb.id.sts, rb.gen)
 	job, err := podspec.RenderJob(adm.Result, ri, podspec.JobInput{Name: name, Resources: toolResources(), ActiveDeadline: commitTimeout}, names.RoleTool)
 	if err != nil {
 		return err

@@ -59,6 +59,52 @@ func TestLiveRebuild(t *testing.T) {
 	t.Run("rollback", func(t *testing.T) { lb.rebuildRollback(t, lv, image) })
 	t.Run("retry", func(t *testing.T) { lb.retryFailedCreate(t, lv, image) })
 	t.Run("stopped, image gone from the node", func(t *testing.T) { lb.rebuildStoppedImageGone(t, lv, image) })
+	t.Run("statefulset deleted", func(t *testing.T) { lb.rebuildLostStatefulSet(t, lv, image) })
+}
+
+// rebuildLostStatefulSet: an instance whose StatefulSet someone deleted
+// (kubectl delete sts; its pod goes, its disk stays) is rebuilt over its
+// disk: a StatefulSet of the next generation, the workspace kept.
+func (lb *liveBackend) rebuildLostStatefulSet(t *testing.T, lv *live, image string) {
+	r := lb.rebuildRig(t, lv, "rblost", map[string]any{"image": image})
+	r.create()
+	folder := "/workspaces/" + filepath.Base(r.inst.WorkspaceDir)
+	r.sh("echo kept > " + folder + "/UNCOMMITTED.txt")
+	old := r.inst.ContainerID
+	background := metav1.DeletePropagationBackground
+	if err := lv.cs.AppsV1().StatefulSets(lv.ns).Delete(r.ctx, r.sts, metav1.DeleteOptions{PropagationPolicy: &background}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		_, err := lv.cs.CoreV1().Pods(lv.ns).Get(r.ctx, names.Pod(r.sts), metav1.GetOptions{})
+		if gone(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the deleted StatefulSet's pod is still there: %v", err)
+		}
+		time.Sleep(time.Second)
+	}
+	res, err := r.rebuild()
+	if err != nil {
+		t.Fatalf("the rebuild of an instance whose StatefulSet was deleted: %v", err)
+	}
+	if want := ContainerID(lv.rec.ID, lv.ns, r.sts, 2); res.ContainerID != want || res.ContainerID == old {
+		t.Fatalf("rebuilt ContainerID %s, want %s", res.ContainerID, want)
+	}
+	if !slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "deleted outside fleet") }) {
+		t.Errorf("no warning that the StatefulSet was gone: %q", res.Warnings)
+	}
+	if got := r.b().Status(res.ContainerID); got != backend.LiveStatusRunning {
+		t.Errorf("the rebuilt generation's status %v, want running", got)
+	}
+	if got := r.sh("cat " + folder + "/UNCOMMITTED.txt"); got != "kept" {
+		t.Errorf("the workspace file after the rebuild: %q", got)
+	}
+	if _, err := os.Stat(JournalPath(r.inst.KubeKey)); !os.IsNotExist(err) {
+		t.Errorf("the rebuild's journal is still there: %v", err)
+	}
 }
 
 // rebuildStoppedImageGone: a stopped instance whose node-loaded image the

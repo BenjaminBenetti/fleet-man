@@ -173,6 +173,9 @@ type creation struct {
 	// moveHolds hold off a move of the fleet's share until the job ends
 	// (shareMoveGate; releaseMoveHolds).
 	moveHolds []func()
+	// lostSTS: a rebuild found the instance's StatefulSet deleted outside
+	// fleet, and makes it anew over the kept disk (rebuild.go).
+	lostSTS bool
 }
 
 // what is the job, for its messages.
@@ -431,7 +434,7 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 	// A create makes the StatefulSet; a rebuild changes the one it has,
 	// and mirrors its steps on it.
 	rebuild := c.prevGen > 0
-	uid, err := c.applyJournaled(ctx, JournalObject{Kind: KindStatefulSet, Name: o.StatefulSet.Name, Gen: c.gen, Created: !rebuild, Anchor: rebuild}, o.StatefulSet)
+	uid, err := c.applyJournaled(ctx, JournalObject{Kind: KindStatefulSet, Name: o.StatefulSet.Name, Gen: c.gen, Created: !rebuild || c.lostSTS, Anchor: rebuild}, o.StatefulSet)
 	if err != nil {
 		return nil, err
 	}

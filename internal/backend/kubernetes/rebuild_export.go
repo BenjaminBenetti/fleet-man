@@ -141,8 +141,8 @@ func (rb *rebuilding) exportStopped(ctx context.Context, export bool) error {
 	if err != nil {
 		return err
 	}
-	name := names.ExportJob(rb.sts.Name, rb.prevGen)
-	ri := rb.renderInput(liveImage(rb.sts, rb.prev), nil)
+	name := names.ExportJob(rb.id.sts, rb.prevGen)
+	ri := rb.renderInput(rb.liveImage(), nil)
 	ri.Gen, ri.CreatedAt = rb.prevGen, rb.prev.Created
 	job, err := podspec.RenderJob(toolResult(rb.sts), ri, podspec.JobInput{Name: name, Resources: toolResources(), ActiveDeadline: exportHold + 10*time.Minute}, names.RoleTool)
 	if err != nil {
@@ -166,7 +166,7 @@ func (rb *rebuilding) exportStopped(ctx context.Context, export bool) error {
 	res, err := rb.p.RunJob(ctx, JobRun{
 		Cluster: rb.id.cluster, Job: name,
 		Spec: podseed.JobSpec{Op: podseed.OpTool, Gen: rb.prevGen, PVC: podspec.JobDiskPath, ResultHold: exportHold.String()},
-		PVC:  rb.sts.Name,
+		PVC:  rb.id.sts,
 		// The instance's image the node lost while it was stopped (a
 		// node-loaded one the kubelet's image GC collected) is delivered
 		// again, as a start does.
@@ -219,8 +219,12 @@ func (rb *rebuilding) exportStopped(ctx context.Context, export bool) error {
 // rest of a tool Job (the connection's tolerations and service account, the
 // identity, the image) comes from the render's input.
 func toolResult(sts *appsv1.StatefulSet) *podspec.Result {
-	tpl := sts.Spec.Template.Spec
 	res := &podspec.Result{}
+	if sts == nil {
+		// Its StatefulSet is gone: no placement of its own to keep.
+		return res
+	}
+	tpl := sts.Spec.Template.Spec
 	res.Pod.NodeSelector = maps.Clone(tpl.NodeSelector)
 	if tpl.RuntimeClassName != nil {
 		res.Pod.RuntimeClassName = *tpl.RuntimeClassName
@@ -398,7 +402,7 @@ func (rb *rebuilding) growDisk(ctx context.Context, disk podseed.DiskSpace, need
 		return fmt.Errorf("%s, and auto_expand_disk is off: free room in the instance, or turn auto_expand_disk on where its storage class can grow disks", short)
 	}
 	pvcs := rb.cs.CoreV1().PersistentVolumeClaims(rb.ns)
-	pvc, err := pvcs.Get(ctx, rb.sts.Name, metav1.GetOptions{})
+	pvc, err := pvcs.Get(ctx, rb.id.sts, metav1.GetOptions{})
 	if err != nil {
 		return classify(fmt.Errorf("reading the instance disk: %w", err))
 	}
