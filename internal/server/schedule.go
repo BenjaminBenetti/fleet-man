@@ -851,6 +851,24 @@ func automationInstanceName(agentName string, now time.Time) string {
 	return fmt.Sprintf("%s-%s-%d", base, now.Format("150405"), atomic.AddInt64(&automationSeq, 1))
 }
 
+// freeAutomationInstanceName is automationInstanceName, past the names the
+// fleet's records hold: a daemon started again counts from 1 again, and a
+// run of the one before (an interrupted create being destroyed, a firing
+// restored from its queue started in the same second) can hold the name,
+// which would fail the create ("already exists") and lose the run.
+func freeAutomationInstanceName(fleetName, agentName string, now time.Time) string {
+	st, _ := state.Load()
+	for {
+		name := automationInstanceName(agentName, now)
+		if st == nil || st.Fleets[fleetName] == nil {
+			return name
+		}
+		if _, err := st.Fleets[fleetName].GetInstance(name); err != nil {
+			return name
+		}
+	}
+}
+
 // sanitizeAutomationName lowercases and reduces a name to [a-z0-9-] so it embeds
 // cleanly in container names / workspace paths.
 func sanitizeAutomationName(s string) string {
@@ -877,7 +895,7 @@ func sanitizeAutomationName(s string) string {
 // agent's stored target: its backend and, for a Kubernetes agent, its
 // cluster connection (whose quotas the create checks).
 var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent, now time.Time) (string, error) {
-	instName := automationInstanceName(ag.Name, now)
+	instName := freeAutomationInstanceName(fleetName, ag.Name, now)
 	if _, err := s.startCreateInstanceJob(automationCreateRequest(fleetName, instName, ag), true); err != nil {
 		return "", err
 	}

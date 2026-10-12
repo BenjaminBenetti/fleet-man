@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -160,6 +161,29 @@ func TestAutomationInstanceName(t *testing.T) {
 		if !strings.HasPrefix(n, "my-builder-") {
 			t.Fatalf("sanitized name unexpected: %q", n)
 		}
+	}
+}
+
+// A daemon started again counts its run names from 1 again: the name a
+// record of the fleet holds (the last daemon's interrupted create, still
+// being destroyed) is passed over, not created over ("already exists").
+func TestFreeAutomationInstanceNameSkipsTheFleetsRecords(t *testing.T) {
+	isolateFleetDir(t)
+	orig := atomic.LoadInt64(&automationSeq)
+	t.Cleanup(func() { atomic.StoreInt64(&automationSeq, orig) })
+	now := time.Date(2026, 10, 12, 1, 56, 20, 0, time.UTC)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{{Name: "queuer-015620-1", Status: fleet.StatusDeleting}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	atomic.StoreInt64(&automationSeq, 0)
+	if got := freeAutomationInstanceName("alpha", "queuer", now); got != "queuer-015620-2" {
+		t.Fatalf("a run of a restarted daemon is named %q, want queuer-015620-2 past the record", got)
+	}
+	atomic.StoreInt64(&automationSeq, 0)
+	if got := freeAutomationInstanceName("beta", "queuer", now); got != "queuer-015620-1" {
+		t.Fatalf("a fleet with no records names its run %q", got)
 	}
 }
 
