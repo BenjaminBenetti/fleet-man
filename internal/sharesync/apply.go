@@ -333,10 +333,13 @@ func (tr *treeRoot) makeLink(op Op, at local) error {
 
 // mkdirParents creates p's missing parent folders. The hub sends a folder
 // before what is in it, so a missing one is a folder this side does not
-// sync (its own op sets its mode if it is synced). A missing folder the
-// side has a record of was deleted here and not reported yet: making it
-// again would undo that, so the op waits for the report. Called with tr.mu
-// held.
+// sync, or a synced one whose op was held back while this one went: its own
+// op sets its mode. Such a synced folder is recorded Made, so the side never
+// reports the mode it was made with as its own change (a 0700 folder made
+// 0755 here would otherwise be a concurrent change that mirror's tie-break
+// widens everywhere). A missing folder the side has a record of was deleted
+// here and not reported yet: making it again would undo that, so the op
+// waits for the report. Called with tr.mu held.
 func (tr *treeRoot) mkdirParents(p string) error {
 	parent := path.Dir(p)
 	if parent == "." {
@@ -345,14 +348,33 @@ func (tr *treeRoot) mkdirParents(p string) error {
 	if info, err := tr.fs.Lstat(parent); err == nil && info.IsDir() {
 		return nil
 	}
+	var missing []string
 	for _, a := range append(ancestors(parent), parent) {
 		if rec := tr.records[a]; rec != nil && rec.Entry.Live() {
 			if info, err := tr.fs.Lstat(a); err != nil || !info.IsDir() {
 				return localChange(a)
 			}
 		}
+		if _, err := tr.fs.Lstat(a); cannotExist(err) {
+			missing = append(missing, a)
+		}
 	}
-	return tr.fs.MkdirAll(parent, 0o755)
+	if err := tr.fs.MkdirAll(parent, 0o755); err != nil {
+		return err
+	}
+	for _, a := range missing {
+		if !tr.synced(a) {
+			continue
+		}
+		info, err := tr.fs.Lstat(a)
+		if err != nil {
+			return err
+		}
+		if err := tr.putRecord(a, &record{Entry: Entry{Kind: Dir, Mode: fileMode(Dir, info.Mode())}, FP: fingerprintOf(info), Made: true}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // writeFile applies a file: the new bytes appended in place when the side

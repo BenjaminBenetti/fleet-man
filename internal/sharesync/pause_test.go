@@ -229,3 +229,55 @@ func TestATornAppendIsCutBack(t *testing.T) {
 		t.Errorf("conflicts: %q", got)
 	}
 }
+
+// TestAFolderMadeForItsContentKeepsItsOwnMode: a synced folder made for a
+// file whose op came before the folder's own (mkdirParents) is not reported
+// as the side's change: the mode it was made with would otherwise race the
+// folder's real one at the hub, where mirror's tie-break takes the wider
+// (a 0700 folder widened to 0755 everywhere). The folder's op, when it
+// comes, sets its mode.
+func TestAFolderMadeForItsContentKeepsItsOwnMode(t *testing.T) {
+	r := newRig(t, "host", "c1")
+	tree := r.sides["c1"].tree
+	epoch := tree.roots["user"].epoch
+	res, err := tree.Apply(context.Background(), Batch{
+		Root: "user", Epoch: epoch,
+		Ops: []Op{{Path: "vault/inner/key", Rev: 7, Entry: Entry{Kind: File, Mode: 0o600, Size: 4, Hash: sum("key\n")}}},
+		Content: func(context.Context, Op, int64) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("key\n")), nil
+		},
+	})
+	if err != nil || len(res) != 1 || res[0].Status != Applied {
+		t.Fatalf("Apply of the file before its folders = %+v, %v", res, err)
+	}
+	rep, _, err := tree.Scan(context.Background(), "user", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range rep.Changes {
+		t.Errorf("the side reports %s (%v %o) as its own change", c.Path, c.Entry.Kind, c.Entry.Mode)
+	}
+	for _, rh := range tree.Hello().Roots {
+		for _, h := range rh.Held {
+			if rh.Root == "user" && (h.Path == "vault" || h.Path == "vault/inner") {
+				t.Errorf("the hello says the side holds %s at rev %d", h.Path, h.Rev)
+			}
+		}
+	}
+	res, err = tree.Apply(context.Background(), Batch{Root: "user", Epoch: epoch, Ops: []Op{
+		{Path: "vault", Rev: 5, Entry: Entry{Kind: Dir, Mode: 0o700}},
+		{Path: "vault/inner", Rev: 6, Entry: Entry{Kind: Dir, Mode: 0o755}},
+	}})
+	if err != nil || len(res) != 2 || res[0].Status != Applied || res[1].Status != Applied {
+		t.Fatalf("Apply of the folders' own ops = %+v, %v", res, err)
+	}
+	for p, want := range map[string]os.FileMode{"vault": 0o700, "vault/inner": 0o755} {
+		info, err := os.Stat(r.path("c1", "user", p))
+		if err != nil || info.Mode().Perm() != want {
+			t.Errorf("%s: mode %v, %v; want %o", p, info.Mode().Perm(), err, want)
+		}
+	}
+	if rep, _, err := tree.Scan(context.Background(), "user", nil); err != nil || len(rep.Changes) != 0 {
+		t.Fatalf("after the folders' ops the side reports %+v, %v", rep.Changes, err)
+	}
+}
