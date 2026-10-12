@@ -23,8 +23,9 @@ const forwardDialTimeout = 10 * time.Second
 // port-forward does) and relays it both ways. Each direction ends on its
 // own: fleetd's FIN shuts the TCP connection's write side while the peer's
 // answer is still relayed, and the peer's EOF is fleetd's FIN, so a forward
-// over the agent keeps a true half-close. The end of the session closes the
-// connection.
+// over the agent keeps a true half-close. fleetd's StreamAbort for the stream
+// (a connection it closed for good) closes both at once, as does the end of
+// the session.
 func (a *agent) serveForward(s *podwire.Stream) {
 	open := func(r podwire.OpenReply) error { return s.W.WriteJSON(podwire.FrameOpen, r) }
 	var h podwire.ForwardHeader
@@ -48,13 +49,50 @@ func (a *agent) serveForward(s *podwire.Stream) {
 	if err := open(podwire.OpenReply{}); err != nil {
 		return
 	}
-	relayForward(s.Conn, tcp)
+	abort := a.trackForward(s.ID)
+	defer abort.untrack()
+	relayForward(s.Conn, tcp, abort.ch)
+}
+
+// forwardAbort is a relayed forward's StreamAbort: ch is closed when fleetd
+// asks for its end.
+type forwardAbort struct {
+	ch      chan struct{}
+	untrack func()
+}
+
+// trackForward registers forward stream id for fleetd's StreamAbort.
+func (a *agent) trackForward(id uint32) forwardAbort {
+	ch := make(chan struct{})
+	var once sync.Once
+	end := func() { once.Do(func() { close(ch) }) }
+	a.fwdMu.Lock()
+	if a.forwards == nil {
+		a.forwards = map[uint32]func(){}
+	}
+	a.forwards[id] = end
+	a.fwdMu.Unlock()
+	return forwardAbort{ch: ch, untrack: func() {
+		a.fwdMu.Lock()
+		delete(a.forwards, id)
+		a.fwdMu.Unlock()
+	}}
+}
+
+// abortForward ends the forward of yamux stream id, if one is relayed.
+func (a *agent) abortForward(id uint32) {
+	a.fwdMu.Lock()
+	end := a.forwards[id]
+	a.fwdMu.Unlock()
+	if end != nil {
+		end()
+	}
 }
 
 // relayForward copies a stream and a TCP connection both ways until both
 // directions have ended, passing each EOF on as a half-close. When one side
-// fails outright (not an EOF), both are closed.
-func relayForward(stream net.Conn, tcp *net.TCPConn) {
+// fails outright (not an EOF), or aborted is closed, both are closed.
+func relayForward(stream net.Conn, tcp *net.TCPConn, aborted <-chan struct{}) {
 	var wg sync.WaitGroup
 	var closeBoth sync.Once
 	abort := func() {
@@ -66,6 +104,15 @@ func relayForward(stream net.Conn, tcp *net.TCPConn) {
 			_ = stream.Close()
 		})
 	}
+	relayed := make(chan struct{})
+	defer close(relayed)
+	go func() {
+		select {
+		case <-aborted:
+			abort()
+		case <-relayed:
+		}
+	}()
 	wg.Add(2)
 	go func() {
 		defer wg.Done()

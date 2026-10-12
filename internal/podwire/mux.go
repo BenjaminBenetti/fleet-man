@@ -52,7 +52,9 @@ var ErrRefused = errors.New("stream refused")
 
 // Stream is a stream the other side opened, past its preamble.
 type Stream struct {
-	Tag    Tag
+	Tag Tag
+	// ID is the yamux stream's id, the same on both ends.
+	ID     uint32
 	Header []byte
 	Conn   net.Conn
 	R      *FrameReader
@@ -126,7 +128,7 @@ func (m *Mux) serveStream(sess *yamux.Session, st *yamux.Stream) {
 	}
 	defer m.release(tag)
 	m.penalty.clean()
-	handler(&Stream{Tag: tag, Header: header, Conn: st, R: NewFrameReader(st), W: w, sess: sess, mux: m})
+	handler(&Stream{Tag: tag, ID: st.StreamID(), Header: header, Conn: st, R: NewFrameReader(st), W: w, sess: sess, mux: m})
 }
 
 func (m *Mux) refused(tag Tag, reason string) {
