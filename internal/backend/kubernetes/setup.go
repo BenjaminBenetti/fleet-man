@@ -135,8 +135,6 @@ type setUp struct {
 	created         time.Time
 	workspaceFolder string
 	tools           devcli.Tools
-	// deadline bounds the run; 0 is DefaultDeadlines().SetUp.
-	deadline time.Duration
 }
 
 // run runs set-up: every hook that is due.
@@ -150,10 +148,7 @@ func (u setUp) run(ctx context.Context) error {
 		return errors.New("the instance's dev container is not running")
 	}
 	c.StartedAt = kubeshim.StartedAt(st.State.Running.StartedAt.Time, string(u.pod.UID), st.RestartCount)
-	limit := u.deadline
-	if limit <= 0 {
-		limit = DefaultDeadlines().SetUp
-	}
+	limit := DefaultDeadlines().SetUp
 	sctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	_, err := devcli.SetUp(sctx, devcli.SetUpRequest{
