@@ -700,8 +700,8 @@ Agents can run on a cluster: pick it as the agent's target (TUI agent dialog,
 
 ## 13. VS Code
 
-`c` (or `fleet code`) on a cluster instance, or on any instance of a remote
-daemon, opens VS Code through **Remote-SSH** (install the Remote-SSH
+`c` (or `fleet code`) on a cluster instance, or on a Docker instance of a
+remote daemon, opens VS Code through **Remote-SSH** (install the Remote-SSH
 extension). There is no SSH server listening anywhere: fleet writes an alias
 for the instance into `~/.ssh/fleet_config`, and the first time asks to add one
 `Include` line to your `~/.ssh/config` (`fleet code --print` prints the command
@@ -726,7 +726,8 @@ applied there.
 allowed. fleetd treats pods as untrusted: their streams are capped, host writes
 go only into sync roots through a symlink-safe writer, and host dials go only
 to recorded sockets and mirrored ports. fleetd itself acts on a pod with the
-authority of `docker exec`: the agent runs as root in the pod.
+authority of `docker exec`: the agent runs as root in the pod (as the one
+non-root user on a cluster without root).
 
 Anyone who can write to the namespace (`pods/exec`, create pods, patch
 StatefulSets) is effectively inside its instances. Anyone who can mount or
@@ -748,10 +749,11 @@ does not defend against someone who can exec into the real one.
 | gateway registry id | in image references, readable by anyone who can read pods; it is not the session id that webhook URLs use as their credential |
 
 Annotations hold hashes only, the build capture is redacted, `plugin_env`
-records names, and creation logs redact `-e` values. **Secrets at rest are the
-cluster operator's concern**: Kubernetes stores Secrets unencrypted in etcd
-unless encryption at rest is configured, so enable it (or use a KMS provider)
-on clusters that hold agent logins and env values.
+takes no value for a name that looks secret, and creation logs redact `-e`
+values. **Secrets at rest are the cluster operator's concern**: Kubernetes
+stores Secrets unencrypted in etcd unless encryption at rest is configured, so
+enable it (or use a KMS provider) on clusters that hold agent logins and env
+values.
 
 ### Privileged pods
 
@@ -816,7 +818,7 @@ already allows.
 ## 15. Environment variables
 
 Read by fleetd (set them where the daemon starts). Durations are Go durations
-(`90s`, `20m`) or whole seconds.
+(`90s`, `20m`); the `FLEET_KUBE_*_TIMEOUT` ones also take whole seconds.
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -833,7 +835,7 @@ Read by fleetd (set them where the daemon starts). Durations are Go durations
 | `FLEET_KUBE_SEED_CACHE` | | `off` seeds every automation run in full |
 | `FLEET_AUTOMATION_CREATE_TIMEOUT` | 20m | a cluster automation run's create |
 | `FLEET_AUTOMATION_LOGIN_CHECK` | | `off` skips the cluster agent login check |
-| `FLEET_EXEC_HOLD_GRACE` | 12h | how long a command whose agent session dropped waits in the pod to be re-attached |
+| `FLEET_EXEC_HOLD_GRACE` | 12h | how long fleetd waits for a dropped agent session to come back before it fails the commands that session held; the pod agent keeps them running as long as the same variable in the pod's environment says (12h when unset) |
 | `FLEET_SSH_AGENT_SOCK` | | see [section 8](#8-networking) |
 | `FLEET_POD_BINARY_<ARCH>`, `FLEET_POD_TMUX_<ARCH>` | `~/.fleet/bin`, else the release download | the pod build and tmux bundle fleetd stages into pods ([section 2](#2-what-you-need)) |
 
