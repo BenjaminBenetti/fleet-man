@@ -29,6 +29,9 @@ kill_daemons() {
 }
 kill_daemons
 FLEET="${FIXTURE_REPO_NAME}"
+cat > "${HOME}/.fleet/state.json" <<EOF
+{ "fleets": { "${FLEET}": { "name": "${FLEET}", "remote": "${FIXTURE_REPO_URL}", "settings": {}, "instances": [] } } }
+EOF
 log="${HOME}/.fleet/fleet.log"
 WATCH="${HOME}/.fleet/automation/watch.json"
 
