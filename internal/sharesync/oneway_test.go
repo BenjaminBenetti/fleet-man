@@ -121,7 +121,8 @@ func TestOneWayRootTakesOnlyItsWritersChanges(t *testing.T) {
 
 // TestReadOnlyRootIsNeverWritten: a read-only root (a read-only bind's host
 // folder) opens without the self-test's writes, reports its changes, and
-// refuses every op.
+// writes no op: one of what it holds is recorded, any other answered with
+// the folder's own state, which its next scan reports on the op's rev.
 func TestReadOnlyRootIsNeverWritten(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(dir+"/config", []byte("v1\n"), 0o644); err != nil {
@@ -146,10 +147,101 @@ func TestReadOnlyRootIsNeverWritten(t *testing.T) {
 		t.Fatalf("Scan = %+v, %v", rep, err)
 	}
 	res, err := tree.Apply(context.Background(), Batch{Root: "user", Ops: []Op{{Path: "planted", Rev: 1, Entry: Entry{Kind: Dir, Mode: 0o755}}}})
-	if err != nil || len(res) != 1 || res[0].Status != Refused {
-		t.Fatalf("Apply = %+v, %v; want it refused", res, err)
+	if err != nil || len(res) != 1 || res[0].Status != Changed {
+		t.Fatalf("Apply = %+v, %v; want the folder's own state to stand (Changed)", res, err)
 	}
 	if _, err := os.Lstat(dir + "/planted"); !os.IsNotExist(err) {
 		t.Error("a read-only root was written")
 	}
+	if err := tree.Acked("user", Reply{Epoch: rep.Epoch, Acks: []Ack{{Path: "config", Entry: rep.Changes[0].Entry, Status: Accepted, Rev: 2}}}); err != nil {
+		t.Fatal(err)
+	}
+	rep, _, err = tree.Scan(context.Background(), "user", []string{"planted"})
+	if err != nil || len(rep.Changes) != 1 || rep.Changes[0].Path != "planted" || rep.Changes[0].Entry.Live() || rep.Changes[0].Base != 1 {
+		t.Fatalf("the scan after it = %+v, %v; want planted's delete on rev 1", rep, err)
+	}
+	// An op of what the folder holds is taken as held.
+	res, err = tree.Apply(context.Background(), Batch{Root: "user", Ops: []Op{{Path: "config", Rev: 3, Entry: rep0Entry(t, tree)}}})
+	if err != nil || len(res) != 1 || res[0].Status != Applied {
+		t.Fatalf("Apply of the folder's own content = %+v, %v; want it applied", res, err)
+	}
+	if got, _ := os.ReadFile(dir + "/config"); string(got) != "v1\n" {
+		t.Errorf("config = %q", got)
+	}
+}
+
+// rep0Entry is the entry tree records for user/config.
+func rep0Entry(t *testing.T, tree *Tree) Entry {
+	t.Helper()
+	tr := tree.roots["user"]
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	rec := tr.records["config"]
+	if rec == nil {
+		t.Fatal("config is not recorded")
+	}
+	return rec.Entry
+}
+
+// TestRootTurnedOneWayTakesItsWritersState: a root that turns one-way (a
+// host bind every instance now mounts read-only, after a read-write one)
+// converges on the writer's state: a pod's last edit, which the daemon
+// host's now read-only folder never took, is undone in every pod, and so is
+// a file only a pod made, rather than sent to the host forever.
+func TestRootTurnedOneWayTakesItsWritersState(t *testing.T) {
+	r := newRig(t)
+	r.addSide(SideInfo{ID: "host", Location: "host"})
+	r.addSide(SideInfo{ID: "pod", Location: "k8s"})
+	r.write("host", "user", "config", "v1\n")
+	r.write("host", "user", "kept", "k\n")
+	r.sync()
+	if got := r.read("pod", "user", "config"); got != "v1\n" {
+		t.Fatalf("pod config = %q", got)
+	}
+
+	// The host side is away (fleetd restarting) as the pod's last edits of
+	// the read-write bind reach the hub.
+	host := r.sides["host"]
+	host.stop()
+	r.hub.Detach("host")
+	r.write("pod", "user", "config", "pod edit\n")
+	r.write("pod", "user", "planted", "x\n")
+	r.sync()
+
+	// The bind turns read-only: the hub opens the root one-way, the host's
+	// folder read-only.
+	for _, id := range r.order {
+		if id != "host" {
+			r.sides[id].stop()
+		}
+	}
+	if err := r.hub.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range r.order {
+		if err := r.sides[id].tree.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.hopts.Writers = map[string]string{"user": "host"}
+	host.readOnly = map[string]bool{"user": true}
+	r.openHub()
+	for _, id := range r.order {
+		r.openSide(r.sides[id])
+	}
+	r.sync()
+	r.sync()
+	if got := r.read("host", "user", "config"); got != "v1\n" {
+		t.Fatalf("host config = %q: a read-only folder was written", got)
+	}
+	if got := r.read("pod", "user", "config"); got != "v1\n" {
+		t.Errorf("pod config = %q, want the host's state back", got)
+	}
+	if got := r.read("pod", "user", "planted"); got != "<missing>" {
+		t.Errorf("pod still holds the file the host never had: %q", got)
+	}
+	if got := r.read("pod", "user", "kept"); got != "k\n" {
+		t.Errorf("pod kept = %q", got)
+	}
+	r.assertConverged()
 }

@@ -39,8 +39,10 @@ type TreeRoot struct {
 	// root is the folder it is in, holding only it (internal/mounts/hostbind).
 	Only []string
 	// ReadOnly: the side never writes Dir (a read-only host bind's folder on
-	// the daemon host, which the hub takes changes from alone): every op is
-	// refused, and the folder need not take the self-test's writes.
+	// the daemon host, which the hub takes changes from alone): an op of
+	// anything but what the folder holds is answered with the folder's own
+	// state (applyReadOnly), and the folder need not take the self-test's
+	// writes.
 	ReadOnly bool
 }
 

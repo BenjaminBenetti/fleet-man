@@ -72,6 +72,9 @@ type rigSide struct {
 	// reserved are the root folders' reserved paths, only their Only names.
 	reserved map[string][]string
 	only     map[string][]string
+	// readOnly are the roots the side's tree opens read-only (a read-only
+	// bind's folder on the daemon host).
+	readOnly map[string]bool
 	// stop ends the side's Run.
 	stop func()
 	// rep, when set, is the side's reporter instead of the hub.
@@ -135,7 +138,7 @@ func (r *rig) openSide(s *rigSide) {
 	r.t.Helper()
 	var roots []TreeRoot
 	for _, root := range r.roots {
-		roots = append(roots, TreeRoot{Name: root, Dir: filepath.Join(s.dir, root), Reserved: s.reserved[root], Only: s.only[root]})
+		roots = append(roots, TreeRoot{Name: root, Dir: filepath.Join(s.dir, root), Reserved: s.reserved[root], Only: s.only[root], ReadOnly: s.readOnly[root]})
 	}
 	opts := r.topts(s.info.ID)
 	opts.StateDir = filepath.Join(r.base, "state", s.info.ID)

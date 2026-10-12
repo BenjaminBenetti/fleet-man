@@ -424,7 +424,8 @@ func (root *hubRoot) prepare(k key, m Merger, side *hubSide, c Change, base uint
 		cp := *cur
 		p.cur = &cp
 	}
-	p.fast = cur == nil || base == cur.Rev || cur.Origin == side.info.ID && base == cur.Base
+	// A one-way root's writer's change stands whatever it was made on.
+	p.fast = cur == nil || base == cur.Rev || cur.Origin == side.info.ID && base == cur.Base || root.writer == side.info.ID
 	p.shape = root.checkShape(c, cur)
 	return p, nil
 }

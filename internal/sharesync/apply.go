@@ -72,7 +72,7 @@ func (tr *treeRoot) apply(ctx context.Context, op Op, content ContentFunc) (Resu
 		return Refused, "not synced on this side"
 	}
 	if tr.ReadOnly {
-		return Refused, "read-only on this side"
+		return tr.applyReadOnly(op)
 	}
 	if err := op.Entry.check(); err != nil {
 		return Refused, err.Error()
@@ -115,6 +115,37 @@ func (tr *treeRoot) apply(ctx context.Context, op Op, content ContentFunc) (Resu
 	}
 	tr.mu.Unlock()
 	return classify(tr.writeFile(ctx, op, at, content))
+}
+
+// applyReadOnly answers an op in a read-only root, whose folder the tree never
+// writes: what the folder holds is the root's state (the side is its one-way
+// root's writer, HubOptions.Writers). An op of what the folder already holds
+// is recorded. Any other is answered Changed, with op's state recorded as
+// held, though the folder was not written: the next scan of the path then
+// reports the folder's own state, made on op's rev, which the hub takes. A
+// root that turned one-way so converges on the folder, rather than having
+// the hub send it, forever, what a pod last wrote there.
+func (tr *treeRoot) applyReadOnly(op Op) (ResultStatus, string) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	at, err := tr.look(op.Path)
+	switch {
+	case err == nil && at.rec != nil && at.exists && at.rec.Entry.Same(op.Entry):
+		return classify(tr.recordOp(op, at.info))
+	case err == nil && at.rec == nil && !at.exists && !op.Entry.Live():
+		return Applied, ""
+	}
+	held := &record{Rev: op.Rev, Entry: op.Entry}
+	if !op.Entry.Live() {
+		held.Entry = op.Entry.tombstone()
+	}
+	if err := tr.putRecord(op.Path, held); err != nil {
+		return classify(err)
+	}
+	if err := tr.commit(); err != nil {
+		return classify(err)
+	}
+	return Changed, "read-only on this side: its folder's state stands"
 }
 
 // look returns what p holds and checks it is what the tree last recorded,
