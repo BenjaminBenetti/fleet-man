@@ -69,6 +69,22 @@ func TestPickerListsTheDaemonsContexts(t *testing.T) {
 	}
 }
 
+// A long host name and a long kubeconfig path do not share a shortened line:
+// the path read gets a line of its own and is shown whole.
+func TestPickerKeepsTheKubeconfigPathWhole(t *testing.T) {
+	m, sp := kubeTestModel(t)
+	reply := pickerContexts()
+	host := "iad20-eo1207-d9f66e4f-d7df-4150-9b7e-3f0c2a1d5e6b"
+	path := "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/tmp.KIJJwVPMOj/kubeconfig"
+	reply.Host, reply.KubeconfigPaths = host, []string{path}
+	stubKubeContexts(t, reply)
+	openPicker(t, m, sp)
+	out := flatText(sp.viewSettings(m))
+	if want := "contexts on fleetd @ " + host + " " + path + " Filter:"; !strings.Contains(out, want) {
+		t.Fatalf("picker missing %q in:\n%s", want, out)
+	}
+}
+
 // After /, typed letters filter: j, k, n, c and L do nothing else. esc
 // leaves the filter (keeping it) and the keys work again.
 func TestPickerFilterSwallowsLetters(t *testing.T) {
