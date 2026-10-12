@@ -189,6 +189,23 @@ _be_teardown() {
   pkill -9 -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
 }
 
+# _be_dump <dir> — what a failed test leaves for its artifact, before its
+# teardown: the test namespace's objects, events and pods (described, with
+# their logs), the nodes and the cluster's recent events.
+_be_dump() {
+  local dir="$1" ns="${FLEET_ITEST_NAMESPACE}" pod
+  _be_kubectl -n "${ns}" get all,pvc,secrets,configmaps,leases,networkpolicies,poddisruptionbudgets -o wide > "${dir}/objects.txt" 2>&1 || true
+  _be_kubectl -n "${ns}" get events --sort-by=.lastTimestamp > "${dir}/events.txt" 2>&1 || true
+  _be_kubectl -n "${ns}" describe pods > "${dir}/pods.txt" 2>&1 || true
+  for pod in $(_be_kubectl -n "${ns}" get pods -o 'jsonpath={.items[*].metadata.name}' 2>/dev/null); do
+    _be_kubectl -n "${ns}" logs "${pod}" --all-containers --prefix --tail=2000 > "${dir}/log-${pod}.txt" 2>&1 || true
+  done
+  _be_kubectl get nodes -o wide > "${dir}/nodes.txt" 2>&1 || true
+  _be_kubectl describe nodes >> "${dir}/nodes.txt" 2>&1 || true
+  _be_kubectl get pv,storageclass,volumeattachments -o wide > "${dir}/storage.txt" 2>&1 || true
+  _be_kubectl get events -A --sort-by=.lastTimestamp > "${dir}/events-all.txt" 2>&1 || true
+}
+
 # --- containers: the instance's StatefulSet and pod ---
 
 # _be_cid_parts <container_id> — "<connection> <namespace> <statefulset>" of a

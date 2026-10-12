@@ -61,6 +61,18 @@ _be_teardown() {
   fi
 }
 
+# _be_dump <dir> — what a failed test leaves for its artifact, before its
+# teardown: the host's containers, and the logs of fleet's own.
+_be_dump() {
+  local dir="$1" c
+  command -v docker >/dev/null 2>&1 || return 0
+  docker ps -a --format '{{.ID}} {{.Names}} {{.Status}} {{.Image}}' > "${dir}/containers.txt" 2>&1 || true
+  for c in $(docker ps -aq --filter "label=devcontainer.local_folder" 2>/dev/null) \
+    $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^fleet-' || true); do
+    docker logs --tail 2000 "${c}" > "${dir}/log-${c}.txt" 2>&1 || true
+  done
+}
+
 # --- containers ---
 
 _be_container_status() {  # <container_id>

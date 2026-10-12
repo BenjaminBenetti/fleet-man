@@ -281,7 +281,18 @@ for test_file in "${tests[@]}"; do
     continue
   fi
   say "${BOLD}RUN${RESET}  ${test_name}"
-  bash "${test_file}" || true
+  rc=0
+  bash "${test_file}" || rc=$?
+  # FLEET_ITEST_ARTIFACTS=<dir>: a failed test leaves its daemon's log and
+  # the backend's state (_be_dump) there, before the teardown wipes them.
+  if [ "${rc}" -ne 0 ] && [ -n "${FLEET_ITEST_ARTIFACTS:-}" ]; then
+    artifacts="${FLEET_ITEST_ARTIFACTS}/${test_name}"
+    mkdir -p "${artifacts}"
+    cp "${HOME}/.fleet/fleet.log" "${artifacts}/fleet.log" 2>/dev/null || true
+    cp "${HOME}/.fleet/state.json" "${artifacts}/state.json" 2>/dev/null || true
+    _be_dump "${artifacts}" || true
+    say "artifacts of ${test_name}: ${artifacts}"
+  fi
   say "teardown ${test_name}"
   teardown_test || true
 done
