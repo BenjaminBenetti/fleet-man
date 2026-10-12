@@ -31,7 +31,7 @@ import (
 // 169.254.169.254, under the same egress rules a fleet's pods get while the
 // connection blocks metadata. Two throwaway pods: a target that a
 // NetworkPolicy closes to every connection, and a client that tries the
-// target and the metadata address.
+// target and the metadata address once its policies hold.
 
 // Check names of the network probe.
 const (
@@ -47,6 +47,14 @@ const metadataAddress = "169.254.169.254"
 
 // probeTargetPort is the target pod's HTTP port.
 const probeTargetPort = 8080
+
+// probeSettle is how far into its life the client waits before the tries
+// that decide the checks, so that they meet the pod's policies as a running
+// pod does. A network plugin may apply a new pod's policies only after the
+// pod has started: kindnet passes a pod's packets until it has synced the
+// pod's address, about a second (Calico holds a pod to them from its first
+// packet).
+const probeSettle = 10 * time.Second
 
 // networkProbeTimeout bounds the whole probe; networkPoll paces it (tests
 // shorten it).
@@ -64,8 +72,11 @@ const labelProbe = "fleet.dev/probe"
 type networkVerdict struct {
 	metadataReachable bool
 	peerReachable     bool
-	inotifyInstances  int64
-	inotifyWatches    int64
+	// metadataEarly is the client's first try at the metadata address, made
+	// before its policies may hold.
+	metadataEarly    bool
+	inotifyInstances int64
+	inotifyWatches   int64
 }
 
 // networkProbe runs the probe and reports CheckNetworkPolicy and
@@ -116,7 +127,11 @@ func (r *run) networkProbe(ctx context.Context) {
 		r.warn(CheckMetadata, line, fix)
 		return
 	}
-	r.pass(CheckMetadata, metadataAddress+" not reachable from pods ("+onOff+")")
+	detail := metadataAddress + " not reachable from pods (" + onOff + ")"
+	if block && v.metadataEarly {
+		detail += "; a new pod's first packets got there"
+	}
+	r.pass(CheckMetadata, detail)
 }
 
 // probeNetwork runs the two probe pods (and their policies) and reads what
@@ -172,7 +187,7 @@ func (r *run) probeNetwork(ctx context.Context, block bool) (networkVerdict, err
 		return networkVerdict{}, err
 	}
 
-	client, err := r.probePod(clientName, id+"-client", []string{"sh", "-c", probeScript(ip)})
+	client, err := r.probePod(clientName, id+"-client", []string{"sh", "-c", probeScript(ip, probeSettle)})
 	if err != nil {
 		return networkVerdict{}, err
 	}
@@ -196,13 +211,17 @@ func (r *run) probeNetwork(ctx context.Context, block bool) (networkVerdict, err
 
 // probeScript is the client's: one wget at a time, each line naming its
 // target and whether it got an answer (any HTTP status counts: the address
-// answered).
-func probeScript(targetIP string) string {
+// answered). The tries that decide wait until settle into the pod's life;
+// metadata_early, before them, is what the pod's first packets reach.
+func probeScript(targetIP string, settle time.Duration) string {
 	return `probe() {
   out=$(wget -q -T 3 -O /dev/null "$2" 2>&1); rc=$?
   case "$out" in *"server returned error"*) rc=0 ;; esac
   if [ "$rc" = 0 ]; then echo "$1=reached"; else echo "$1=unreached"; fi
 }
+start=$(date +%s)
+probe metadata_early http://` + metadataAddress + `/
+while [ $(( $(date +%s) - start )) -lt ` + fmt.Sprint(int(settle/time.Second)) + ` ]; do sleep 1; done
 probe metadata http://` + metadataAddress + `/
 probe peer http://` + podAddress(targetIP) + `:` + fmt.Sprint(probeTargetPort) + `/
 echo "inotify_instances=$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null)"
@@ -247,6 +266,8 @@ func parseNetworkProbe(out string) (networkVerdict, error) {
 		switch k {
 		case "metadata":
 			v.metadataReachable = val == "reached"
+		case "metadata_early":
+			v.metadataEarly = val == "reached"
 		case "peer":
 			v.peerReachable = val == "reached"
 		}
