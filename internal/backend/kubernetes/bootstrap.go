@@ -43,12 +43,14 @@ type PodTarget struct {
 	// it, an agent of another build that speaks a common protocol is used
 	// as it is.
 	Restage bool
-	// HostSockets, HostGateway and GatewaySkip are the host relays fleetd
-	// recorded for the instance (InstanceRecord's): what the pod's agent
-	// binds, and all a pod's relay stream can reach on the daemon host.
-	HostSockets []hostrelay.Socket
-	HostGateway bool
-	GatewaySkip []uint16
+	// HostSockets, HostSocketDirs, HostGateway and GatewaySkip are the host
+	// relays fleetd recorded for the instance (InstanceRecord's): what the
+	// pod's agent binds, and all a pod's relay stream can reach on the
+	// daemon host.
+	HostSockets    []hostrelay.Socket
+	HostSocketDirs []hostrelay.SocketDir
+	HostGateway    bool
+	GatewaySkip    []uint16
 	// Share is where the instance's fleet mounts live (InstanceRecord's):
 	// on a share mounted from several nodes, the pod's agent hints its
 	// changes (sharehint.go). nil without fleet mounts.

@@ -63,10 +63,15 @@ type PodSpec struct {
 	HostGateway bool     `json:"hostGateway,omitempty"`
 	GatewaySkip []uint16 `json:"gatewaySkip,omitempty"`
 	// HostSockets are the daemon-host sockets the run binds (other than the
-	// ssh-agent's, which PID1.Links point at fleet's agent relay), one per
-	// socket of a bound socket directory: the pod's agent binds each target,
-	// and fleetd relays its connections to the recorded source.
+	// ssh-agent's, which PID1.Links point at fleet's agent relay): the pod's
+	// agent binds each target, and fleetd relays its connections to the
+	// recorded source.
 	HostSockets []hostrelay.Socket `json:"hostSockets,omitempty"`
+	// HostSocketDirs are the daemon-host socket directories the run binds:
+	// fleetd lists each source while the pod runs, so the pod's agent binds
+	// a socket for each one there, those made since the create too, as
+	// docker's bind of the directory shows them.
+	HostSocketDirs []hostrelay.SocketDir `json:"hostSocketDirs,omitempty"`
 	// DNS adds to the pod's resolver configuration (--dns, --dns-search,
 	// --dns-option).
 	DNS *DNSConfig `json:"dns,omitempty"`

@@ -144,11 +144,17 @@ const (
 	MaxHostSockets  = 64
 	MaxGatewayPorts = 512
 	MaxSocketPath   = 107
+	// MaxHostSocketDirs bounds the socket directories a devcontainer binds,
+	// whose sockets (counted in MaxHostSockets) fleetd lists while the pod
+	// runs.
+	MaxHostSocketDirs = 16
 )
 
 // ReservedHostSocketDirs are where a pod's agent binds no host socket
 // (nor in its control directory): fleet's own install, and the kernel's.
-var ReservedHostSocketDirs = []string{"/opt/fleet", "/proc", "/sys", "/dev"}
+// /dev is not one: a pod's /dev is its container's own tmpfs, where a socket
+// such as /dev/log is bound as docker's bind would show it.
+var ReservedHostSocketDirs = []string{"/opt/fleet", "/proc", "/sys"}
 
 // ReservedHostSocketDir is the directory of ReservedHostSocketDirs that p is
 // in, or "".

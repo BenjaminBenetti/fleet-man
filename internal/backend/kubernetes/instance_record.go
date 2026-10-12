@@ -78,6 +78,11 @@ type InstanceRecord struct {
 	// sources resolved when recorded: what the pod's agent binds, and the
 	// only daemon-host paths fleetd dials for the pod.
 	HostSockets []hostrelay.Socket `json:"hostSockets,omitempty"`
+	// HostSocketDirs are the daemon-host socket directories the devcontainer
+	// binds, their sources resolved when recorded: fleetd lists each while
+	// the pod runs, and the pod's agent binds a socket for every socket in
+	// it.
+	HostSocketDirs []hostrelay.SocketDir `json:"hostSocketDirs,omitempty"`
 	// HostGateway: the devcontainer declares host-gateway, so the pod
 	// mirrors the daemon host's listening ports (all but GatewaySkip, the
 	// ports it serves itself) while its connection allows it.

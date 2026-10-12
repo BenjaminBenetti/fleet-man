@@ -89,6 +89,7 @@ func TestCloneRecordCarriesTheSources(t *testing.T) {
 	rec.Created = time.Unix(1700000000, 0)
 	rec.Ports = []backend.PublishedPort{{HostIP: "127.0.0.1", HostPort: 3000, ContainerPort: 3000}}
 	rec.HostSockets = []hostrelay.Socket{{Target: "/run/gpg.sock", Source: "/home/u/.gnupg/S.gpg-agent.extra", Mode: 0o700}}
+	rec.HostSocketDirs = []hostrelay.SocketDir{{Target: "/tmp/.X11-unix", Source: "/tmp/.X11-unix", Shadowed: []string{"X1"}}}
 	rec.HostGateway, rec.GatewaySkip = true, []uint16{3000}
 	rec.Share = &ShareRecord{Mode: "single-node", Claim: "fs-alpha-abcdefgh-share", Roots: []podshare.SpokeRoot{{Name: ".mnt", Reserved: []string{"data"}}}, UID: 1000, GID: 1000}
 	c := cloneRig(t, sts, rec)
@@ -109,6 +110,9 @@ func TestCloneRecordCarriesTheSources(t *testing.T) {
 	}
 	if got.Key != "dest2345" || got.StatefulSet != c.id.sts || got.Instance != "copy" || !slices.Equal(got.Ports, rec.Ports) {
 		t.Fatalf("clone record %+v", got)
+	}
+	if !reflect.DeepEqual(got.HostSocketDirs, rec.HostSocketDirs) || &got.HostSocketDirs[0].Shadowed[0] == &rec.HostSocketDirs[0].Shadowed[0] {
+		t.Errorf("the clone's socket directories %+v, want a copy of the source's", got.HostSocketDirs)
 	}
 	if !got.NonRoot || !got.AudioMissing {
 		t.Fatalf("clone of an audio-less pod without root: nonRoot %v audioMissing %v", got.NonRoot, got.AudioMissing)

@@ -1548,9 +1548,8 @@
       "mount": "map"
     },
     "changes": {
-      "/hostSockets/0/mode": 511,
-      "/hostSockets/0/source": "/home/dev/host/x11/X0",
-      "/hostSockets/0/target": "/tmp/.X11-unix/X0",
+      "/hostSocketDirs/0/source": "/home/dev/host/x11",
+      "/hostSocketDirs/0/target": "/tmp/.X11-unix",
       "/mounts/1/kind": "host-socket-dir",
       "/mounts/1/source": "/home/dev/host/x11",
       "/mounts/1/target": "/tmp/.X11-unix"

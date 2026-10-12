@@ -23,9 +23,11 @@ import (
 //
 //   - Host-socket binds (TagSockHost). A pod binds the targets its
 //     instance record lists (InstanceRecord.HostSockets, carried by the
-//     verified session's PodTarget), and each connection it relays names
-//     one; fleetd dials the daemon-host path it recorded for that target at
-//     create (hostrelay.Dial, which follows no link that appeared since),
+//     verified session's PodTarget), and those of the sockets now in its
+//     socket directories (podagent_sockdirs.go), and each connection it
+//     relays names one; fleetd dials the daemon-host path it recorded for
+//     that target at create, or the socket of that name in the directory it
+//     recorded (hostrelay.Dial, which follows no link that appeared since),
 //     never a path the pod says. A target fleetd did not record is refused;
 //     a recorded socket it cannot reach is logged at error, with the fleet
 //     and instance, once until it is reached again.
@@ -111,14 +113,15 @@ func hostSockets(t kubernetes.PodTarget) []podwire.HostSocket {
 }
 
 // recordedSource is the daemon-host path fleetd recorded for t's
-// host-socket bind at target.
+// host-socket bind at target, or (a socket of a bound socket directory) the
+// socket of that name in the directory fleetd recorded.
 func recordedSource(t kubernetes.PodTarget, target string) (string, bool) {
 	for _, s := range t.HostSockets {
 		if s.Target == target && target != "" {
 			return s.Source, true
 		}
 	}
-	return "", false
+	return hostrelay.InDir(t.HostSocketDirs, target)
 }
 
 // portsFor is the ports t's pod mirrors now: none unless its devcontainer

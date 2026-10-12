@@ -15,9 +15,9 @@ import (
 )
 
 // TestHostSocketBinds: a bind of the user's agent socket is a link to fleet's
-// agent relay; any other daemon-host socket, and each socket (only) of a
-// bound socket directory, is recorded with its target, its source and its
-// permission bits.
+// agent relay; any other daemon-host socket is recorded with its target, its
+// source and its permission bits, and a bound socket directory with its
+// target and source (fleetd lists its sockets while the pod runs).
 func TestHostSocketBinds(t *testing.T) {
 	in := baseInput([]string{
 		"-v", "/home/dev/host/agent.sock:/run/ssh.sock",
@@ -33,10 +33,12 @@ func TestHostSocketBinds(t *testing.T) {
 	}
 	want := []hostrelay.Socket{
 		{Target: "/home/vscode/.gnupg/S.gpg-agent", Source: "/home/dev/host/S.gpg-agent", Mode: 0o600},
-		{Target: "/tmp/.X11-unix/X0", Source: "/home/dev/host/x11/X0", Mode: 0o777},
 	}
 	if !slices.Equal(res.Pod.HostSockets, want) {
 		t.Fatalf("host sockets %+v", res.Pod.HostSockets)
+	}
+	if got := res.Pod.HostSocketDirs; len(got) != 1 || got[0].Target != "/tmp/.X11-unix" || got[0].Source != "/home/dev/host/x11" || len(got[0].Shadowed) != 0 {
+		t.Fatalf("host socket directories %+v", got)
 	}
 }
 
@@ -55,15 +57,14 @@ func TestHostSocketBindsShadowASocketDirectorysSocket(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var socks []podwire.HostSocket
 			for _, s := range res.Pod.HostSockets {
 				if s.Target == "/tmp/.X11-unix/X0" && s.Source != strings.Split(bind, ":")[0] {
 					t.Fatalf("the directory's socket is relayed under the bind: %+v", res.Pod.HostSockets)
 				}
-				socks = append(socks, podwire.HostSocket{Target: s.Target, Mode: s.Mode})
 			}
-			if err := (podwire.DesiredState{Sockets: podwire.Sockets{Host: socks}}).Validate(); err != nil {
-				t.Fatal(err)
+			dirs := res.Pod.HostSocketDirs
+			if len(dirs) != 1 || !slices.Equal(dirs[0].Shadowed, []string{"X0"}) || dirs[0].Lists("X0") || !dirs[0].Lists("X1") {
+				t.Fatalf("the directory does not leave the bound socket out: %+v", dirs)
 			}
 		})
 	}
@@ -73,21 +74,43 @@ func TestHostSocketBindsShadowASocketDirectorysSocket(t *testing.T) {
 // the pod's agent binds no host socket in (the kernel's, fleet's install) is
 // refused at create, never left unbound.
 func TestHostSocketBindsWhereTheAgentBindsNone(t *testing.T) {
-	for _, target := range []string{"/dev/log", "/sys/fs/s.sock", "/proc/s.sock"} {
+	for _, target := range []string{"/sys/fs/s.sock", "/proc/s.sock"} {
 		in := baseInput([]string{"-v", "/home/dev/host/S.gpg-agent:" + target}, nil, nil)
 		if _, err := Translate(in); err == nil || !strings.Contains(err.Error(), CodeUnsupportedMount) || !strings.Contains(err.Error(), target) {
 			t.Errorf("%s: %v", target, err)
 		}
 	}
-	in := baseInput([]string{"-v", "/home/dev/host/x11:/dev/x11"}, nil, nil)
-	if _, err := Translate(in); err == nil || !strings.Contains(err.Error(), "/dev/x11/X0") {
+	in := baseInput([]string{"-v", "/home/dev/host/x11:/sys/x11"}, nil, nil)
+	if _, err := Translate(in); err == nil || !strings.Contains(err.Error(), "/sys/x11") {
 		t.Errorf("a socket directory: %v", err)
 	}
 }
 
+// TestHostSocketBindsUnderDev: a socket bound under /dev (a syslog socket at
+// /dev/log, as docker binds one) is relayed: a pod's /dev is its container's
+// own tmpfs.
+func TestHostSocketBindsUnderDev(t *testing.T) {
+	in := baseInput([]string{"-v", "/home/dev/host/S.gpg-agent:/dev/log", "-v", "/home/dev/host/x11:/dev/x11"}, nil, nil)
+	res, err := Translate(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, s := range res.Pod.HostSockets {
+		got[s.Target] = s.Source
+	}
+	if got["/dev/log"] != "/home/dev/host/S.gpg-agent" {
+		t.Errorf("the /dev/log bind is not relayed: %+v", res.Pod.HostSockets)
+	}
+	if len(res.Pod.HostSocketDirs) != 1 || res.Pod.HostSocketDirs[0].Target != "/dev/x11" {
+		t.Errorf("the socket directory under /dev is not relayed: %+v", res.Pod.HostSocketDirs)
+	}
+}
+
 // TestHostSocketBindsPastTheLimits: a socket target a unix socket address
-// cannot hold, and more sockets than a pod's agent relays, are refused, never
-// dropped.
+// cannot hold, and more socket binds or socket directories than a pod's
+// agent relays, are refused, never dropped. A directory's own sockets are
+// counted while the pod runs (fleetd's listing), not at create.
 func TestHostSocketBindsPastTheLimits(t *testing.T) {
 	long := "/" + strings.Repeat("d", podwire.MaxSocketPath) + "/gpg.sock"
 	in := baseInput([]string{"-v", "/home/dev/host/S.gpg-agent:" + long}, nil, nil)
@@ -102,8 +125,21 @@ func TestHostSocketBindsPastTheLimits(t *testing.T) {
 	}
 	in = baseInput([]string{"-v", "/home/dev/host/many:/run/many"}, nil, nil)
 	in.Host = host
-	if _, err := Translate(in); !strings.Contains(err.Error(), CodeUnsupportedMount) || !strings.Contains(err.Error(), "at most") {
-		t.Fatalf("too many sockets: %v", err)
+	if _, err := Translate(in); err != nil {
+		t.Fatalf("a directory of many sockets: %v", err)
+	}
+	var args []string
+	for i := 0; i <= podwire.MaxHostSocketDirs; i++ {
+		args = append(args, "-v", fmt.Sprintf("/home/dev/host/many:/run/many%02d", i))
+	}
+	in = baseInput(args, nil, nil)
+	in.Host = host
+	if _, err := Translate(in); err == nil || !strings.Contains(err.Error(), CodeUnsupportedMount) || !strings.Contains(err.Error(), "socket directories") {
+		t.Fatalf("too many socket directories: %v", err)
+	}
+	in = baseInput([]string{"-v", "/home/dev/host/x11:/" + strings.Repeat("d", podwire.MaxSocketPath)}, nil, nil)
+	if _, err := Translate(in); err == nil || !strings.Contains(err.Error(), "holds at most") {
+		t.Fatalf("a socket directory no socket path in fits: %v", err)
 	}
 }
 

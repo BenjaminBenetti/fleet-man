@@ -55,8 +55,10 @@ type podAgentHub struct {
 	loadState func() (*state.State, error)
 	warn      func(msg string, args ...any)
 	// gateway is the host relays: the daemon host's listening ports the
-	// pods mirror, and the host-socket dials.
+	// pods mirror, and the host-socket dials; dirs lists the socket
+	// directories the pods bind.
 	gateway *podGateway
+	dirs    *podSocketDirs
 
 	wake chan struct{}
 
@@ -85,6 +87,7 @@ func newPodAgentHub(svc *service) *podAgentHub {
 		loadState: state.Load,
 		warn:      flog.Warn,
 		gateway:   newPodGateway(),
+		dirs:      newPodSocketDirs(),
 		wake:      make(chan struct{}, 1),
 		fleetMCP:  map[string]bool{},
 	}
@@ -150,6 +153,7 @@ func (h *podAgentHub) run(ctx context.Context) {
 		case <-h.wake:
 			changed = true
 		case <-t.C:
+			changed = h.dirs.tick(pool.Live)
 		case <-gw.C:
 			changed = h.gateway.tick(ctx, pool.Live)
 		}
@@ -185,7 +189,14 @@ func (h *podAgentHub) sockets(t kubernetes.PodTarget) podwire.Sockets {
 	ctx, cancel := context.WithTimeout(context.Background(), h.gateway.interval)
 	defer cancel()
 	return podwire.Sockets{Control: g.control, SSHAgent: g.agent, MCP: h.fleetMCPOf(t.Fleet),
-		Host: hostSockets(t), Gateway: h.gateway.portsFor(ctx, t)}
+		Host: h.hostSocketsOf(t), Gateway: h.gateway.portsFor(ctx, t)}
+}
+
+// hostSocketsOf is what t's pod binds for its host-socket binds: the sockets
+// fleetd recorded, and those in its socket directories now.
+func (h *podAgentHub) hostSocketsOf(t kubernetes.PodTarget) []podwire.HostSocket {
+	own := hostSockets(t)
+	return append(own, h.dirs.socketsFor(t, own)...)
 }
 
 // warnFallback says, once, that FLEET_SSH_AGENT_SOCK names no socket on the

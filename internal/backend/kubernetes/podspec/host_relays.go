@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,10 +21,12 @@ import (
 //   - Socket binds. A bind of the user's ssh-agent socket becomes a link at
 //     its target to fleet's agent relay in the control directory (pod-init
 //     makes it; the relay's gates are the daemon's, as for any instance).
-//     Every other daemon-host socket bind, and each socket in a bound socket
-//     directory, is recorded (PodSpec.HostSockets): the pod's agent binds a
-//     socket at the target, and fleetd relays each connection to the
-//     daemon-host path recorded here, never one the pod names.
+//     Every other daemon-host socket bind is recorded (PodSpec.HostSockets),
+//     and so is each bound socket directory (PodSpec.HostSocketDirs), whose
+//     sockets fleetd lists while the pod runs: the pod's agent binds a
+//     socket at each target, and fleetd relays each connection to the
+//     daemon-host path recorded here (or in the recorded directory), never
+//     one the pod names.
 //   - host-gateway. host.docker.internal (and each name the run gives
 //     host-gateway) resolves to HostGatewayIP in the pod, where the agent
 //     mirrors the daemon host's listening TCP ports, leaving out the ports
@@ -35,12 +36,14 @@ import (
 // and settles host-gateway, once the mounts and ports are final.
 func (t *translation) finishHostRelays() {
 	// A bind at one of a bound socket directory's sockets is that socket, as
-	// the deeper mount is on docker (the targets a pod's agent binds are
-	// distinct, or the pod gets no state at all).
-	bound := map[string]bool{}
+	// the deeper mount is on docker: fleetd leaves that name out of the
+	// directory's listing (the targets a pod's agent binds are distinct, or
+	// the pod gets no state at all).
+	shadowed := map[string][]string{}
 	for _, m := range t.spec.Mounts {
 		if m.Kind == MountSSHAgent || m.Kind == MountHostSocket {
-			bound[m.Target] = true
+			dir, name := path.Split(m.Target)
+			shadowed[path.Clean(dir)] = append(shadowed[path.Clean(dir)], name)
 		}
 	}
 	for _, m := range t.spec.Mounts {
@@ -50,23 +53,36 @@ func (t *translation) finishHostRelays() {
 		case MountHostSocket:
 			t.addHostSocket(m.Target, m.Source)
 		case MountHostSocketDir:
-			entries, err := t.host.ReadDir(m.Source)
-			if err != nil {
-				t.refuse(&Refusal{Code: CodeHostMount, Reason: fmt.Sprintf("the socket directory %s bound at %s: %v", m.Source, m.Target, err)})
-				continue
-			}
-			for _, e := range entries {
-				target := path.Join(m.Target, e.Name())
-				if e.Type()&fs.ModeSocket != 0 && !bound[target] {
-					t.addHostSocket(target, filepath.Join(m.Source, e.Name()))
-				}
-			}
+			t.addHostSocketDir(m.Target, m.Source, shadowed[m.Target])
 		}
 	}
 	if n := len(t.spec.HostSockets); n > podwire.MaxHostSockets {
 		t.refuse(&Refusal{Code: CodeUnsupportedMount, Reason: fmt.Sprintf("the devcontainer binds %d daemon-host sockets; fleet relays at most %d into a pod", n, podwire.MaxHostSockets)})
 	}
+	if n := len(t.spec.HostSocketDirs); n > podwire.MaxHostSocketDirs {
+		t.refuse(&Refusal{Code: CodeUnsupportedMount, Reason: fmt.Sprintf("the devcontainer binds %d daemon-host socket directories; fleet relays at most %d into a pod", n, podwire.MaxHostSocketDirs)})
+	}
 	t.finishHostGateway()
+}
+
+// addHostSocketDir records the daemon-host socket directory source bound at
+// target: its sockets are listed while the pod runs (fleetd's), each bound
+// at target/<name> but for the names shadowed (another bind's).
+func (t *translation) addHostSocketDir(target, source string, shadowed []string) {
+	if !podwire.ValidHostSocketTarget(path.Join(target, "x")) {
+		t.refuse(&Refusal{Code: CodeUnsupportedMount, Reason: fmt.Sprintf("the socket directory bound at %s: a unix socket's path in it holds at most %d bytes", target, podwire.MaxSocketPath)})
+		return
+	}
+	if dir := podwire.ReservedHostSocketDir(target); dir != "" {
+		t.refuse(&Refusal{Code: CodeUnsupportedMount, Reason: fmt.Sprintf("the socket directory bound at %s: fleet relays no daemon-host socket into %s in a pod", target, dir)})
+		return
+	}
+	if _, err := t.host.ReadDir(source); err != nil {
+		t.refuse(&Refusal{Code: CodeHostMount, Reason: fmt.Sprintf("the socket directory %s bound at %s: %v", source, target, err)})
+		return
+	}
+	sort.Strings(shadowed)
+	t.spec.HostSocketDirs = append(t.spec.HostSocketDirs, hostrelay.SocketDir{Target: target, Source: source, Shadowed: shadowed})
 }
 
 // addHostSocket records the daemon-host socket source bound at target, with

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: a devcontainer.json that bind-mounts the host's SSH agent (${localEnv:SSH_AUTH_SOCK}) and gpg-agent sockets gets working agents at those paths (ssh and gpg signatures made in the instance verify on the host), and its remoteEnv SSH_AUTH_SOCK wins over fleet's relay. On a cluster the agent bind is a link to the pod's agent relay, and the gpg socket one the pod agent binds, owned by the remote user and relayed to the host socket recorded at create; one fleetd cannot reach reaches fleet.log at error with its fleet and instance.
+# Description: a devcontainer.json that bind-mounts the host's SSH agent (${localEnv:SSH_AUTH_SOCK}) and gpg-agent sockets gets working agents at those paths (ssh and gpg signatures made in the instance verify on the host), and its remoteEnv SSH_AUTH_SOCK wins over fleet's relay. A bound socket directory shows a socket made in it after the create (and loses one removed), and a socket bound at /dev/log answers, as docker's binds do. On a cluster the agent bind is a link to the pod's agent relay, and the gpg socket one the pod agent binds, owned by the remote user and relayed to the host socket recorded at create; one fleetd cannot reach reaches fleet.log at error with its fleet and instance.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -8,7 +8,11 @@ source "$(dirname "$0")/../common.sh"
 agent_dir=""
 test_agent_pid=""
 gnupg_home=""
+sock_dir=""
+sock_pids=()
 itest_cleanup() {
+  for pid in "${sock_pids[@]}"; do kill "${pid}" >/dev/null 2>&1 || true; done
+  if [ -n "${sock_dir}" ]; then rm -rf "${sock_dir}"; fi
   # The daemon was started with this test's agents in its environment.
   pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
   if [ -n "${test_agent_pid}" ]; then kill "${test_agent_pid}" >/dev/null 2>&1 || true; fi
@@ -45,6 +49,37 @@ FLEET_ITEST_GPG_SOCK="$(gpgconf --list-dirs agent-extra-socket)"
 export FLEET_ITEST_GPG_SOCK
 [ -S "${FLEET_ITEST_GPG_SOCK}" ] || fail "gpg-agent extra socket missing: ${FLEET_ITEST_GPG_SOCK}"
 info "gpg-agent extra socket ${FLEET_ITEST_GPG_SOCK}"
+
+# A socket directory holding one socket at create (a display server's, as
+# /tmp/.X11-unix does), and a syslog-style socket for /dev/log. Each server
+# answers every connection with hello-<name>.
+serve_sock() {
+  python3 -c '
+import os, socket, sys
+path, name = sys.argv[1], sys.argv[2]
+s = socket.socket(socket.AF_UNIX)
+s.bind(path)
+os.chmod(path, 0o666)
+s.listen(8)
+while True:
+    c, _ = s.accept()
+    c.sendall(("hello-" + name + "\n").encode())
+    c.close()
+' "$1" "$2" &
+  sock_pids+=("$!")
+  local deadline=$(( $(date +%s) + $(_scale_timeout 10) ))
+  until [ -S "$1" ]; do
+    [ "$(date +%s)" -lt "${deadline}" ] || fail "the test socket ${1} did not come up"
+    sleep 0.1
+  done
+}
+sock_dir="$(mktemp -d /tmp/fleet-socks.XXXXXX)"
+chmod 755 "${sock_dir}"
+mkdir "${sock_dir}/dir"
+chmod 755 "${sock_dir}/dir"
+serve_sock "${sock_dir}/dir/X0" X0
+serve_sock "${sock_dir}/log" log
+export FLEET_ITEST_SOCK_DIR="${sock_dir}/dir" FLEET_ITEST_LOG_SOCK="${sock_dir}/log"
 
 # `devcontainer up` resolves ${localEnv:...} in the daemon's environment, so the
 # daemon must be (re)started from this one.
@@ -120,5 +155,37 @@ if itest_backend_is kubernetes; then
   assert_contains "${line}" "fleet=${FIXTURE_REPO_NAME}" "the error is not tagged with its fleet"
   assert_contains "${line}" "target=/run/itest-host-gpg-agent.sock" "the error does not name the bind"
 fi
+
+# read_sock prints the first line a unix socket in the instance answers.
+read_sock() {
+  "${FLEET_BIN}" exec "${inst}" -- perl -MIO::Socket::UNIX -e '
+    my $s = IO::Socket::UNIX->new(Peer => $ARGV[0]) or die "connect $ARGV[0]: $!\n";
+    print scalar <$s>;' "$1"
+}
+
+info "the bound socket directory's socket and the /dev/log bind answer in the instance"
+assert_equals "hello-X0" "$(read_sock /run/itest-host-sockets/X0)" "the socket the bound directory held at create"
+assert_equals "hello-log" "$(read_sock /dev/log)" "the socket bound at /dev/log"
+
+info "a socket made in the bound directory after the create is there in the instance"
+serve_sock "${sock_dir}/dir/X1" X1
+x1_pid="${sock_pids[${#sock_pids[@]}-1]}"
+got=""
+deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
+until [ "${got}" = "hello-X1" ]; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the socket made in the bound directory after the create never answered in the instance (last: ${got})"
+  got=$(read_sock /run/itest-host-sockets/X1 2>/dev/null || true)
+  [ "${got}" = "hello-X1" ] || sleep 0.5
+done
+assert_equals "hello-X0" "$(read_sock /run/itest-host-sockets/X0)" "the first socket still answers"
+
+info "a socket removed from the bound directory goes from the instance"
+kill "${x1_pid}" >/dev/null 2>&1 || true
+rm -f "${sock_dir}/dir/X1"
+deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
+until ! "${FLEET_BIN}" exec "${inst}" -- test -e /run/itest-host-sockets/X1; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the socket removed from the bound directory is still in the instance"
+  sleep 0.5
+done
 
 pass "host agent socket binds"
