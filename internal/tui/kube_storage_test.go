@@ -49,7 +49,7 @@ func storageStatus() *fleetgrpc.KubeClusterStatus {
 func TestEditorStorageSection(t *testing.T) {
 	st := storageStatus()
 	m, sp := kubeTestModel(t, st)
-	e := openEditor(m, sp, "gke-1")
+	e := openEditor(m, sp, "gke-1", "storage")
 	e.update(m, sp, kubeShareUsageMsg{editor: e, shares: []*fleetgrpc.KubeShareUsage{
 		{Cluster: "gke-1", Fleet: "alpha", UsedBytes: 1 << 30, CapacityBytes: 10 << 30, Measured: true, Expandable: true},
 		{Cluster: "gke-1", Fleet: "beta", UsedBytes: 19 << 29, CapacityBytes: 10 << 30, Measured: true, Warning: "95% full; its StorageClass cannot grow it"},
@@ -105,7 +105,7 @@ func TestEditorLargeSharedClassAsksFirst(t *testing.T) {
 	st := storageStatus()
 	m, sp := kubeTestModel(t, st)
 	calls := stubKubeUpdate(t, savedStatus(st))
-	e := openEditor(m, sp, "gke-1")
+	e := openEditor(m, sp, "gke-1", "storage")
 	editorRowOf(t, e, "shared_storage_class")
 	// auto → standard-rwo → filestore
 	pumpKube(t, m, press(m, sp, "right"))
@@ -139,7 +139,7 @@ func TestEditorTestStorage(t *testing.T) {
 	st := storageStatus()
 	m, sp := kubeTestModel(t, st)
 	reqs := stubKubeTest(t, func(*fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent { return testEvents(st) })
-	e := openEditor(m, sp, "gke-1")
+	e := openEditor(m, sp, "gke-1", "storage")
 	for i, row := range e.rows() {
 		if row.kind == kubeEditorRowAction && row.action == kubeEditorActionTestStorage {
 			e.row = i
@@ -173,7 +173,7 @@ func TestEditorStorageClassesUnreadable(t *testing.T) {
 	st.Capabilities = &fleetgrpc.KubeCapabilities{StorageClassesUnreadable: true, ShareMode: "single-node"}
 	m, sp := kubeTestModel(t, st)
 	calls := stubKubeUpdate(t, savedStatus(st))
-	e := openEditor(m, sp, "eks-1")
+	e := openEditor(m, sp, "eks-1", "storage")
 	if out := flatText(e.view(m, sp)); !strings.Contains(out, "StorageClasses are not readable here type a class name on a picker") {
 		t.Fatalf("no typed-name note:\n%s", out)
 	}
@@ -200,7 +200,7 @@ func TestEditorLoadsTheSharesUsage(t *testing.T) {
 	}
 	st := storageStatus()
 	m, sp := kubeTestModel(t, st)
-	e := openEditor(m, sp, "gke-1")
+	e := openEditor(m, sp, "gke-1", "storage")
 	msg := e.loadUsage()().(kubeShareUsageMsg)
 	if len(msg.shares) != 1 || msg.shares[0].GetCluster() != "gke-1" {
 		t.Fatalf("shares %v", msg.shares)

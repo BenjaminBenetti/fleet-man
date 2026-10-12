@@ -22,7 +22,8 @@ import (
 
 const (
 	// kubeRPCTimeout bounds the unary kube RPCs. The daemon itself bounds the
-	// cluster reads behind a re-point or a namespace create at 30s.
+	// cluster reads behind a re-point or a namespace create at 30s (an add or
+	// an update that sets the namespace makes one that does not exist).
 	kubeRPCTimeout = 45 * time.Second
 	// kubeTestTimeout bounds a streamed TestKubeCluster (the daemon's full
 	// preflight gives up after 6 minutes: 3 for its checks, 3 for the
@@ -68,20 +69,23 @@ var listKubeContextsRemote = func(paths []string) (*fleetgrpc.ListKubeContextsRe
 	return reply, err
 }
 
-// addKubeClusterRemote saves a new connection.
-var addKubeClusterRemote = func(cluster *fleetgrpc.KubeCluster) (*fleetgrpc.KubeClusterStatus, error) {
+// addKubeClusterRemote saves a new connection; the daemon creates its
+// namespace when it does not exist, and the reply says how that went.
+var addKubeClusterRemote = func(cluster *fleetgrpc.KubeCluster) (*fleetgrpc.AddKubeClusterReply, error) {
 	var reply *fleetgrpc.AddKubeClusterReply
 	err := kubeCall(kubeRPCTimeout, func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
 		var err error
 		reply, err = svc.AddKubeCluster(ctx, &fleetgrpc.AddKubeClusterRequest{Cluster: cluster})
 		return err
 	})
-	return reply.GetCluster(), err
+	return reply, err
 }
 
 // updateKubeClusterRemote changes the fields one mask names, refusing to
-// save over a record whose revision moved since rev was read.
-var updateKubeClusterRemote = func(id string, cluster *fleetgrpc.KubeCluster, paths []string, rev int64) (*fleetgrpc.KubeClusterStatus, error) {
+// save over a record whose revision moved since rev was read. A namespace
+// (or target) it sets is created when it does not exist; the reply says
+// how that went.
+var updateKubeClusterRemote = func(id string, cluster *fleetgrpc.KubeCluster, paths []string, rev int64) (*fleetgrpc.UpdateKubeClusterReply, error) {
 	var reply *fleetgrpc.UpdateKubeClusterReply
 	err := kubeCall(kubeRPCTimeout, func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
 		var err error
@@ -93,7 +97,7 @@ var updateKubeClusterRemote = func(id string, cluster *fleetgrpc.KubeCluster, pa
 		})
 		return err
 	})
-	return reply.GetCluster(), err
+	return reply, err
 }
 
 // removeKubeClusterRemote disconnects a connection.

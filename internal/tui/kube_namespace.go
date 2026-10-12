@@ -10,23 +10,35 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// kube_namespace.go is the explicit namespace Create action of the context
-// picker and the cluster editor. Fleet never creates a namespace on its own
-// (that is a cluster-scoped write): the panel first shows the exact manifest,
-// labels included, from a dry run, and creates it only on enter. Without
-// namespaces/create the manifest is there to copy and apply as someone who
-// has it.
+// kube_namespace.go is the cluster editor's namespace panel. The namespace a
+// connection is connected with, or set to, the daemon creates when it does
+// not exist (AddKubeCluster, UpdateKubeCluster), so the panel is for the
+// rest: a namespace that went missing since ([ Create ], c: the exact
+// manifest from a dry run first, labels included, created on enter), and one
+// the daemon could not create for want of namespaces create (opened with
+// the manifest it would have made, to copy and apply as someone who may, or
+// to try again).
 
-// kubeNamespacePanel previews and creates one namespace.
+// kubeNamespacePanel previews and creates one namespace of a saved
+// connection.
 type kubeNamespacePanel struct {
-	id    string                 // the saved connection; "" with draft
-	draft *fleetgrpc.KubeCluster // the picker's unsaved connection
-	name  string
+	id   string
+	name string
 
 	manifest string
+	// refused: the daemon could not create it (err says why); the manifest
+	// is for someone who may.
+	refused  bool
 	loading  bool
 	creating bool
 	err      string
+}
+
+// newKubeNamespaceRefusal opens the panel on a namespace the daemon could not
+// create for connection id, showing the manifest it would have made.
+func newKubeNamespaceRefusal(id string, res *fleetgrpc.KubeNamespaceResult) *kubeNamespacePanel {
+	return &kubeNamespacePanel{id: id, name: res.GetNamespace(), manifest: res.GetManifest(), refused: true,
+		err: res.GetError() + " · y copies the manifest"}
 }
 
 // kubeNamespaceMsg is the answer to the panel's dry run or create.
@@ -37,18 +49,15 @@ type kubeNamespaceMsg struct {
 	err    error
 }
 
-// newKubeNamespacePanel opens the panel for namespace name of a saved
-// connection (id) or a draft, and asks for its manifest.
-func newKubeNamespacePanel(id string, draft *fleetgrpc.KubeCluster, name string) (*kubeNamespacePanel, tea.Cmd) {
-	p := &kubeNamespacePanel{id: id, draft: draft, name: name, loading: true}
+// newKubeNamespacePanel opens the panel for namespace name of connection
+// id, and asks for its manifest.
+func newKubeNamespacePanel(id, name string) (*kubeNamespacePanel, tea.Cmd) {
+	p := &kubeNamespacePanel{id: id, name: name, loading: true}
 	return p, p.call(true)
 }
 
 func (p *kubeNamespacePanel) call(dryRun bool) tea.Cmd {
 	req := &fleetgrpc.CreateKubeNamespaceRequest{Id: p.id, Namespace: p.name, DryRun: dryRun}
-	if p.id == "" {
-		req.Cluster = p.draft
-	}
 	return func() tea.Msg {
 		reply, err := createKubeNamespaceRemote(req)
 		return kubeNamespaceMsg{panel: p, dryRun: dryRun, reply: reply, err: err}
@@ -65,6 +74,7 @@ func (p *kubeNamespacePanel) handle(msg kubeNamespaceMsg) (created bool) {
 			return true
 		}
 		if status.Code(msg.err) == codes.PermissionDenied {
+			p.refused = true
 			p.err += " · y copies the manifest"
 		}
 		return false
@@ -103,8 +113,12 @@ func (p *kubeNamespacePanel) view(m *model, width int) string {
 	switch {
 	case p.loading:
 		b.WriteString("  " + m.spinner.View() + " " + dimStyle.Render("rendering the manifest…") + "\n")
+	case p.manifest != "" && p.refused:
+		b.WriteString(dimStyle.Render("  apply this as someone who may create namespaces, or enter to try again:") + "\n")
 	case p.manifest != "":
 		b.WriteString(dimStyle.Render("  fleet creates exactly this, labels included:") + "\n")
+	}
+	if p.manifest != "" {
 		for _, line := range strings.Split(strings.TrimRight(p.manifest, "\n"), "\n") {
 			b.WriteString("    " + line + "\n")
 		}

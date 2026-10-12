@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: no-docker
-# Description: a remote TUI over the fleet gateway connects a cluster from fleetd's host kubeconfig and sets the Storage pickers (shared and instance-disk classes), Allow privileged and Extra PATH exactly as a local TUI does; [L] Run login here is not offered remotely
+# Description: a remote TUI over the fleet gateway connects a cluster from fleetd's host kubeconfig, its Connect page form setting the name and namespace, and sets the Storage pickers (shared and instance-disk classes), Allow privileged and Extra PATH exactly as a local TUI does; [L] Run login here is not offered remotely
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -101,20 +101,39 @@ tui_wait_for "exec: itest-login-plugin" 5
 tui_assert_not_contains "[L] login here" "[L] runs the plugin on this machine: never offered over the gateway"
 tui_cursor_to '\* itest-dead'
 
-info "test & connect, then connect the failing context anyway"
+info "choose it, set its name and namespace on the form, then connect the failing context anyway"
 tui_send Enter
 tui_wait_for "connect anyway" 60
+tui_cursor_to 'Name:'
+tui_send Enter
+sleep 0.3
+tui_send C-u
+tui_send_text "remote-dead"
+tui_send Enter
+tui_cursor_to 'Namespace:'
+tui_send Enter
+sleep 0.3
+tui_send C-u
+tui_send_text "remote-ns"
+tui_send Enter
+sleep 0.5 # the new namespace is tested again
+tui_wait_for "connect anyway" 60
+tui_cursor_to '\[ Connect anyway \]'
 tui_send Enter
 tui_wait_for_absent "Connect a Kubernetes cluster" 20
-tui_wait_for "☸ itest-dead" 5
+tui_wait_for "☸ remote-dead" 5
 [ "$(itest_kube_clusters 'print scalar @c')" = 1 ] || fail "fleetd should hold one connection"
+[ "$(itest_kube_clusters 'print "$c[0]{display_name} $c[0]{namespace}"')" = "remote-dead remote-ns" ] \
+  || fail "the form's name and namespace set over the gateway were not saved: $(cat "${HOME}/.fleet/kube_clusters.json")"
 
 info "the remote editor sets the Storage pickers, Allow privileged and Extra PATH"
-tui_cursor_to '☸ itest-dead'
+tui_cursor_to '☸ remote-dead'
 tui_send Enter
-tui_wait_for "Edit cluster ☸ itest-dead" 5
+tui_wait_for "Edit cluster ☸ remote-dead" 5
 # The Storage pickers: fleetd lists no class for a dead context, so each
 # takes a typed name, as a cluster that forbids listing them does.
+tui_cursor_to '▶ Storage'
+tui_send l
 tui_cursor_to 'Shared storage:'
 tui_send Enter
 sleep 0.3
@@ -129,6 +148,8 @@ tui_send Enter
 tui_wait_for "Saved Instance disks" 15
 [ "$(itest_kube_clusters 'print "$c[0]{shared_storage_class} $c[0]{storage_class}"')" = "itest-shared itest-disks" ] \
   || fail "the storage classes picked over the gateway were not saved: $(itest_kube_clusters 'print "$c[0]{shared_storage_class} $c[0]{storage_class}"')"
+tui_cursor_to '▶ Security'
+tui_send l
 tui_cursor_to 'Allow privileged:'
 tui_send Right
 tui_wait_for "Privileged pods allowed" 15
@@ -146,13 +167,13 @@ tui_send Escape
 tui_wait_for_absent "Edit cluster" 5
 
 info "and disconnects it"
-tui_cursor_to '☸ itest-dead'
+tui_cursor_to '☸ remote-dead'
 tui_send l
 tui_send l
 tui_send Enter
-tui_wait_for "Disconnect ☸ itest-dead" 5
+tui_wait_for "Disconnect ☸ remote-dead" 5
 tui_send Enter
-tui_wait_for "Disconnected ☸ itest-dead" 20
+tui_wait_for "Disconnected ☸ remote-dead" 20
 [ "$(itest_kube_clusters 'print scalar @c')" = 0 ] || fail "the connection must be gone"
 
-pass "a remote TUI over the gateway connects, edits (Storage pickers, Allow privileged, Extra PATH) and disconnects a cluster as a local one does"
+pass "a remote TUI over the gateway connects (the form's name and namespace), edits (Storage pickers, Allow privileged, Extra PATH) and disconnects a cluster as a local one does"

@@ -155,14 +155,26 @@ the same cluster is another connection.
 **In the TUI**, Settings → Kubernetes lists the connections, each with its
 health, version and the instances and agents that use it:
 
-- **+ Kubernetes Cluster** opens the picker over the contexts of fleetd's
-  kubeconfig (`contexts from fleetd @ <host>`): `/` filters, `n` sets the
-  namespace (`fleet` is suggested when the context's is `default`), `ctrl+o`
-  reads another kubeconfig on the daemon host, `enter` tests and connects, `c`
-  shows the namespace manifest and creates it, `L` runs the context's login
-  plugin in this terminal.
+- **+ Kubernetes Cluster** opens the Connect page over the contexts of
+  fleetd's kubeconfig (`contexts from fleetd @ <host>`): `/` filters, `ctrl+o`
+  reads another kubeconfig on the daemon host, `L` runs the context's login
+  plugin in this terminal. `enter` on a context chooses it and tests it
+  without saving anything, and the form under the list sets up the new
+  connection: **Name**, **Namespace** (`fleet` is suggested when the
+  context's is `default`; fleet creates it when it does not exist),
+  **Delivery** (Auto, Node load, Registry or Gateway, with **Registry** when
+  that is the pick) and **Storage** (the instance disks' class: Auto, or any
+  class the test listed; a fleet share takes it too unless a class passes the
+  multi-node test once connected), plus **Node-local OK** when that class
+  keeps a disk on one node of several. Each choice shows what Auto resolved
+  to, and each change tests again. **[ Test & connect ]** connects once a
+  test passes (a namespace still to create is no failure), or anyway after
+  one failed. `tab` moves between the list and the form.
 - **enter** on a connection opens the cluster editor: every setting in
-  [section 5](#5-connection-settings), grouped and folded. Its Status row has
+  [section 5](#5-connection-settings), grouped and folded but Capabilities
+  (what the last test found). Setting **Namespace** there creates it when it
+  does not exist; when fleet may not, the change is kept and the editor shows
+  the manifest to apply (`y` copies it). Its Status row has
   **[ test ]**, **[ deep test ]** and **[ login on fleetd ]**. Changes apply to
   new instances; Rebuild applies them to existing ones. The fleets' cache
   servers there take a change of what they run with at once (service images,

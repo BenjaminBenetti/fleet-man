@@ -59,9 +59,11 @@ type kubeField struct {
 
 // kubeGroup is a titled, foldable set of fields.
 type kubeGroup struct {
-	key    string
-	title  string
-	open   bool // expanded when the editor opens
+	key   string
+	title string
+	// open: expanded when the editor opens. Only Capabilities is, so the
+	// editor opens on the connection's health and one line per group.
+	open   bool
 	fields []kubeField
 }
 
@@ -77,7 +79,7 @@ var kubeTopFields = []kubeField{
 // it is the last preflight's findings.
 var kubeGroups = []kubeGroup{
 	{key: "capabilities", title: "Capabilities", open: true},
-	{key: "storage", title: "Storage", open: true, fields: []kubeField{
+	{key: "storage", title: "Storage", fields: []kubeField{
 		{path: "shared_storage_class", label: "Shared storage", kind: kubeKindClass, classes: kubeClassStorage, def: "auto",
 			note: "the fleets' shares; a new class moves each fleet's share once it is stopped"},
 		{path: "share_size", label: "Share size", kind: kubeKindText, def: "10Gi"},
@@ -120,7 +122,7 @@ var kubeGroups = []kubeGroup{
 		{path: "automation_fire_interval", label: "Trigger interval", kind: kubeKindText, def: "30s", note: "per trigger; 0 = off"},
 		{path: "automation_max_per_agent", label: "Runs per agent", kind: kubeKindOptInt, def: "4", note: "0 = off; extra runs queue"},
 	}},
-	{key: "image", title: "Image", open: true, fields: []kubeField{
+	{key: "image", title: "Image", fields: []kubeField{
 		{path: "image.mode", label: "Delivery", kind: kubeKindChoice, options: []string{"", "node-load", "registry", "gateway"}, def: "auto"},
 		{path: "image.registry", label: "Registry", kind: kubeKindText, def: "none"},
 		{path: "image.insecure_registry", label: "Insecure registry", kind: kubeKindBool},
@@ -131,7 +133,7 @@ var kubeGroups = []kubeGroup{
 		{path: "image.retention", label: "Retention", kind: kubeKindText, def: "72h"},
 		{path: "image.upload_pace_percent", label: "Upload pace %", kind: kubeKindOptInt, def: "80", note: "0 = unpaced"},
 	}},
-	{key: "security", title: "Security", open: true, fields: []kubeField{
+	{key: "security", title: "Security", fields: []kubeField{
 		{path: "allow_privileged", label: "Allow privileged", kind: kubeKindTri, def: "auto"},
 		{path: "debug_capabilities", label: "Debug caps", kind: kubeKindChoice, options: []string{"", "require"}, def: "auto",
 			note: "auto: drop SYS_PTRACE/seccomp with a warning when denied"},

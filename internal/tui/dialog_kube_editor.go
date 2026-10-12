@@ -97,7 +97,9 @@ type (
 		field  kubeField
 		rev    int64 // the revision it was sent at
 		status *fleetgrpc.KubeClusterStatus
-		err    error
+		// ns is what the daemon did about a namespace the save set.
+		ns  *fleetgrpc.KubeNamespaceResult
+		err error
 	}
 	kubeYAMLEditedMsg struct {
 		editor *kubeEditor
@@ -381,7 +383,7 @@ func (e *kubeEditor) cycleDelivery(st *fleetgrpc.KubeClusterStatus, f kubeField,
 // openNamespace opens the Create panel for the connection's namespace.
 func (e *kubeEditor) openNamespace(st *fleetgrpc.KubeClusterStatus) tea.Cmd {
 	var cmd tea.Cmd
-	e.ns, cmd = newKubeNamespacePanel(e.id, nil, st.GetCluster().GetNamespace())
+	e.ns, cmd = newKubeNamespacePanel(e.id, st.GetCluster().GetNamespace())
 	return cmd
 }
 
@@ -410,8 +412,8 @@ func (e *kubeEditor) send(s kubeSave) tea.Cmd {
 	e.inFlight = true
 	id := e.id
 	return func() tea.Msg {
-		st, err := updateKubeClusterRemote(id, s.src, []string{s.field.path}, s.rev)
-		return kubeSavedMsg{editor: e, field: s.field, rev: s.rev, status: st, err: err}
+		reply, err := updateKubeClusterRemote(id, s.src, []string{s.field.path}, s.rev)
+		return kubeSavedMsg{editor: e, field: s.field, rev: s.rev, status: reply.GetCluster(), ns: reply.GetNamespace(), err: err}
 	}
 }
 
@@ -444,6 +446,7 @@ func (e *kubeEditor) onSaved(m *model, msg kubeSavedMsg) tea.Cmd {
 		if msg.field.path == "allow_privileged" && msg.field.text(msg.status.GetCluster()) == "on" {
 			m.message = "Privileged pods allowed: " + kubePrivilegedWarning
 		}
+		e.onNamespace(m, msg.ns)
 	}
 	if len(e.queue) == 0 {
 		return nil
@@ -451,6 +454,21 @@ func (e *kubeEditor) onSaved(m *model, msg kubeSavedMsg) tea.Cmd {
 	next := e.queue[0]
 	e.queue = e.queue[1:]
 	return e.send(next)
+}
+
+// onNamespace says what became of a namespace a save set (or a re-point
+// aimed at): the daemon created it, could not tell, or may not create
+// namespaces, which opens the namespace panel on the manifest to apply.
+func (e *kubeEditor) onNamespace(m *model, ns *fleetgrpc.KubeNamespaceResult) {
+	switch {
+	case ns.GetPermissionDenied():
+		e.ns = newKubeNamespaceRefusal(e.id, ns)
+		m.message = "fleet may not create namespace " + ns.GetNamespace() + ": apply its manifest as someone who may"
+	case ns.GetCreated():
+		m.message += " · created namespace " + ns.GetNamespace()
+	case ns.GetError() != "":
+		m.message += " · namespace " + ns.GetNamespace() + ": " + ns.GetError()
+	}
 }
 
 // kubeInputHint is the input's placeholder for a field: its format.
@@ -636,11 +654,7 @@ const kubeEditorValueCol = 22
 
 // labelCell pads a row label to the value column.
 func (e *kubeEditor) labelCell(label string, active bool) string {
-	cell := fmt.Sprintf("%-19s", label)
-	if active {
-		return selectedStyle.Render(cell) + " "
-	}
-	return dialogLabel.Render(cell) + " "
+	return kubeLabelCell(label, active)
 }
 
 // fieldValue renders a field's value: the input while editing it, else its
@@ -829,6 +843,32 @@ func kubeGroupSummary(key string, st *fleetgrpc.KubeClusterStatus) string {
 			runs = fmt.Sprint(c.GetAutomationMaxPerAgent())
 		}
 		return strings.Join(append(parts, runs+" runs/agent"), " · ")
+	case "image":
+		mode := kubeDeliveryModeLabel(kubeDeliverySetting(st))
+		if mode == "" {
+			mode = "auto"
+			if resolved := st.GetCapabilities().GetImageDelivery().GetMode(); resolved != "" {
+				mode += " → " + kubeDeliveryModeLabel(resolved)
+			}
+		}
+		parts := []string{"delivery " + mode}
+		if reg := c.GetImage().GetRegistry(); reg != "" {
+			parts = append(parts, reg)
+		}
+		return strings.Join(parts, " · ")
+	case "security":
+		privileged := "auto"
+		if c.AllowPrivileged != nil {
+			privileged = onOff(c.GetAllowPrivileged())
+		}
+		parts := []string{"privileged " + privileged}
+		if rc := c.GetRuntimeClass(); rc != "" {
+			parts = append(parts, "runtime class "+rc)
+		}
+		if c.GetProtectFromDrain() {
+			parts = append(parts, "protected from drain")
+		}
+		return strings.Join(parts, " · ")
 	case "advanced":
 		return "pod overrides · extra PATH · plugin env · placement"
 	case "storage":

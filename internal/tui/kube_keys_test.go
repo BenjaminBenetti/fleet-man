@@ -74,6 +74,23 @@ func stubLoginHere(t *testing.T) {
 	t.Cleanup(func() { kubeLoginHereCommandFn = orig })
 }
 
+// testedPicker is the Connect page with minikube chosen and its draft test
+// finished: failed, its classes listed, the cursor on minikube.
+func testedPicker(t *testing.T, m *model, sp *settingsPage) *kubePicker {
+	t.Helper()
+	p := newKubePicker(m, "")
+	sp.kubeDialog = p
+	p.onContexts(m, kubeContextsMsg{reply: pickerContexts()})
+	p.chosen = "minikube"
+	c := p.chosenContext()
+	p.runKey, p.tested, p.failed = "draft:x", p.draft(m, c), true
+	result := draftResult(&fleetgrpc.TestKubeClusterRequest{Cluster: p.tested}, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED, 1)
+	p.foundFor("minikube").take(p.tested, result, nil)
+	m.kubeRuns = map[string]*kubeTestRun{"draft:x": {key: "draft:x", done: true, cancel: func() {}, result: result,
+		checks: []*fleetgrpc.KubeCheck{{Name: "reachable", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL}}}}
+	return p
+}
+
 // Every key a Kubernetes view acts on is in its key table, which is what
 // the footer and the keybindings list are built from.
 func TestKubeKeysAreDocumented(t *testing.T) {
@@ -94,18 +111,18 @@ func TestKubeKeysAreDocumented(t *testing.T) {
 		})
 	}
 
-	checkKubeKeys(t, "the context picker", [][]kubeKey{kubePickerKeys}, func(t *testing.T) (func(tea.KeyMsg) tea.Cmd, func() string) {
-		m, sp := kubeTestModel(t)
-		p := newKubePicker(m, "")
-		sp.kubeDialog = p
-		p.onContexts(m, kubeContextsMsg{reply: pickerContexts()})
-		p.runKey, p.testCtx, p.testNS, p.failed = "draft:x", "minikube", "fleet", true
-		m.kubeRuns = map[string]*kubeTestRun{"draft:x": {key: "draft:x", done: true, cancel: func() {},
-			checks: []*fleetgrpc.KubeCheck{{Name: "namespace", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL}}}}
-		return func(k tea.KeyMsg) tea.Cmd { return sp.Update(m, k) }, func() string {
-			return fmt.Sprint(p.cursor, p.filtering, p.filter.Value(), p.inputMode, p.runKey, p.busy, p.ns != nil, sp.kubeDialog == kubeDialog(p), p.err)
-		}
-	})
+	for _, at := range []string{"", kubeFormName, kubeFormDelivery, kubeFormStorage, kubeFormConnect} {
+		checkKubeKeys(t, "the Connect page on "+at, [][]kubeKey{kubePickerKeys}, func(t *testing.T) (func(tea.KeyMsg) tea.Cmd, func() string) {
+			m, sp := kubeTestModel(t)
+			p := testedPicker(t, m, sp)
+			if at != "" {
+				pickerAt(t, p, at)
+			}
+			return func(k tea.KeyMsg) tea.Cmd { return sp.Update(m, k) }, func() string {
+				return fmt.Sprint(p.cursor, p.filtering, p.filter.Value(), p.inputMode, p.runKey, p.busy, p.chosen, *p.form(p.chosenContext()), sp.kubeDialog == kubeDialog(p), p.err)
+			}
+		})
+	}
 
 	for _, path := range []string{"display_name", "namespace", "clone_method", "allow_privileged", "", "group"} {
 		checkKubeKeys(t, "the cluster editor on "+path, [][]kubeKey{kubeEditorKeys}, func(t *testing.T) (func(tea.KeyMsg) tea.Cmd, func() string) {
@@ -196,16 +213,19 @@ func TestKubeKeysInKeybindingsAndFooters(t *testing.T) {
 	m, sp := kubeTestModel(t, kubeSt("mk-1", "minikube", 2))
 	footerHas("cluster row", sp.kubeRowFooter(settingsItemKubeBase), kubeRowKeys)
 
-	p := newKubePicker(m, "")
-	sp.kubeDialog = p
-	p.onContexts(m, kubeContextsMsg{reply: pickerContexts()})
-	p.runKey, p.testCtx, p.testNS, p.failed = "draft:x", "minikube", "fleet", true
-	m.kubeRuns = map[string]*kubeTestRun{"draft:x": {key: "draft:x", done: true, cancel: func() {},
-		checks: []*fleetgrpc.KubeCheck{{Name: "namespace", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL}}}}
-	footerHas("picker", p.footer(m), kubePickerKeys)
-	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, strings.Join(strings.Fields(p.footer(m)), " ")) {
-		t.Errorf("the picker must render its footer:\n%s", out)
+	// The Connect page's footer follows the row: its keys show across them.
+	p := testedPicker(t, m, sp)
+	var footers []string
+	for _, at := range []string{"", kubeFormDelivery} {
+		if at != "" {
+			pickerAt(t, p, at)
+		}
+		footers = append(footers, p.footer(m))
+		if out := flatText(sp.viewSettings(m)); !strings.Contains(out, strings.Join(strings.Fields(p.footer(m)), " ")) {
+			t.Errorf("the Connect page must render its footer:\n%s", out)
+		}
 	}
+	footerHas("Connect page", strings.Join(footers, "  "), kubePickerKeys)
 
 	st := kubeSt("mk-1", "minikube", 9)
 	st.Checks = []*fleetgrpc.KubeCheck{
