@@ -569,8 +569,10 @@ func TestRetireShareEndsAMoveFirst(t *testing.T) {
 			}
 			select {
 			case err := <-done:
-				if err == nil {
-					t.Fatal("the move the destroy ended reports success")
+				// The server drops a move that ends so, never calling it a
+				// failure to try again.
+				if !errors.Is(err, ErrShareRetired) {
+					t.Fatalf("the move the destroy ended: %v, want ErrShareRetired", err)
 				}
 			default:
 				t.Fatal("RetireShare returned before the move it ended")

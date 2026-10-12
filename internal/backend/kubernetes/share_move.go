@@ -567,8 +567,8 @@ func (p *Pool) MoveShare(ctx context.Context, clusterID, fleetName string, repor
 		report(fmt.Sprintf("copying the share to a %s volume", orDefault(info.To, "default-class")))
 		if info, err = s.fillCopy(ctx, src, info); err != nil {
 			s.callOff(info)
-			if errors.Is(context.Cause(ctx), errShareMoveCalledOff) {
-				return errShareMoveCalledOff
+			if cause := context.Cause(ctx); errors.Is(cause, errShareMoveCalledOff) || errors.Is(cause, ErrShareRetired) {
+				return cause
 			}
 			return err
 		}

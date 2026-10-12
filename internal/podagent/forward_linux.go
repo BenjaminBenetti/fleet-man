@@ -46,13 +46,22 @@ func (a *agent) serveForward(s *podwire.Stream) {
 	defer tcp.Close()
 	stop := context.AfterFunc(a.ctx, func() { _ = tcp.Close() })
 	defer stop()
+	// Tracked before the OPEN reply: fleetd may close the connection, and
+	// send its StreamAbort, as soon as the reply reaches it.
+	abort := a.trackForward(s.ID)
+	defer abort.untrack()
 	if err := open(podwire.OpenReply{}); err != nil {
 		return
 	}
-	abort := a.trackForward(s.ID)
-	defer abort.untrack()
+	if forwardOpened != nil {
+		forwardOpened()
+	}
 	relayForward(s.Conn, tcp, abort.ch)
 }
+
+// forwardOpened runs once a forward's OPEN reply is written, before its
+// relay (a seam for tests).
+var forwardOpened func()
 
 // forwardAbort is a relayed forward's StreamAbort: ch is closed when fleetd
 // asks for its end.

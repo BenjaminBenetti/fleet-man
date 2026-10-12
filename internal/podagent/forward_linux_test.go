@@ -200,3 +200,35 @@ func TestForwardCloseEndsAPeerThatKeepsSending(t *testing.T) {
 	}
 	_ = half.Close()
 }
+
+// TestForwardAbortRightAfterItsOpen: a StreamAbort fleetd sends as soon as
+// the OPEN reply reaches it (a connection closed at once) still ends the
+// agent's side and the pod's peer: the agent tracks the stream before it
+// replies, so the abort cannot come before the agent knows the stream.
+func TestForwardAbortRightAfterItsOpen(t *testing.T) {
+	// Cleared once the agent is gone (cleanups run last first).
+	t.Cleanup(func() { forwardOpened = nil })
+	forwardOpened = func() { time.Sleep(300 * time.Millisecond) }
+	d := newTestDirs(t)
+	s := startAgent(t, d.options())
+	peerDone := make(chan struct{}, 1)
+	port := loopbackServer(t, func(c net.Conn) {
+		defer func() { peerDone <- struct{}{} }()
+		for {
+			if _, err := c.Write([]byte("data: tick\n\n")); err != nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	conn, err := s.c.Forward(context.Background(), port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	select {
+	case <-peerDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a forward closed right after its open still relays the pod's peer: its StreamAbort was lost")
+	}
+}
