@@ -4,10 +4,13 @@ package kubernetes
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -740,18 +743,22 @@ func TestAPICode(t *testing.T) {
 		err  error
 		want kubeerr.Code
 	}{
-		"unauthorized":   {apierrors.NewUnauthorized("expired"), kubeerr.Unauthorized},
-		"forbidden":      {apierrors.NewForbidden(gr, "x", errors.New("no")), kubeerr.Forbidden},
-		"quota":          {apierrors.NewForbidden(gr, "x", errors.New("exceeded quota: q, requested: pods=1")), kubeerr.Quota},
-		"unavailable":    {apierrors.NewServiceUnavailable("down"), kubeerr.Unreachable},
-		"dial":           {&net.OpError{Op: "dial", Err: errors.New("refused")}, kubeerr.Unreachable},
-		"dial timeout":   {fmt.Errorf("instance StatefulSet ns/x: %w", dialTimeout), kubeerr.Unreachable},
-		"connection":     {fmt.Errorf("pool: %w", ErrClusterNotFound), kubeerr.ClusterMissing},
-		"kubeconfig":     {fmt.Errorf("load: %w", kubeexec.ErrContextMissing), kubeerr.Misconfigured},
-		"owner":          {ErrOwnerConflict, kubeerr.OwnerConflict},
-		"deadline":       {context.DeadlineExceeded, kubeerr.Timeout},
-		"cancelled":      {context.Canceled, ""},
-		"something else": {errors.New("exit status 1"), ""},
+		"unauthorized": {apierrors.NewUnauthorized("expired"), kubeerr.Unauthorized},
+		"forbidden":    {apierrors.NewForbidden(gr, "x", errors.New("no")), kubeerr.Forbidden},
+		"quota":        {apierrors.NewForbidden(gr, "x", errors.New("exceeded quota: q, requested: pods=1")), kubeerr.Quota},
+		"unavailable":  {apierrors.NewServiceUnavailable("down"), kubeerr.Unreachable},
+		"dial":         {&net.OpError{Op: "dial", Err: errors.New("refused")}, kubeerr.Unreachable},
+		"dial timeout": {fmt.Errorf("instance StatefulSet ns/x: %w", dialTimeout), kubeerr.Unreachable},
+		"connection":   {fmt.Errorf("pool: %w", ErrClusterNotFound), kubeerr.ClusterMissing},
+		"kubeconfig":   {fmt.Errorf("load: %w", kubeexec.ErrContextMissing), kubeerr.Misconfigured},
+		"owner":        {ErrOwnerConflict, kubeerr.OwnerConflict},
+		"deadline":     {context.DeadlineExceeded, kubeerr.Timeout},
+		// Reached, but not trusted, or the login refused: the connection's.
+		"untrusted server": {&url.Error{Op: "Get", URL: "https://api:6443", Err: &tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}}, kubeerr.Misconfigured},
+		"plugin":           {&url.Error{Op: "Get", URL: "https://api:6443", Err: errors.New("getting credentials: exec: executable kubelogin failed with exit code 1")}, kubeerr.Unauthorized},
+		"client refused":   {&url.Error{Op: "Get", URL: "https://api:6443", Err: &net.OpError{Op: "remote error", Err: tls.AlertError(45)}}, kubeerr.Unauthorized},
+		"cancelled":        {context.Canceled, ""},
+		"something else":   {errors.New("exit status 1"), ""},
 	} {
 		if got := apiCode(tc.err); got != tc.want {
 			t.Errorf("%s: apiCode = %q, want %q", name, got, tc.want)

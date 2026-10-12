@@ -2,10 +2,14 @@ package kubeerr
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -105,5 +109,78 @@ func TestUnreachedMessageLeadsWithTheCode(t *testing.T) {
 	}
 	if code, _, ok := Parse(msg); !ok || code != Unreachable {
 		t.Errorf("Parse(%q) = %q, %v", msg, code, ok)
+	}
+}
+
+// untrustedGet is what a GET to an API server whose certificate the client
+// does not trust returns: a *url.Error around the x509 failure, which is a
+// net.Error like any *url.Error.
+func untrustedGet(t *testing.T) error {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
+	defer srv.Close()
+	resp, err := (&http.Client{Transport: &http.Transport{}}).Get(srv.URL + "/api")
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("an untrusted server answered")
+	}
+	return err
+}
+
+// refusedClientGet is what a GET with no client certificate to an API server
+// that requires one returns: the server's certificate alert.
+func refusedClientGet(t *testing.T) error {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.TLS = &tls.Config{ClientAuth: tls.RequireAndVerifyClientCert}
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
+	defer srv.Close()
+	resp, err := srv.Client().Get(srv.URL + "/api")
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("a server requiring a client certificate answered without one")
+	}
+	return err
+}
+
+// A server that was reached but not trusted, or that refused the client's
+// certificate, and a credential plugin that failed, are not an unreachable
+// cluster (all three are *url.Errors, so net.Errors): they are the
+// connection's settings and its login.
+func TestTransportTellsReachedFromUnreached(t *testing.T) {
+	untrusted, refusedClient := untrustedGet(t), refusedClientGet(t)
+	plugin := &url.Error{Op: "Get", URL: "https://api.lab.invalid/api", Err: errors.New("getting credentials: exec: executable kubelogin failed with exit code 1")}
+	var netErr net.Error
+	for name, err := range map[string]error{"untrusted": untrusted, "refused client": refusedClient, "plugin": plugin} {
+		if !errors.As(err, &netErr) {
+			t.Fatalf("%s: %v is no net.Error; the case proves nothing", name, err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		err  error
+		code Code
+	}{
+		"untrusted server": {fmt.Errorf("pods/exec: %w", untrusted), Misconfigured},
+		"client refused":   {refusedClient, Unauthorized},
+		"plugin":           {plugin, Unauthorized},
+		"refused GET":      {refusedGet(t), Unreachable},
+		// Connected, no answer within the exec's bound, flattened into a
+		// message by the SPDY dialer.
+		"no answer": {fmt.Errorf("error sending request: %v", fmt.Errorf("%w within 30s: %w", ErrNoAnswer, context.DeadlineExceeded)), Unreachable},
+		"plain":     {errors.New("exit status 1"), ""},
+	} {
+		if got := Transport(tc.err); got != tc.code {
+			t.Errorf("%s: Transport(%v) = %q, want %q", name, tc.err, got, tc.code)
+		}
+		if got := IsUnreachable(tc.err); got != (tc.code == Unreachable) {
+			t.Errorf("%s: IsUnreachable(%v) = %v", name, tc.err, got)
+		}
+		coded, _ := Of(Unreached(tc.err))
+		if coded != tc.code {
+			t.Errorf("%s: Unreached coded %q, want %q", name, coded, tc.code)
+		}
 	}
 }
