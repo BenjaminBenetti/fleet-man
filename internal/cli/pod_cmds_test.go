@@ -2,6 +2,7 @@ package cli
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -69,7 +70,13 @@ func TestPodInitAndPodJobExitWithTheirCodes(t *testing.T) {
 	root = NewRootCmd()
 	root.SetArgs([]string{"pod-job", "--spec", missing})
 	_ = root.Execute()
-	if jobCode != jobboot.ExitBadSpec {
-		t.Fatalf("pod-job with no spec exited %d, want %d", jobCode, jobboot.ExitBadSpec)
+	// Off linux pod-job refuses before it reads any spec, and exits with its
+	// plain failure (pod-init's refusal there is its plain failure too).
+	want := jobboot.ExitBadSpec
+	if runtime.GOOS != "linux" {
+		want = jobboot.ExitFailed
+	}
+	if jobCode != want {
+		t.Fatalf("pod-job with no spec exited %d, want %d", jobCode, want)
 	}
 }
