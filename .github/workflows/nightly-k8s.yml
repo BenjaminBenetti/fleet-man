@@ -6,9 +6,10 @@ name: Nightly (Kubernetes)
 # snapshot clones and the conformance suite on two classes, a node that
 # takes few volumes, volumes that fill and grow, the docker container
 # runtime (cri-dockerd), a connection with only the RBAC fleet asks for, a
-# WAN between fleetd and the cluster, fleetd at 100 and 300 pods with the
-# reconnect storm of a restart, a poll pass over bound files on macOS, and
-# the long property and fuzz runs. Each job runs one
+# WAN between fleetd and the cluster, the merge gate's measurements (data
+# paths, creates, poll cost), fleetd at 100 and 300 pods with the reconnect
+# storm of a restart, a poll pass over bound files on macOS, and the long
+# property and fuzz runs. Each job runs one
 # integration/nightly/*.sh, as a local run in the QA container does
 # (DEVELOPMENT.md "Nightly jobs"); its output folder (summary, budgets.tsv,
 # failed tests' artifacts, cluster dumps) is the job's artifact.
@@ -87,6 +88,7 @@ jobs:
           - { job: runtime-docker, timeout: 90 }
           - { job: rbac-limited, timeout: 80 }
           - { job: netem, timeout: 80 }
+          - { job: bench, timeout: 90 }
           - { job: scale, args: "100", timeout: 90 }
           - { job: selinux-k3s, timeout: 100 }
     steps:
@@ -127,7 +129,7 @@ jobs:
           key: fleet-nightly-vm-alma9-20260810
 
       - name: The kernel's netem
-        if: matrix.job == 'netem'
+        if: matrix.job == 'netem' || matrix.job == 'bench'
         run: |
           sudo modprobe sch_netem || {
             sudo apt-get install -y "linux-modules-extra-$(uname -r)"

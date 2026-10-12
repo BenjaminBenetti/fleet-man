@@ -19,13 +19,35 @@ when the traffic came through intact, or exits 1 with what went wrong.
   ws       <proxy-port> <host:port> <text>
                                           CONNECT through the proxy, upgrade
                                           to a WebSocket and expect the echo
+
+The benchmark subcommands print one number:
+
+  rate     <port> down|up <seconds>       MB/s of one connection for that
+                                          long: down reads from a `source`
+                                          server, up sends frames to a
+                                          `count` server (no half-close) and
+                                          stops the clock at its answer
+  rate-cmd <seconds> -- <command...>      MB/s of the command's stdout, from
+                                          its first byte, for that long
+  pty-wait <seconds> <marker> -- <command...>
+                                          ms until <marker> shows on the
+                                          command's terminal (a pty, 120x40,
+                                          answering a terminal's colour and
+                                          cursor queries), then hangs it up
 """
 import argparse
 import base64
+import fcntl
 import hashlib
 import os
+import pty
+import select
+import signal
 import socket
+import struct
+import subprocess
 import sys
+import termios
 import threading
 import time
 
@@ -189,6 +211,118 @@ def cmd_ws(args):
     print("ws ok: %s" % reply)
 
 
+def cmd_rate(args):
+    n = 0
+    if args.direction == "down":
+        with connect(args.port) as sock:
+            start = time.monotonic()
+            while time.monotonic() - start < args.seconds:
+                data = sock.recv(1 << 20)
+                if not data:
+                    break
+                n += len(data)
+            took = time.monotonic() - start
+    else:
+        chunk = os.urandom(1 << 20)
+        frame = struct.pack(">I", len(chunk)) + chunk
+        with connect(args.port) as sock:
+            start = time.monotonic()
+            while time.monotonic() - start < args.seconds:
+                sock.sendall(frame)
+                n += len(chunk)
+            sock.sendall(struct.pack(">I", 0))
+            reply = read_to_eof(sock).decode(errors="replace").strip()
+            took = time.monotonic() - start
+        if reply != "bytes=%d" % n:
+            fail("rate up: reply %r, want bytes=%d" % (reply, n))
+    if took <= 0 or n == 0:
+        fail("rate %s: no bytes in %.1fs" % (args.direction, took))
+    print("%.1f" % (n / took / 1e6))
+
+
+def cmd_rate_cmd(args):
+    proc = subprocess.Popen(args.cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    n, start = 0, None
+    try:
+        while True:
+            ready, _, _ = select.select([proc.stdout], [], [], TIMEOUT)
+            if not ready:
+                fail("rate-cmd: no output for %ds" % TIMEOUT)
+            data = os.read(proc.stdout.fileno(), 1 << 20)
+            if not data:
+                break
+            if start is None:
+                start = time.monotonic()
+            n += len(data)
+            if time.monotonic() - start >= args.seconds:
+                break
+        took = time.monotonic() - start if start is not None else 0
+    finally:
+        proc.kill()
+        proc.wait()
+    if took <= 0 or n == 0:
+        fail("rate-cmd: no output from %s" % " ".join(args.cmd))
+    print("%.1f" % (n / took / 1e6))
+
+
+def cmd_pty_wait(args):
+    marker = args.marker.encode()
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.environ["TERM"] = "xterm-256color"
+        try:
+            os.execvp(args.cmd[0], args.cmd)
+        finally:
+            os._exit(127)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    start = time.monotonic()
+    seen = b""
+    # Queries a program sends its terminal at start (a fleet process asks for
+    # the background colour, then a cursor report as the fence: bubbletea's
+    # init through termenv), answered as a terminal would; unanswered, each
+    # waits out termenv's 5s timeout, which no real terminal costs.
+    replies = {b"\x1b]11;?": b"\x1b]11;rgb:0000/0000/0000\x1b\\", b"\x1b]10;?": b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\",
+               b"\x1b[6n": b"\x1b[1;1R", b"\x1b[c": b"\x1b[?62;22c"}
+    pending = b""
+    try:
+        while marker not in seen:
+            left = args.seconds - (time.monotonic() - start)
+            ready, _, _ = select.select([fd], [], [], max(left, 0))
+            if not ready:
+                fail("pty-wait: no %r within %ss; the terminal showed %r" % (args.marker, args.seconds, seen[-400:]))
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                data = b""
+            if not data:
+                fail("pty-wait: the command ended before %r; it showed %r" % (args.marker, seen[-400:]))
+            seen = (seen + data)[-65536:]
+            pending += data
+            while True:
+                hits = [(pending.find(q), q) for q in replies if pending.find(q) >= 0]
+                if not hits:
+                    pending = pending[-8:]
+                    break
+                at, q = min(hits)
+                os.write(fd, replies[q])
+                pending = pending[at + len(q):]
+        ms = (time.monotonic() - start) * 1000
+    finally:
+        for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                break
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and os.waitpid(pid, os.WNOHANG) == (0, 0):
+                time.sleep(0.05)
+            else:
+                if time.monotonic() < deadline:
+                    break
+        os.close(fd)
+    print("%d" % ms)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -215,6 +349,20 @@ def main():
     p.add_argument("target")
     p.add_argument("text")
     p.set_defaults(fn=cmd_ws)
+    p = sub.add_parser("rate")
+    p.add_argument("port", type=int)
+    p.add_argument("direction", choices=["down", "up"])
+    p.add_argument("seconds", type=float)
+    p.set_defaults(fn=cmd_rate)
+    p = sub.add_parser("rate-cmd")
+    p.add_argument("seconds", type=float)
+    p.add_argument("cmd", nargs="+")
+    p.set_defaults(fn=cmd_rate_cmd)
+    p = sub.add_parser("pty-wait")
+    p.add_argument("seconds", type=float)
+    p.add_argument("marker")
+    p.add_argument("cmd", nargs="+")
+    p.set_defaults(fn=cmd_pty_wait)
     args = parser.parse_args()
     try:
         args.fn(args)

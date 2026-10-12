@@ -52,3 +52,39 @@ func BenchmarkPollOfBoundFiles(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkPollOfALargeCustomMount is one poll pass over a custom mount's
+// host folder of 20,000 files in 400 folders (a checked-out repository's
+// size): on macOS and the BSDs every custom mount is scanned in full every
+// SideOptions.Poll (2s), so this is that pass's cost per 20,000 files; the
+// nightly poll-cost job records it beside the bound files' budget.
+func BenchmarkPollOfALargeCustomMount(b *testing.B) {
+	dir := b.TempDir()
+	for d := range 400 {
+		sub := filepath.Join(dir, fmt.Sprintf("pkg-%03d", d/20), fmt.Sprintf("mod-%03d", d))
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			b.Fatal(err)
+		}
+		for f := range 50 {
+			if err := os.WriteFile(filepath.Join(sub, fmt.Sprintf("file-%02d.go", f)), []byte("package mod\n"), 0o644); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	const root = ".mnt"
+	tree, err := OpenTree([]TreeRoot{{Name: root, Dir: dir}}, TreeOptions{StateDir: b.TempDir(), Settle: -1})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer tree.Close()
+	ctx := context.Background()
+	if _, _, err := tree.Scan(ctx, root, nil); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		if _, _, err := tree.Scan(ctx, root, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

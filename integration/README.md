@@ -310,6 +310,7 @@ the itest logs, failed tests' `FLEET_ITEST_ARTIFACTS` and cluster dumps in
 | `runtime-docker.sh` | minikube `--container-runtime=docker` (the shards' minikube runs containerd) | 010-061, 800-807 |
 | `rbac-limited.sh` | minikube; the connection a ServiceAccount token whose Role, in its namespace, grants only what the preflight requires, and nothing cluster-wide | 010-061, 800 |
 | `netem.sh` | minikube behind tc netem (150ms round trip; then with ~1% loss) | 851: audio jitter beside bulk transfers, page loads through fleet vs kubectl port-forward, poll times |
+| `bench.sh` | minikube, its link put behind tc netem (150ms round trip) for part of 855 | 855: forward throughput on the pooled port-forward and on the pod agent's stream (`--half-close`), audio jitter beside each, exec, copy, attach and browser-proxy page times, beside a Docker instance; 856: create latency (first, second, clone) against Docker's and what an open TUI's pollers cost per instance. Recorded, not judged: the merge checklist and the optional extensions read them |
 | `scale.sh <n>` | minikube, one node of `n`+60 pods | 850: fleetd's scale budgets and the reconnect storm at `n` (100; 300 on a larger runner) |
 | `poll-cost.sh` | none (macOS in the workflow) | a poll pass over 20 bound files in a 5000-entry host folder under 100ms (`BenchmarkPollOfBoundFiles`): sides without inotify poll every 2s |
 | `go-deep.sh` | none | sharesync properties at 200 seeds, every fuzz target for a minute |
