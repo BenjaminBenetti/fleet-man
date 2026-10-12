@@ -32,18 +32,20 @@ var (
 	kubeDialogClose = kubeKey{keys: []string{"esc", "q"}, label: "q / esc", hint: "[esc] close", shared: true}
 )
 
-// kubePickerConnect is the picker's enter (a re-point's footer words it
-// differently).
-var kubePickerConnect = kubeKey{keys: []string{"enter"}, label: "enter", hint: "[enter] test & connect", desc: "Picker: test & connect (re-point: move there)"}
+// kubePickerConnect is the Connect page's enter on a context (the form's
+// rows and a re-point's footer word it differently).
+var kubePickerConnect = kubeKey{keys: []string{"enter"}, label: "enter", hint: "[enter] choose & test",
+	desc: "Connect: choose a context and test it; on the form edit, change or test & connect (re-point: move there)"}
 
-// kubePickerKeys act on the context picker.
+// kubePickerKeys act on the Connect page (and the re-point picker).
 var kubePickerKeys = []kubeKey{
 	kubeDialogMove,
-	{keys: []string{"/"}, label: "/", hint: "[/] filter", desc: "Picker: filter contexts (esc leaves the filter)"},
+	{keys: []string{"/"}, label: "/", hint: "[/] filter", desc: "Connect: filter contexts (esc leaves the filter)"},
 	kubePickerConnect,
-	{keys: []string{"n"}, label: "n", hint: "[n] namespace", desc: "Picker: choose the namespace"},
-	{keys: []string{"c"}, label: "c", hint: "[c] create namespace", desc: "Create the missing namespace (shows labels)"},
-	{keys: []string{"ctrl+o"}, label: "ctrl+o", hint: "[ctrl+o] other kubeconfig", desc: "Picker: read another kubeconfig on fleetd's host"},
+	{keys: []string{"left", "right", "h", "l"}, label: "← / → (connect)", hint: "[←/→] change", desc: "Connect: change a choice (delivery, storage)"},
+	{keys: []string{"tab", "shift+tab"}, label: "tab", hint: "[tab] form", desc: "Connect: between the contexts and the new connection's form"},
+	{keys: []string{"n"}, label: "n", hint: "[n] namespace", desc: "Connect: set the namespace (created when it does not exist)"},
+	{keys: []string{"ctrl+o"}, label: "ctrl+o", hint: "[ctrl+o] other kubeconfig", desc: "Connect: read another kubeconfig on fleetd's host"},
 	{keys: []string{"L"}, label: "L", hint: "[L] login here", desc: "Run the login plugin here (local fleetd only)"},
 	kubeDialogClose,
 }

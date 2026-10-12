@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -10,28 +11,40 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"google.golang.org/protobuf/proto"
 )
 
-// dialog_kube_picker.go is the kubectx-style context picker: the contexts of
-// the kubeconfig files on the DAEMON host (fleetd reads them; a remote TUI
-// sees the daemon's, never its own), filtered as you type after /. Enter
-// tests the context with a streamed preflight and connects it when it is
-// usable (a second enter connects a failing one anyway). The same picker
-// re-points an existing connection to another context.
+// dialog_kube_picker.go is the Connect page: a kubectx-style list of the
+// contexts of the kubeconfig files on the DAEMON host (fleetd reads them; a
+// remote TUI sees the daemon's, never its own), filtered as you type after
+// /, and under it the new connection's basic settings (kube_connect_form.go).
+// enter on a context chooses it and tests it as an unsaved draft, which also
+// finds what the form offers (the cluster's StorageClasses, how images reach
+// it); [ Test & connect ] connects it once a test of the form as it stands
+// says it is usable, or anyway after one failed. A namespace that does not
+// exist is no failure: the daemon creates it as it connects. Everything
+// else is the cluster editor's, once connected. The same list re-points an
+// existing connection to another context, without the form.
 
 // kubePickerInput is what the picker's text input is collecting.
 type kubePickerInput int
 
 const (
-	kubePickerInputNone      kubePickerInput = iota
-	kubePickerInputPaths                     // ctrl+o: other kubeconfig files on the daemon host
-	kubePickerInputNamespace                 // n: the namespace to connect
+	kubePickerInputNone  kubePickerInput = iota
+	kubePickerInputPaths                 // ctrl+o: other kubeconfig files on the daemon host
+	kubePickerInputField                 // a form field (kubePicker.editing)
 )
 
 // kubeDraftSeq numbers the picker's draft tests (their m.kubeRuns keys).
 var kubeDraftSeq int
 
-// kubePicker is the context picker dialog.
+// kubePickerRow is one navigable row: a context, or a form field.
+type kubePickerRow struct {
+	context *fleetgrpc.KubeContext
+	field   string
+}
+
+// kubePicker is the Connect page (and the re-point picker).
 type kubePicker struct {
 	// repoint is the connection being moved to another context; "" when
 	// connecting a new one. back is the dialog the picker returns to when it
@@ -45,22 +58,29 @@ type kubePicker struct {
 	loading  bool
 	loadErr  string
 
-	cursor    int // index into filtered()
+	cursor    int // index into rows(): the filtered contexts, then the form's
 	offset    int
 	filter    textinput.Model
 	filtering bool
 
-	input      textinput.Model
-	inputMode  kubePickerInput
-	namespaces map[string]string // a namespace chosen with n, by context
+	// chosen is the context the form sets up ("" until enter picks one);
+	// forms hold each context's settings and found what its draft tests
+	// found, by context name.
+	chosen string
+	forms  map[string]*kubeConnectForm
+	found  map[string]*kubeFound
 
-	runKey  string // m.kubeRuns key of the latest draft test
-	testCtx string // the context and namespace it tested
-	testNS  string
-	failed  bool   // it finished unusable: enter again connects anyway
+	input     textinput.Model
+	inputMode kubePickerInput
+	editing   string // the form field the input edits
+
+	runKey string                 // m.kubeRuns key of the latest draft test
+	tested *fleetgrpc.KubeCluster // the draft it tests
+	failed bool                   // it finished unusable: [ Connect anyway ]
+	// connect: [ Test & connect ] waits for the test to connect it.
+	connect bool
 	busy    string // an Add or a re-point in flight
 	err     string
-	ns      *kubeNamespacePanel
 }
 
 // Answers to the picker's RPCs.
@@ -72,12 +92,12 @@ type (
 	}
 	kubeAddedMsg struct {
 		picker *kubePicker
-		status *fleetgrpc.KubeClusterStatus
+		reply  *fleetgrpc.AddKubeClusterReply
 		err    error
 	}
 	kubeRepointedMsg struct {
 		picker *kubePicker
-		status *fleetgrpc.KubeClusterStatus
+		reply  *fleetgrpc.UpdateKubeClusterReply
 		err    error
 	}
 )
@@ -90,7 +110,7 @@ func newKubePicker(m *model, repoint string) *kubePicker {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 1024
-	p := &kubePicker{repoint: repoint, filter: filter, input: input, namespaces: map[string]string{}}
+	p := &kubePicker{repoint: repoint, filter: filter, input: input, forms: map[string]*kubeConnectForm{}, found: map[string]*kubeFound{}}
 	if st := m.kubeStatus(repoint); st != nil {
 		p.paths = st.GetCluster().GetKubeconfigPaths()
 	}
@@ -125,36 +145,65 @@ func (p *kubePicker) filtered() []*fleetgrpc.KubeContext {
 	return out
 }
 
-// selected is the context under the cursor, or nil.
+// rows is the page's navigable rows: the filtered contexts, then the form
+// of the chosen one (none on a re-point).
+func (p *kubePicker) rows() []kubePickerRow {
+	var out []kubePickerRow
+	for _, c := range p.filtered() {
+		out = append(out, kubePickerRow{context: c})
+	}
+	if c := p.chosenContext(); c != nil && p.repoint == "" {
+		for _, f := range p.formFields(c) {
+			out = append(out, kubePickerRow{field: f})
+		}
+	}
+	return out
+}
+
+// current is the row under the cursor (the zero row when there is none).
+func (p *kubePicker) current() kubePickerRow {
+	rows := p.rows()
+	if len(rows) == 0 {
+		return kubePickerRow{}
+	}
+	p.cursor = max(0, min(p.cursor, len(rows)-1))
+	return rows[p.cursor]
+}
+
+// selected is the context under the cursor, or nil on a form row.
 func (p *kubePicker) selected() *fleetgrpc.KubeContext {
-	list := p.filtered()
-	if p.cursor < 0 || p.cursor >= len(list) {
+	return p.current().context
+}
+
+// chosenContext is the context the form sets up, or nil.
+func (p *kubePicker) chosenContext() *fleetgrpc.KubeContext {
+	if p.chosen == "" {
 		return nil
 	}
-	return list[p.cursor]
+	for _, c := range p.contexts {
+		if c.GetName() == p.chosen {
+			return c
+		}
+	}
+	return nil
 }
 
-// namespaceFor is the namespace a connection of context c takes: one chosen
-// with n, else the context's own, except that a context on "default" (or on
-// none) is offered "fleet" instead, created only through the explicit Create.
-func (p *kubePicker) namespaceFor(c *fleetgrpc.KubeContext) (ns string, suggested bool) {
-	if ns := p.namespaces[c.GetName()]; ns != "" {
-		return ns, false
+// target is the context a key acts on: the one under the cursor, else (on
+// the form) the chosen one.
+func (p *kubePicker) target() *fleetgrpc.KubeContext {
+	if c := p.selected(); c != nil {
+		return c
 	}
-	if ns := c.GetNamespace(); ns != "" && ns != "default" {
-		return ns, false
-	}
-	return "fleet", true
+	return p.chosenContext()
 }
 
-// draft is the unsaved connection of context c.
-func (p *kubePicker) draft(m *model, c *fleetgrpc.KubeContext) *fleetgrpc.KubeCluster {
-	ns, _ := p.namespaceFor(c)
-	return &fleetgrpc.KubeCluster{
-		DisplayName:     kubeDefaultName(m, c.GetName(), ns),
-		Context:         c.GetName(),
-		KubeconfigPaths: append([]string(nil), p.paths...),
-		Namespace:       ns,
+// cursorTo puts the cursor on a form field, or on context name ("" field).
+func (p *kubePicker) cursorTo(field, name string) {
+	for i, row := range p.rows() {
+		if (field != "" && row.field == field) || (field == "" && row.context.GetName() == name) {
+			p.cursor = i
+			return
+		}
 	}
 }
 
@@ -205,14 +254,21 @@ func (p *kubePicker) stopTest(m *model) {
 		run.cancel()
 		delete(m.kubeRuns, p.runKey)
 	}
-	p.runKey = ""
+	p.runKey, p.tested, p.connect = "", nil, false
 }
 
-// sameDraft reports whether the latest test was of the context and
-// namespace now selected.
-func (p *kubePicker) sameDraft(c *fleetgrpc.KubeContext) bool {
-	ns, _ := p.namespaceFor(c)
-	return p.runKey != "" && p.testCtx == c.GetName() && p.testNS == ns
+// kubeDraftKey is what a draft test depends on: everything but the name.
+func kubeDraftKey(d *fleetgrpc.KubeCluster) string {
+	c := proto.Clone(d).(*fleetgrpc.KubeCluster)
+	c.DisplayName = ""
+	b, _ := proto.MarshalOptions{Deterministic: true}.Marshal(c)
+	return string(b)
+}
+
+// sameDraft reports whether the latest test was of context c's draft as
+// the form now stands.
+func (p *kubePicker) sameDraft(m *model, c *fleetgrpc.KubeContext) bool {
+	return p.runKey != "" && p.tested != nil && c != nil && kubeDraftKey(p.tested) == kubeDraftKey(p.draft(m, c))
 }
 
 func (p *kubePicker) update(m *model, page *settingsPage, msg tea.Msg) (tea.Cmd, bool) {
@@ -227,16 +283,7 @@ func (p *kubePicker) update(m *model, page *settingsPage, msg tea.Msg) (tea.Cmd,
 		if msg.picker != p {
 			return nil, false
 		}
-		p.busy = ""
-		if msg.err != nil {
-			p.err = "connect: " + kubeRPCError(msg.err)
-			return nil, true
-		}
-		m.kubeUpsert(msg.status)
-		page.closeKubeDialog(m)
-		page.cursorToKubeCluster(m, msg.status.GetCluster().GetId())
-		m.message = fmt.Sprintf("Connected %s %s: %s", kubeGlyphCluster, msg.status.GetCluster().DisplayNameOrID(), kubeStateLine(msg.status))
-		return loadKubePluginsCmd(m.watchGen, m.kubeStatuses()), true
+		return p.onAdded(m, page, msg), true
 	case kubeRepointedMsg:
 		if msg.picker != p {
 			return nil, false
@@ -246,21 +293,13 @@ func (p *kubePicker) update(m *model, page *settingsPage, msg tea.Msg) (tea.Cmd,
 			p.err = "re-point: " + kubeRPCError(msg.err)
 			return nil, true
 		}
-		m.kubeUpsert(msg.status)
+		st := msg.reply.GetCluster()
+		m.kubeUpsert(st)
 		page.closeKubeDialog(m)
-		page.cursorToKubeCluster(m, msg.status.GetCluster().GetId())
-		m.message = fmt.Sprintf("%s %s now uses context %s", kubeGlyphCluster, msg.status.GetCluster().DisplayNameOrID(), msg.status.GetCluster().GetContext())
-		return nil, true
-	case kubeNamespaceMsg:
-		if p.ns == nil || msg.panel != p.ns {
-			return nil, false
-		}
-		if p.ns.handle(msg) {
-			p.ns = nil
-			m.message = "Namespace " + msg.panel.name + " created"
-			if c := p.selected(); c != nil && p.repoint == "" {
-				return p.startTest(m, c), true
-			}
+		page.cursorToKubeCluster(m, st.GetCluster().GetId())
+		m.message = fmt.Sprintf("%s %s now uses context %s", kubeGlyphCluster, st.GetCluster().DisplayNameOrID(), st.GetCluster().GetContext())
+		if e, ok := page.kubeDialog.(*kubeEditor); ok {
+			e.onNamespace(m, msg.reply.GetNamespace())
 		}
 		return nil, true
 	case kubeLoginHereDoneMsg:
@@ -272,8 +311,8 @@ func (p *kubePicker) update(m *model, page *settingsPage, msg tea.Msg) (tea.Cmd,
 			return nil, true
 		}
 		m.message = "Login plugin finished; testing again"
-		if c := p.selected(); c != nil && p.repoint == "" {
-			return p.startTest(m, c), true
+		if c := p.chosenContext(); c != nil && p.repoint == "" {
+			return p.startTest(m, c, p.connect), true
 		}
 		return nil, true
 	case tea.KeyMsg:
@@ -309,14 +348,40 @@ func (p *kubePicker) onContexts(m *model, msg kubeContextsMsg) {
 	}
 }
 
-func (p *kubePicker) key(m *model, page *settingsPage, key tea.KeyMsg) tea.Cmd {
-	if p.ns != nil {
-		cmd, closed := p.ns.key(m, key)
-		if closed {
-			p.ns = nil
-		}
-		return cmd
+// onAdded closes the page on a new connection, saying what became of its
+// namespace: one the daemon could not create opens the connection's editor
+// on the namespace panel, with the manifest to apply.
+func (p *kubePicker) onAdded(m *model, page *settingsPage, msg kubeAddedMsg) tea.Cmd {
+	p.busy = ""
+	if msg.err != nil {
+		p.err = "connect: " + kubeRPCError(msg.err)
+		return nil
 	}
+	st := msg.reply.GetCluster()
+	id := st.GetCluster().GetId()
+	m.kubeUpsert(st)
+	page.closeKubeDialog(m)
+	page.cursorToKubeCluster(m, id)
+	m.message = fmt.Sprintf("Connected %s %s: %s", kubeGlyphCluster, st.GetCluster().DisplayNameOrID(), kubeStateLine(st))
+	cmds := []tea.Cmd{loadKubePluginsCmd(m.watchGen, m.kubeStatuses())}
+	switch ns := msg.reply.GetNamespace(); {
+	case ns.GetPermissionDenied():
+		e := newKubeEditor(id)
+		e.gen = m.watchGen
+		e.ns = newKubeNamespaceRefusal(id, ns)
+		page.kubeDialog = e
+		m.message = fmt.Sprintf("Connected %s %s, but fleet may not create namespace %s: apply its manifest as someone who may",
+			kubeGlyphCluster, st.GetCluster().DisplayNameOrID(), ns.GetNamespace())
+		cmds = append(cmds, e.loadUsage())
+	case ns.GetCreated():
+		m.message += " · created namespace " + ns.GetNamespace()
+	case ns.GetError() != "":
+		m.message += " · namespace " + ns.GetNamespace() + ": " + ns.GetError()
+	}
+	return tea.Batch(cmds...)
+}
+
+func (p *kubePicker) key(m *model, page *settingsPage, key tea.KeyMsg) tea.Cmd {
 	if p.inputMode != kubePickerInputNone {
 		return p.inputKey(m, key)
 	}
@@ -338,43 +403,54 @@ func (p *kubePicker) key(m *model, page *settingsPage, key tea.KeyMsg) tea.Cmd {
 		}
 		return cmd
 	}
+	row := p.current()
 	switch key.String() {
 	case "esc", "q":
 		page.closeKubeDialog(m)
 		return nil
 	case "j", "k", "up", "down":
 		p.move(key.String())
+	case "tab", "shift+tab":
+		p.toggleFocus()
 	case "/":
 		p.filtering = true
 		return p.filter.Focus()
 	case "enter":
-		return p.connect(m)
-	case "n":
-		if c := p.selected(); c != nil && p.repoint == "" {
-			ns, _ := p.namespaceFor(c)
-			return p.beginInput(kubePickerInputNamespace, ns, "namespace (lower-case letters, digits, '-')")
+		if row.context != nil {
+			if p.repoint != "" {
+				return p.repointTo(m, row.context)
+			}
+			return p.choose(m, row.context, true)
 		}
-	case "c":
-		if c := p.selected(); c != nil && p.namespaceMissing(m, c) {
-			var cmd tea.Cmd
-			ns, _ := p.namespaceFor(c)
-			p.ns, cmd = newKubeNamespacePanel("", p.draft(m, c), ns)
-			return cmd
+		return p.enterField(m, row.field)
+	case "left", "h", "right", "l":
+		if row.field != "" {
+			dir := 1
+			if key.String() == "left" || key.String() == "h" {
+				dir = -1
+			}
+			return p.cycleField(m, row.field, dir)
+		}
+	case "n":
+		if c := p.target(); c != nil && p.repoint == "" {
+			p.choose(m, c, false)
+			p.cursorTo(kubeFormNamespace, "")
+			return p.enterField(m, kubeFormNamespace)
 		}
 	case "ctrl+o":
-		return p.beginInput(kubePickerInputPaths, strings.Join(p.paths, string(filepath.ListSeparator)),
+		return p.beginInput(kubePickerInputPaths, "", strings.Join(p.paths, string(filepath.ListSeparator)),
 			"/abs/path/to/kubeconfig on fleetd's host ('"+string(filepath.ListSeparator)+"' separates files)")
 	case "L":
-		if c := p.selected(); c != nil && kubeLoginHereAvailable() && kubeUsesPlugin(c) {
+		if c := p.target(); c != nil && kubeLoginHereAvailable() && kubeUsesPlugin(c) {
 			return kubeLoginHereCmd(p, p.draft(m, c))
 		}
 	}
 	return nil
 }
 
-// move steps the cursor through the filtered contexts.
+// move steps the cursor through the rows, wrapping.
 func (p *kubePicker) move(key string) {
-	n := len(p.filtered())
+	n := len(p.rows())
 	if n == 0 {
 		return
 	}
@@ -386,8 +462,37 @@ func (p *kubePicker) move(key string) {
 	}
 }
 
-func (p *kubePicker) beginInput(mode kubePickerInput, value, placeholder string) tea.Cmd {
-	p.inputMode = mode
+// toggleFocus jumps between the contexts and the form: to the form's first
+// field, or back to the chosen context.
+func (p *kubePicker) toggleFocus() {
+	c := p.chosenContext()
+	if c == nil || p.repoint != "" {
+		return
+	}
+	if p.current().context != nil {
+		p.cursorTo(kubeFormName, "")
+		return
+	}
+	p.cursorTo("", c.GetName())
+}
+
+// choose makes c the context the form sets up, its cursor on [ Test &
+// connect ], and with test tests the draft (unless the latest test was of
+// it already), which is also what fills the form's choices.
+func (p *kubePicker) choose(m *model, c *fleetgrpc.KubeContext, test bool) tea.Cmd {
+	if p.chosen != c.GetName() {
+		p.connect = false
+	}
+	p.chosen, p.err = c.GetName(), ""
+	p.cursorTo(kubeFormConnect, "")
+	if !test || p.sameDraft(m, c) {
+		return nil
+	}
+	return p.startTest(m, c, false)
+}
+
+func (p *kubePicker) beginInput(mode kubePickerInput, field, value, placeholder string) tea.Cmd {
+	p.inputMode, p.editing = mode, field
 	p.input.Placeholder = placeholder
 	p.input.SetValue(value)
 	p.input.CursorEnd()
@@ -397,13 +502,13 @@ func (p *kubePicker) beginInput(mode kubePickerInput, value, placeholder string)
 func (p *kubePicker) inputKey(m *model, key tea.KeyMsg) tea.Cmd {
 	switch key.String() {
 	case "esc":
-		p.inputMode = kubePickerInputNone
+		p.inputMode, p.editing = kubePickerInputNone, ""
 		p.input.Blur()
 		return nil
 	case "enter":
-		mode := p.inputMode
+		mode, field := p.inputMode, p.editing
 		value := strings.TrimSpace(p.input.Value())
-		p.inputMode = kubePickerInputNone
+		p.inputMode, p.editing = kubePickerInputNone, ""
 		p.input.Blur()
 		switch mode {
 		case kubePickerInputPaths:
@@ -413,13 +518,13 @@ func (p *kubePicker) inputKey(m *model, key tea.KeyMsg) tea.Cmd {
 					paths = append(paths, part)
 				}
 			}
-			p.contexts, p.filter, p.err = nil, resetInput(p.filter), ""
+			// Other files: other contexts, which nothing found yet.
 			p.stopTest(m)
+			p.contexts, p.filter, p.err = nil, resetInput(p.filter), ""
+			p.chosen, p.forms, p.found, p.failed = "", map[string]*kubeConnectForm{}, map[string]*kubeFound{}, false
 			return p.load(m, paths)
-		case kubePickerInputNamespace:
-			if c := p.selected(); c != nil {
-				p.namespaces[c.GetName()] = value
-			}
+		case kubePickerInputField:
+			return p.setField(m, field, value)
 		}
 		return nil
 	}
@@ -441,69 +546,102 @@ func resetInput(in textinput.Model) textinput.Model {
 	return in
 }
 
-// namespaceMissing reports whether the latest test of c found its namespace
-// absent.
-func (p *kubePicker) namespaceMissing(m *model, c *fleetgrpc.KubeContext) bool {
-	run := p.run(m)
-	return p.sameDraft(c) && run != nil && kubeNamespaceMissing(run.checks)
-}
-
-// connect is enter: test the selected context, then connect it when the
-// test says it is usable; after a failed test, connect it anyway. On a
-// re-point it moves the connection there (the daemon refuses another cluster
-// for a connection in use).
-func (p *kubePicker) connect(m *model) tea.Cmd {
-	c := p.selected()
+// connectChosen is [ Test & connect ]: connect the chosen context once a
+// test of its draft as it stands says it is usable (testing it first when
+// none has), or anyway after one failed.
+func (p *kubePicker) connectChosen(m *model) tea.Cmd {
+	c := p.chosenContext()
 	if c == nil || p.busy != "" {
 		return nil
 	}
 	p.err = ""
-	if p.repoint != "" {
-		st := m.kubeStatus(p.repoint)
-		if st == nil {
-			p.err = "the connection is gone"
-			return nil
-		}
-		p.busy = "re-pointing…"
-		id, rev := p.repoint, st.GetCluster().GetRevision()
-		next := &fleetgrpc.KubeCluster{Context: c.GetName(), KubeconfigPaths: append([]string(nil), p.paths...)}
-		return func() tea.Msg {
-			reply, err := updateKubeClusterRemote(id, next, []string{"context", "kubeconfig_paths"}, rev)
-			return kubeRepointedMsg{picker: p, status: reply, err: err}
-		}
-	}
-	if run := p.run(m); p.sameDraft(c) && run.running() {
+	switch run := p.run(m); {
+	case !p.sameDraft(m, c):
+		return p.startTest(m, c, true)
+	case run.running():
+		p.connect = true
 		return nil
 	}
-	if p.sameDraft(c) && p.failed {
-		return p.add(m, p.draft(m, c))
-	}
-	return p.startTest(m, c)
+	// Usable, or a failed test the user connects anyway.
+	return p.add(m, p.draft(m, c))
 }
 
-// startTest runs the preflight on context c without saving anything.
-func (p *kubePicker) startTest(m *model, c *fleetgrpc.KubeContext) tea.Cmd {
+// repointTo moves the re-pointed connection to context c (the daemon
+// refuses another cluster for a connection in use).
+func (p *kubePicker) repointTo(m *model, c *fleetgrpc.KubeContext) tea.Cmd {
+	if p.busy != "" {
+		return nil
+	}
+	p.err = ""
+	st := m.kubeStatus(p.repoint)
+	if st == nil {
+		p.err = "the connection is gone"
+		return nil
+	}
+	p.busy = "re-pointing…"
+	id, rev := p.repoint, st.GetCluster().GetRevision()
+	next := &fleetgrpc.KubeCluster{Context: c.GetName(), KubeconfigPaths: append([]string(nil), p.paths...)}
+	return func() tea.Msg {
+		reply, err := updateKubeClusterRemote(id, next, []string{"context", "kubeconfig_paths"}, rev)
+		return kubeRepointedMsg{picker: p, reply: reply, err: err}
+	}
+}
+
+// startTest runs the preflight on context c's draft without saving
+// anything; connect connects it when the test says it is usable.
+func (p *kubePicker) startTest(m *model, c *fleetgrpc.KubeContext, connect bool) tea.Cmd {
 	p.stopTest(m)
 	kubeDraftSeq++
 	p.runKey = fmt.Sprintf("draft:%d", kubeDraftSeq)
-	p.testCtx = c.GetName()
-	p.testNS, _ = p.namespaceFor(c)
-	p.failed = false
-	return m.startKubeTest(p.runKey, "", &fleetgrpc.TestKubeClusterRequest{Cluster: p.draft(m, c)})
+	p.tested = p.draft(m, c)
+	p.failed, p.connect = false, connect
+	return m.startKubeTest(p.runKey, "", &fleetgrpc.TestKubeClusterRequest{Cluster: proto.Clone(p.tested).(*fleetgrpc.KubeCluster)})
 }
 
-// onTestDone connects a usable draft, or says what failed.
+// kubeNamespaceToCreate reports whether a draft test failed only because its
+// namespace does not exist, which the daemon creates as it connects.
+func kubeNamespaceToCreate(checks []*fleetgrpc.KubeCheck) bool {
+	failed := false
+	for _, c := range checks {
+		if c.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL {
+			continue
+		}
+		if c.GetName() != "namespace" {
+			return false
+		}
+		failed = true
+	}
+	return failed
+}
+
+// kubeDraftUsable reports whether a finished draft test lets the draft
+// connect without a "connect anyway".
+func kubeDraftUsable(run *kubeTestRun) bool {
+	return run.err == nil && (run.result.GetState().Usable() || kubeNamespaceToCreate(run.checks))
+}
+
+// onTestDone keeps what the test found for the form's choices, then
+// connects a usable draft [ Test & connect ] waits for, or marks it failed.
 func (p *kubePicker) onTestDone(m *model, run *kubeTestRun) tea.Cmd {
-	c := p.selected()
-	if c == nil || !p.sameDraft(c) {
-		// The cursor moved on, or n chose another namespace meanwhile: only
-		// what was tested connects. The result stays for when it is back.
+	if p.tested != nil && run.result != nil {
+		// What it found can add a row (Node-local OK): the cursor stays on
+		// its row.
+		row := p.current()
+		p.foundFor(p.tested.GetContext()).take(p.tested, run.result, run.checks)
+		p.cursorTo(row.field, row.context.GetName())
+	}
+	c := p.chosenContext()
+	if !p.sameDraft(m, c) {
 		return nil
 	}
-	if run.err == nil && run.result.GetState().Usable() {
-		return p.add(m, p.draft(m, c))
+	usable := kubeDraftUsable(run)
+	p.failed = !usable
+	if p.connect {
+		p.connect = false
+		if usable {
+			return p.add(m, p.draft(m, c))
+		}
 	}
-	p.failed = true
 	return nil
 }
 
@@ -511,8 +649,8 @@ func (p *kubePicker) onTestDone(m *model, run *kubeTestRun) tea.Cmd {
 func (p *kubePicker) add(m *model, draft *fleetgrpc.KubeCluster) tea.Cmd {
 	p.busy = "connecting…"
 	return func() tea.Msg {
-		st, err := addKubeClusterRemote(draft)
-		return kubeAddedMsg{picker: p, status: st, err: err}
+		reply, err := addKubeClusterRemote(draft)
+		return kubeAddedMsg{picker: p, reply: reply, err: err}
 	}
 }
 
@@ -556,6 +694,8 @@ func (p *kubePicker) view(m *model, _ *settingsPage) string {
 	head = append(head, dimStyle.Render(fmt.Sprintf("    %-*s %-*s %s", nameW, "CONTEXT", serverW, "SERVER", "NAMESPACE")))
 
 	list := p.filtered()
+	rows := p.rows()
+	p.cursor = max(0, min(p.cursor, len(rows)-1))
 	cursorStart, cursorEnd := 0, 0
 	switch {
 	case p.loading:
@@ -569,9 +709,13 @@ func (p *kubePicker) view(m *model, _ *settingsPage) string {
 	}
 	for i, c := range list {
 		marker := "  "
-		if i == p.cursor {
+		switch {
+		case i == p.cursor:
 			marker = cursorStyle.Render("> ")
 			cursorStart = len(body)
+		case c.GetName() == p.chosen && p.repoint == "":
+			// The context the form below sets up.
+			marker = cursorStyle.Render("▸ ")
 		}
 		flag := "  "
 		switch {
@@ -581,7 +725,7 @@ func (p *kubePicker) view(m *model, _ *settingsPage) string {
 			flag = "* "
 		}
 		name := fmt.Sprintf("%-*s", nameW, kubeShortContext(c.GetName(), nameW))
-		if i == p.cursor {
+		if i == p.cursor || (c.GetName() == p.chosen && p.repoint == "") {
 			name = selectedStyle.Render(name)
 		}
 		ns := c.GetNamespace()
@@ -599,20 +743,19 @@ func (p *kubePicker) view(m *model, _ *settingsPage) string {
 		}
 	}
 
-	if c := p.selected(); c != nil {
-		tail = append(tail, p.statusLines(m, c, inner)...)
-	}
-	if p.inputMode == kubePickerInputNamespace {
-		tail = append(tail, dialogLabel.Render("Namespace: ")+p.input.View())
+	switch {
+	case p.repoint != "":
+		if p.busy != "" {
+			tail = append(tail, m.spinner.View()+" "+dimStyle.Render(p.busy))
+		}
+	case len(p.contexts) > 0:
+		tail = append(tail, "")
+		tail = append(tail, p.formLines(m, rows, inner)...)
 	}
 	if p.err != "" {
 		tail = append(tail, wrapToWidth(kubeErrStyle.Render(kubeGlyphFailed+" "+p.err), inner))
 	}
-	if p.ns != nil {
-		tail = append(tail, "", p.ns.view(m, inner))
-	} else {
-		tail = append(tail, dialogHint.Render(wrapToWidth(p.footer(m), inner)))
-	}
+	tail = append(tail, dialogHint.Render(wrapToWidth(p.footer(m), inner)))
 
 	fixed := len(head) + strings.Count(strings.Join(tail, "\n"), "\n") + 1
 	visible := kubeScroll(body, cursorStart, max(cursorEnd, cursorStart+1), kubeDialogBodyHeight(m, fixed), &p.offset)
@@ -620,76 +763,92 @@ func (p *kubePicker) view(m *model, _ *settingsPage) string {
 	return kubeDialogFrame(m, strings.Join(lines, "\n"), maxWidth)
 }
 
-// statusLines describe the selected context: its namespace, the test in
-// flight or its result, and what can be done next.
-func (p *kubePicker) statusLines(m *model, c *fleetgrpc.KubeContext, inner int) []string {
-	var out []string
-	if p.repoint == "" {
-		ns, suggested := p.namespaceFor(c)
-		line := dimStyle.Render("namespace: ") + ns
-		if suggested {
-			line += dimStyle.Render("  (suggested: the context's is default · n changes it)")
-		}
-		out = append(out, line)
-	}
+// statusLines describe the chosen context's draft test: in flight, or its
+// result with what failed and what can be done next.
+func (p *kubePicker) statusLines(m *model, c *fleetgrpc.KubeContext, inner int, onConnect bool) []string {
 	if p.busy != "" {
-		return append(out, m.spinner.View()+" "+dimStyle.Render(p.busy))
+		return []string{m.spinner.View() + " " + dimStyle.Render(p.busy)}
 	}
 	run := p.run(m)
-	if run == nil || !p.sameDraft(c) {
-		return out
+	if run == nil || !p.sameDraft(m, c) {
+		return nil
 	}
-	name := selectedStyle.Render("> " + kubeShortContext(c.GetName(), 24))
+	var out []string
+	lead := "  " + dialogLabel.Render("Test:") + "  "
 	switch {
 	case run.running():
-		out = append(out, kubeHangingIndent(name+"  "+m.spinner.View()+" "+dimStyle.Render("testing…")+" "+kubeCheckTrail(run.checks, 8), inner, 4))
+		out = append(out, kubeHangingIndent(lead+m.spinner.View()+" "+dimStyle.Render("testing…")+" "+kubeCheckTrail(run.checks, 8), inner, 4))
 	case run.err != nil:
-		out = append(out, kubeHangingIndent(name+"  "+kubeErrStyle.Render(kubeGlyphFailed+" "+kubeTestError(run.err)), inner, 4))
+		out = append(out, kubeHangingIndent(lead+kubeErrStyle.Render(kubeGlyphFailed+" "+kubeTestError(run.err)), inner, 4))
 	default:
-		out = append(out, kubeHangingIndent(name+"  "+kubeBadge(run.result)+"  "+kubeCheckSummary(run.checks), inner, 4))
+		badge, checks := kubeBadge(run.result), run.checks
+		if kubeNamespaceToCreate(run.checks) {
+			// Not a failure: the daemon creates it as it connects.
+			ns, _ := p.namespaceFor(c)
+			badge = kubeWarnStyle.Render(kubeGlyphLimited + " namespace " + ns + " to create")
+			checks = slices.DeleteFunc(slices.Clone(checks), func(c *fleetgrpc.KubeCheck) bool { return c.GetName() == "namespace" })
+		}
+		out = append(out, kubeHangingIndent(lead+badge+"  "+kubeCheckSummary(checks), inner, 4))
 		for _, check := range run.checks {
 			if check.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL {
 				continue
 			}
 			line := "  " + check.GetDetail()
-			if check.GetFix() != "" {
+			if check.GetName() == "namespace" {
+				line = "  " + dimStyle.Render(check.GetDetail()+": fleet creates it when it connects")
+			} else if check.GetFix() != "" {
 				line += dimStyle.Render(" · " + check.GetFix())
 			}
 			out = append(out, kubeHangingIndent(line, inner, 4))
 		}
 	}
 	if !run.running() && p.failed {
-		if kubeNamespaceMissing(run.checks) {
-			out = append(out, "  "+selectedStyle.Render("[c] Create (shows labels)")+dimStyle.Render("  or [enter] connect anyway"))
-		} else {
-			out = append(out, dimStyle.Render("  [enter] connect anyway (Settings shows its health; fix and test it there)"))
+		hint := "connect anyway with [ Connect anyway ]"
+		if onConnect {
+			hint = "[enter] connect anyway"
 		}
+		out = append(out, dimStyle.Render("  "+hint+" (Settings shows its health; fix and test it there)"))
 	}
 	return out
 }
 
-// footer lists the keys that do something now.
+// footer lists the keys that do something on the current row.
 func (p *kubePicker) footer(m *model) string {
-	if p.inputMode != kubePickerInputNone {
+	switch {
+	case p.inputMode != kubePickerInputNone:
 		return "[enter] apply  [esc] cancel"
-	}
-	if p.filtering {
+	case p.filtering:
 		return "type to filter  [↑/↓] move  [enter/esc] done"
 	}
-	c := p.selected()
+	row := p.current()
+	c := p.target()
 	footer := kubeFooter(kubePickerKeys, func(k kubeKey) bool {
 		switch {
 		case kubeKeyIs(k, "L"):
 			return c != nil && kubeLoginHereAvailable() && kubeUsesPlugin(c)
-		case kubeKeyIs(k, "c"):
-			return c != nil && p.namespaceMissing(m, c)
 		case kubeKeyIs(k, "n"):
 			return c != nil && p.repoint == ""
+		case kubeKeyIs(k, "tab"):
+			return p.chosenContext() != nil && p.repoint == ""
+		case kubeKeyIs(k, "left"):
+			return kubeFormCycles(row.field)
+		case kubeKeyIs(k, "/"), kubeKeyIs(k, "ctrl+o"):
+			return row.field == ""
 		}
 		return true
 	})
-	if p.repoint != "" {
+	switch {
+	case p.repoint != "":
 		footer = strings.Replace(footer, kubePickerConnect.hint, "[enter] re-point here", 1)
+	case row.field == kubeFormConnect:
+		footer = strings.Replace(footer, kubePickerConnect.hint, "[enter] "+strings.ToLower(strings.Trim(p.connectLabel(m), "[ ]")), 1)
+	case kubeFormCycles(row.field):
+		footer = strings.Replace(footer, kubePickerConnect.hint+"  ", "", 1)
+	case row.field != "":
+		footer = strings.Replace(footer, kubePickerConnect.hint, "[enter] edit", 1)
+	}
+	if row.field != "" {
+		footer = strings.Replace(footer, "[tab] form", "[tab] contexts", 1)
 	}
 	return footer
 }

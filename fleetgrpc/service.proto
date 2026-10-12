@@ -192,8 +192,10 @@ service FleetService {
   // LoginKubeCluster runs the connection's login plugin on the daemon host
   // ([Run login on daemon]) and relays only its device-code URL and code.
   rpc LoginKubeCluster(LoginKubeClusterRequest) returns (stream LoginKubeClusterEvent);
-  // CreateKubeNamespace creates a connection's namespace, an explicit action
-  // (fleet never creates one on its own), or with dry_run only renders it.
+  // CreateKubeNamespace creates a connection's namespace (AddKubeCluster and
+  // UpdateKubeCluster create a missing one themselves; this makes one that
+  // went missing later, or with other labels), or with dry_run only renders
+  // it.
   rpc CreateKubeNamespace(CreateKubeNamespaceRequest) returns (CreateKubeNamespaceReply);
 
   // ---- Shared-state sync (kube.proto; `fleet sync`) ----

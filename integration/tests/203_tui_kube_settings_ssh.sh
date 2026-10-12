@@ -189,6 +189,8 @@ tui_send Enter
 tui_wait_for "Edit cluster ☸ itest-dead" 5
 # The Storage pickers: fleetd lists no class for a dead context, so each
 # takes a typed name, as a cluster that forbids listing them does.
+tui_cursor_to '▶ Storage'
+tui_send l
 tui_cursor_to 'Shared storage:'
 tui_send Enter
 sleep 0.3
@@ -203,6 +205,8 @@ tui_send Enter
 tui_wait_for "Saved Instance disks" 15
 [ "$(rclusters 'print "$c[0]{shared_storage_class} $c[0]{storage_class}"')" = "itest-shared itest-disks" ] \
   || fail "the storage classes picked over Armada SSH were not saved: $(rclusters 'print "$c[0]{shared_storage_class} $c[0]{storage_class}"')"
+tui_cursor_to '▶ Security'
+tui_send l
 tui_cursor_to 'Allow privileged:'
 tui_send Right
 tui_wait_for "Privileged pods allowed" 15
@@ -257,7 +261,9 @@ sleep 0.3
 tui_send C-u
 tui_send_text "${kube_ns}"
 tui_send Enter
-tui_wait_for "namespace: ${kube_ns}" 5
+tui_wait_for "New connection ☸" 5
+tui_wait_for "✓ exists" 180
+tui_cursor_to '\[ (Test & connect|Connect) \]'
 tui_send Enter
 tui_wait_for_absent "Connect a Kubernetes cluster" 240
 [ "$(rclusters 'print scalar @c')" = 1 ] || fail "the remote fleetd should hold the cluster's connection"

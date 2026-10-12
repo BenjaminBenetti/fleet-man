@@ -153,9 +153,13 @@ func TestEditorFieldTextRoundTrips(t *testing.T) {
 	}
 }
 
-// openEditor opens the editor of connection id on the Settings page.
-func openEditor(m *model, sp *settingsPage, id string) *kubeEditor {
+// openEditor opens the editor of connection id on the Settings page, with
+// the groups named unfolded.
+func openEditor(m *model, sp *settingsPage, id string, unfold ...string) *kubeEditor {
 	e := newKubeEditor(id)
+	for _, key := range unfold {
+		e.open[key] = true
+	}
 	sp.kubeDialog = e
 	return e
 }
@@ -163,6 +167,14 @@ func openEditor(m *model, sp *settingsPage, id string) *kubeEditor {
 // editorRowOf puts the cursor on the field with path.
 func editorRowOf(t *testing.T, e *kubeEditor, path string) {
 	t.Helper()
+	// Its group unfolded, as a user would.
+	for _, g := range kubeGroups {
+		for _, f := range g.fields {
+			if f.path == path {
+				e.open[g.key] = true
+			}
+		}
+	}
 	for i, row := range e.rows() {
 		if row.field != nil && row.field.path == path {
 			e.row = i
@@ -202,7 +214,7 @@ func savedStatus(st *fleetgrpc.KubeClusterStatus) func(kubeUpdateCall) (*fleetgr
 func TestEditorWarnsOfARemoteDaemonsHostGateway(t *testing.T) {
 	st := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
 	m, sp := kubeTestModel(t, st)
-	openEditor(m, sp, "eu-1")
+	openEditor(m, sp, "eu-1", "security")
 	t.Setenv("FLEET_GATEWAY", "")
 	t.Setenv("FLEET_SSH", "")
 	t.Setenv("FLEET_SERVER", "")
@@ -738,5 +750,87 @@ func TestEditorHasNoAgentLoginsRow(t *testing.T) {
 	}
 	if view := flatText(e.view(m, sp)); strings.Contains(view, "Agent logins") {
 		t.Fatalf("the editor still shows Agent logins:\n%s", view)
+	}
+}
+
+// The editor opens with every group folded to its one-line summary but
+// Capabilities, which shows the connection's findings.
+func TestEditorOpensWithOnlyCapabilitiesUnfolded(t *testing.T) {
+	st := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	st.Checks = []*fleetgrpc.KubeCheck{{Name: "reachable", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS}}
+	m, sp := kubeTestModel(t, st)
+	sp.cursor = settingsPositionOf(sp, m, settingsItemKubeBase)
+	pumpKube(t, m, press(m, sp, "enter"))
+	e, ok := sp.kubeDialog.(*kubeEditor)
+	if !ok {
+		t.Fatalf("enter on the row opened %T", sp.kubeDialog)
+	}
+	for _, g := range kubeGroups {
+		if e.open[g.key] != (g.key == "capabilities") {
+			t.Errorf("group %s open = %v", g.key, e.open[g.key])
+		}
+	}
+	for _, row := range e.rows() {
+		if row.kind == kubeEditorRowField && row.group != nil {
+			t.Errorf("a folded group shows its field %s", row.field.path)
+		}
+	}
+	out := flatText(e.view(m, sp))
+	for _, want := range []string{"▼ Capabilities", "✓ reachable", "▶ Storage", "▶ Caches (apt 10Gi", "▶ Resources & quotas (500m", "▶ Image (delivery auto)", "▶ Security (privileged auto)", "▶ Advanced (pod overrides"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("editor missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A namespace set in the editor is created by the daemon when it does not
+// exist, and the message says so; when fleet may not create namespaces the
+// change is kept and the panel opens on the manifest to apply.
+func TestEditorNamespaceSetIsCreated(t *testing.T) {
+	st := kubeSt("mk-1", "minikube", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	m, sp := kubeTestModel(t, st)
+	var result *fleetgrpc.KubeNamespaceResult
+	saved := savedStatus(st)
+	calls := stubKubeUpdateReply(t, func(c kubeUpdateCall) (*fleetgrpc.UpdateKubeClusterReply, error) {
+		next, err := saved(c)
+		return &fleetgrpc.UpdateKubeClusterReply{Cluster: next, Namespace: result}, err
+	})
+	e := openEditor(m, sp, "mk-1")
+	set := func(ns string) {
+		t.Helper()
+		editorRowOf(t, e, "namespace")
+		press(m, sp, "enter")
+		e.input.SetValue(ns)
+		pumpKube(t, m, press(m, sp, "enter"))
+	}
+
+	result = &fleetgrpc.KubeNamespaceResult{Namespace: "team-a", Created: true}
+	set("team-a")
+	if len(*calls) != 1 || (*calls)[0].cluster.GetNamespace() != "team-a" || m.message != "Saved Namespace · created namespace team-a" {
+		t.Fatalf("calls %+v, message %q", *calls, m.message)
+	}
+
+	manifest := "apiVersion: v1\nkind: Namespace\nmetadata:\n  labels:\n    app.kubernetes.io/managed-by: fleet\n  name: team-b\n"
+	result = &fleetgrpc.KubeNamespaceResult{Namespace: "team-b", PermissionDenied: true, Manifest: manifest,
+		Error: `creating namespace "team-b": forbidden (it needs namespaces create; apply the manifest as someone who has it)`}
+	set("team-b")
+	if m.kubeStatus("mk-1").GetCluster().GetNamespace() != "team-b" {
+		t.Fatal("the namespace change is kept")
+	}
+	if e.ns == nil || !e.ns.refused || e.ns.manifest != manifest || !strings.Contains(m.message, "fleet may not create namespace team-b") {
+		t.Fatalf("a refused create must open the panel on its manifest (panel %+v, message %q)", e.ns, m.message)
+	}
+	out := flatText(sp.viewSettings(m))
+	for _, want := range []string{"Create namespace team-b", "apply this as someone who may create namespaces", "name: team-b", "apply the manifest as someone who has it) · y copies the manifest", "[y] copy manifest"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("panel missing %q:\n%s", want, out)
+		}
+	}
+	press(m, sp, "esc")
+
+	result = &fleetgrpc.KubeNamespaceResult{Namespace: "team-c", Error: "could not tell whether it exists: connection refused"}
+	set("team-c")
+	if m.message != "Saved Namespace · namespace team-c: could not tell whether it exists: connection refused" || e.ns != nil {
+		t.Fatalf("message %q", m.message)
 	}
 }

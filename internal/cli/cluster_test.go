@@ -52,7 +52,8 @@ type fakeKube struct {
 	loginEvents []*fleetgrpc.LoginKubeClusterEvent
 	nsReply     *fleetgrpc.CreateKubeNamespaceReply
 	nsErr       error
-	err         error // every RPC's error, when set
+	namespace   *fleetgrpc.KubeNamespaceResult // what Add and Update say fleetd did about it
+	err         error                          // every RPC's error, when set
 
 	calls    []string
 	requests []proto.Message
@@ -78,12 +79,13 @@ func (f *fakeKube) AddKubeCluster(_ context.Context, req *fleetgrpc.AddKubeClust
 	if c.Namespace == "" {
 		c.Namespace = "default"
 	}
-	return &fleetgrpc.AddKubeClusterReply{Cluster: &fleetgrpc.KubeClusterStatus{Cluster: c, State: fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING}}, f.record("AddKubeCluster", req)
+	return &fleetgrpc.AddKubeClusterReply{Cluster: &fleetgrpc.KubeClusterStatus{Cluster: c, State: fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING}, Namespace: f.namespace},
+		f.record("AddKubeCluster", req)
 }
 
 func (f *fakeKube) UpdateKubeCluster(_ context.Context, req *fleetgrpc.UpdateKubeClusterRequest, _ ...grpc.CallOption) (*fleetgrpc.UpdateKubeClusterReply, error) {
 	st, _ := fleetgrpc.FindKubeCluster(f.clusters, req.GetId())
-	return &fleetgrpc.UpdateKubeClusterReply{Cluster: st}, f.record("UpdateKubeCluster", req)
+	return &fleetgrpc.UpdateKubeClusterReply{Cluster: st, Namespace: f.namespace}, f.record("UpdateKubeCluster", req)
 }
 
 func (f *fakeKube) RemoveKubeCluster(_ context.Context, req *fleetgrpc.RemoveKubeClusterRequest, _ ...grpc.CallOption) (*fleetgrpc.RemoveKubeClusterReply, error) {
@@ -323,8 +325,7 @@ func TestClusterAdd(t *testing.T) {
 		{[]string{"cluster", "add", "c", "-n", "a", "namespace=b"}, "not both"},
 		{[]string{"cluster", "add", "c", "--kubeconfig", "/a", "kubeconfig_paths=/b"}, "not both"},
 		{[]string{"cluster", "add", "c", "context=d"}, "give the context once"},
-		{[]string{"cluster", "add", "c", "--namespace-label", "a=b"}, "--namespace-label needs --create-namespace"},
-		{[]string{"cluster", "add", "c", "--create-namespace", "--namespace-label", "nope"}, "not key=value"},
+		{[]string{"cluster", "add", "c", "--namespace-label", "nope"}, "not key=value"},
 		{[]string{"cluster", "add", "c", "id=x"}, "id is set by fleetd"},
 	} {
 		f := newFakeKube()
@@ -339,49 +340,72 @@ func TestClusterAdd(t *testing.T) {
 	}
 }
 
-func TestClusterAddCreatesTheNamespaceFirst(t *testing.T) {
+// fleetd creates a missing namespace as it adds the connection, with the
+// labels given; the output says so, or why not, with the manifest to apply
+// when it may not. The connection is added either way.
+func TestClusterAddReportsTheNamespace(t *testing.T) {
 	f := newFakeKube()
-	f.nsReply = &fleetgrpc.CreateKubeNamespaceReply{Created: true, Manifest: "apiVersion: v1\nkind: Namespace\n"}
-	out, _, err := runClusterCLI(t, f, "cluster", "add", "kind-dev", "-n", "fleet-base", "--create-namespace",
+	f.namespace = &fleetgrpc.KubeNamespaceResult{Namespace: "fleet-base", Created: true}
+	out, _, err := runClusterCLI(t, f, "cluster", "add", "kind-dev", "-n", "fleet-base",
 		"--namespace-label", "pod-security.kubernetes.io/enforce=baseline")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(f.calls, ",") != "ListKubeClusters,CreateKubeNamespace,AddKubeCluster" {
+	if strings.Join(f.calls, ",") != "ListKubeClusters,AddKubeCluster" {
 		t.Errorf("calls = %v", f.calls)
 	}
-	ns := f.last(t, "CreateKubeNamespace").(*fleetgrpc.CreateKubeNamespaceRequest)
-	if ns.GetId() != "" || ns.GetCluster().GetContext() != "kind-dev" || ns.GetCluster().GetNamespace() != "fleet-base" ||
-		ns.GetLabels()["pod-security.kubernetes.io/enforce"] != "baseline" || ns.GetDryRun() {
-		t.Errorf("namespace request = %v", ns)
+	req := f.last(t, "AddKubeCluster").(*fleetgrpc.AddKubeClusterRequest)
+	if req.GetCluster().GetNamespace() != "fleet-base" || len(req.GetNamespaceLabels()) != 1 || req.GetNamespaceLabels()["pod-security.kubernetes.io/enforce"] != "baseline" {
+		t.Errorf("add request = %v", req)
 	}
-	if !strings.HasPrefix(out, "Created namespace:\napiVersion: v1\nkind: Namespace\nAdded cluster") {
-		t.Errorf("output = %q", out)
+	if want := "Added cluster \"kind-dev\" (kind-dev-a1b2c3): context kind-dev, namespace fleet-base; checking\nCreated namespace fleet-base\n"; out != want {
+		t.Errorf("output = %q, want %q", out, want)
 	}
 
-	// One that exists is fine; a refusal stops before the add.
+	// One that exists says nothing more.
 	f = newFakeKube()
-	f.nsErr = status.Error(codes.AlreadyExists, `namespace "fleet" already exists`)
-	out, _, err = runClusterCLI(t, f, "cluster", "add", "kind-dev", "--create-namespace")
-	if err != nil || !strings.HasPrefix(out, "namespace \"fleet\" already exists\nAdded cluster") {
+	f.namespace = &fleetgrpc.KubeNamespaceResult{Namespace: "fleet"}
+	out, _, err = runClusterCLI(t, f, "cluster", "add", "kind-dev", "-n", "fleet")
+	if err != nil || strings.Count(out, "\n") != 1 {
 		t.Errorf("existing namespace: %q, %v", out, err)
 	}
-	// fleetd may not create it: the manifest is shown for someone who can,
-	// and nothing is added.
+
+	// fleetd may not create it: the connection is still added, and the
+	// manifest is printed for someone who may.
 	f = newFakeKube()
-	f.nsErr = status.Error(codes.PermissionDenied, `creating namespace "fleet": forbidden (it needs namespaces create; apply the manifest as someone who has it)`)
-	out, _, err = runClusterCLI(t, f, "cluster", "add", "kind-dev", "--create-namespace", "--namespace-label", "a=b")
-	if err == nil || !strings.HasPrefix(err.Error(), `creating namespace "fleet": forbidden`) {
-		t.Errorf("forbidden namespace = %v", err)
+	f.namespace = &fleetgrpc.KubeNamespaceResult{Namespace: "fleet", PermissionDenied: true,
+		Error:    `creating namespace "fleet": forbidden (it needs namespaces create; apply the manifest as someone who has it)`,
+		Manifest: "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: fleet\n"}
+	out, _, err = runClusterCLI(t, f, "cluster", "add", "kind-dev", "-n", "fleet")
+	if err != nil {
+		t.Fatalf("a refused namespace must not fail the add: %v", err)
 	}
-	if strings.Join(f.calls, ",") != "ListKubeClusters,CreateKubeNamespace,CreateKubeNamespace" {
-		t.Errorf("calls after a refused namespace: %v", f.calls)
+	want := "Added cluster \"kind-dev\" (kind-dev-a1b2c3): context kind-dev, namespace fleet; checking\n" +
+		"warning: namespace fleet does not exist: creating namespace \"fleet\": forbidden (it needs namespaces create; apply the manifest as someone who has it)\n" +
+		"Namespace manifest:\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: fleet\n"
+	if out != want {
+		t.Errorf("refused namespace output =\n%q\nwant\n%q", out, want)
 	}
-	if dry := f.last(t, "CreateKubeNamespace").(*fleetgrpc.CreateKubeNamespaceRequest); !dry.GetDryRun() || dry.GetCluster().GetContext() != "kind-dev" || dry.GetLabels()["a"] != "b" {
-		t.Errorf("manifest request = %v", dry)
+
+	// A cluster fleetd did not reach: it could not tell.
+	f = newFakeKube()
+	f.namespace = &fleetgrpc.KubeNamespaceResult{Namespace: "fleet", Error: "could not tell whether it exists: connection refused"}
+	out, _, _ = runClusterCLI(t, f, "cluster", "add", "kind-dev", "-n", "fleet")
+	if !strings.HasSuffix(out, "warning: namespace fleet: could not tell whether it exists: connection refused\n") {
+		t.Errorf("unreached output = %q", out)
 	}
-	if out != "Namespace manifest:\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: fleet\n" {
-		t.Errorf("forbidden namespace output = %q", out)
+}
+
+// Setting a namespace says what fleetd did about it too.
+func TestClusterSetReportsTheNamespace(t *testing.T) {
+	f := newFakeKube()
+	f.namespace = &fleetgrpc.KubeNamespaceResult{Namespace: "team-a", Created: true}
+	out, _, err := runClusterCLI(t, f, "cluster", "set", "minikube", "namespace=team-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Updated cluster \"minikube\": namespace\nCreated namespace team-a\n"; out != want {
+		t.Errorf("output = %q, want %q", out, want)
 	}
 }
 
@@ -717,7 +741,7 @@ func TestClusterCommandsAreTheSameForRemoteDaemons(t *testing.T) {
 		{"cluster", "ls"},
 		{"cluster", "ls", "prod-eu", "--json"},
 		{"cluster", "contexts", "--kubeconfig", "/srv/kube/config"},
-		{"cluster", "add", "kind-dev", "--name", "dev", "--kubeconfig", "/srv/kube/config", "-n", "fleet", "--create-namespace",
+		{"cluster", "add", "kind-dev", "--name", "dev", "--kubeconfig", "/srv/kube/config", "-n", "fleet",
 			"--namespace-label", "a=b", "extra_path=/opt/bin", "plugin_env=AWS_PROFILE", "allow_privileged=true", "pod_overrides_yaml=hostNetwork: true"},
 		append([]string{"cluster", "set", "prod-eu"}, clusterFieldLines(everyClusterField())...),
 		{"cluster", "test", "prod-eu"},

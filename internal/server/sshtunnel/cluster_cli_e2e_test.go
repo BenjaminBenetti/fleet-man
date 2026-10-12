@@ -43,7 +43,8 @@ func TestClusterCLIOverArmadaSSH(t *testing.T) {
 	session := [][]string{
 		{"cluster", "contexts", "--kubeconfig", d.kubeconfig},
 		{"cluster", "ls"},
-		{"cluster", "add", "remote-ctx", "--kubeconfig", d.kubeconfig, "--create-namespace", "--namespace-label", "a=b"},
+		{"cluster", "add", "remote-ctx", "--name", "labelled", "--kubeconfig", d.kubeconfig, "-n", "lab", "--namespace-label", "a=b"},
+		{"cluster", "rm", "labelled"},
 		{"cluster", "add", "remote-ctx", "--name", "remote", "--kubeconfig", d.kubeconfig, "-n", "team", "extra_path=" + d.extra},
 		append([]string{"cluster", "set", "remote"}, fields...),
 		// The test's result is the connection's health from here on, so the
@@ -94,8 +95,9 @@ func TestClusterCLIOverArmadaSSH(t *testing.T) {
 	for _, want := range []string{
 		// contexts lists the daemon host's kubeconfig.
 		"remote-ctx  remote   team       token",
-		// add refuses before connecting when the namespace cannot be made,
-		"Error: creating namespace \"team\": ",
+		// add keeps the connection when fleetd cannot tell whether its
+		// namespace exists (the cluster is not reached), and says so,
+		"Added cluster \"labelled\" (<>): context remote-ctx, namespace lab<", "warning: namespace lab: could not tell whether it exists: ",
 		// and connects (the remote never resolves a path).
 		"Added cluster \"remote\" (<>): context remote-ctx, namespace team<",
 		"Updated cluster \"every-field\": display_name, extra_path, plugin_env,",

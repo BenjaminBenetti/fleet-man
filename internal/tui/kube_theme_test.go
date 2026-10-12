@@ -97,11 +97,15 @@ func TestKubeBadgesUseThemeSlotsInEveryTheme(t *testing.T) {
 
 		p := newKubePicker(m, "")
 		p.onContexts(m, kubeContextsMsg{reply: pickerContexts()})
-		p.runKey, p.testCtx, p.testNS = "draft:x", "minikube", "fleet"
-		result := kubeSt("", "", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED)
+		p.chosen = "minikube"
+		p.runKey, p.tested = "draft:x", p.draft(m, p.chosenContext())
+		result := draftResult(&fleetgrpc.TestKubeClusterRequest{Cluster: p.tested}, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, 2)
+		p.foundFor("minikube").take(p.tested, result, nil)
 		m.kubeRuns = map[string]*kubeTestRun{"draft:x": {key: "draft:x", done: true, cancel: func() {}, result: result, checks: kubeThemeStatuses()[0].Checks}}
 		sp.kubeDialog = p
-		assertGlyphSlots(t, "the context picker", sp.viewSettings(m), th)
+		assertGlyphSlots(t, "the Connect page", sp.viewSettings(m), th)
+		pickerAt(t, p, kubeFormStorage)
+		assertGlyphSlots(t, "the Connect page's Storage row", sp.viewSettings(m), th)
 
 		for _, st := range m.kubeStatuses() {
 			e := newKubeEditor(st.GetCluster().GetId())

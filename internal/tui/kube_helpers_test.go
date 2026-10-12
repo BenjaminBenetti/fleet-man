@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"google.golang.org/protobuf/proto"
 )
 
 // kube_helpers_test.go: shared fixtures for the Kubernetes Settings tests.
@@ -221,10 +222,23 @@ type kubeUpdateCall struct {
 // stubKubeUpdate records UpdateKubeCluster calls and answers with reply(call).
 func stubKubeUpdate(t *testing.T, reply func(kubeUpdateCall) (*fleetgrpc.KubeClusterStatus, error)) *[]kubeUpdateCall {
 	t.Helper()
+	return stubKubeUpdateReply(t, func(c kubeUpdateCall) (*fleetgrpc.UpdateKubeClusterReply, error) {
+		st, err := reply(c)
+		if err != nil {
+			return nil, err
+		}
+		return &fleetgrpc.UpdateKubeClusterReply{Cluster: st}, nil
+	})
+}
+
+// stubKubeUpdateReply is stubKubeUpdate answering whole replies (what the
+// daemon did about a namespace included).
+func stubKubeUpdateReply(t *testing.T, reply func(kubeUpdateCall) (*fleetgrpc.UpdateKubeClusterReply, error)) *[]kubeUpdateCall {
+	t.Helper()
 	var calls []kubeUpdateCall
 	var mu sync.Mutex
 	orig := updateKubeClusterRemote
-	updateKubeClusterRemote = func(id string, c *fleetgrpc.KubeCluster, paths []string, rev int64) (*fleetgrpc.KubeClusterStatus, error) {
+	updateKubeClusterRemote = func(id string, c *fleetgrpc.KubeCluster, paths []string, rev int64) (*fleetgrpc.UpdateKubeClusterReply, error) {
 		call := kubeUpdateCall{id, c, paths, rev}
 		mu.Lock()
 		calls = append(calls, call)
@@ -233,4 +247,17 @@ func stubKubeUpdate(t *testing.T, reply func(kubeUpdateCall) (*fleetgrpc.KubeClu
 	}
 	t.Cleanup(func() { updateKubeClusterRemote = orig })
 	return &calls
+}
+
+// stubKubeAdd records AddKubeCluster calls and answers with reply(cluster).
+func stubKubeAdd(t *testing.T, reply func(*fleetgrpc.KubeCluster) (*fleetgrpc.AddKubeClusterReply, error)) *[]*fleetgrpc.KubeCluster {
+	t.Helper()
+	var added []*fleetgrpc.KubeCluster
+	orig := addKubeClusterRemote
+	addKubeClusterRemote = func(c *fleetgrpc.KubeCluster) (*fleetgrpc.AddKubeClusterReply, error) {
+		added = append(added, proto.Clone(c).(*fleetgrpc.KubeCluster))
+		return reply(c)
+	}
+	t.Cleanup(func() { addKubeClusterRemote = orig })
+	return &added
 }

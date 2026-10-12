@@ -906,13 +906,38 @@ message AddKubeClusterRequest {
   // namespace takes the context's, else "default", and an empty plugin_env
   // passes through, by name, the variables fleetd has for the context's
   // plugin (AWS_* for aws, CLOUDSDK_*/GOOGLE_* for gke-gcloud-auth-plugin,
-  // AZURE_*/AAD_* for kubelogin, CA bundles). The daemon tests the connection
+  // AZURE_*/AAD_* for kubelogin, CA bundles). A namespace that does not
+  // exist is created (KubeNamespaceResult). The daemon tests the connection
   // in the background and pushes its health.
   KubeCluster cluster = 1;
+  // namespace_labels are the labels the namespace gets when fleet creates it
+  // (e.g. pod-security.kubernetes.io/enforce); one that exists keeps its
+  // own. Empty = app.kubernetes.io/managed-by=fleet.
+  map<string, string> namespace_labels = 2;
 }
 
 message AddKubeClusterReply {
   KubeClusterStatus cluster = 1;
+  // namespace is what fleet did about the connection's namespace.
+  KubeNamespaceResult namespace = 2;
+}
+
+// KubeNamespaceResult is what fleet did about a connection's namespace when
+// the connection was added, or its namespace or target changed: one that
+// does not exist is created, labelled as CreateKubeNamespace labels it. The
+// connection is saved whatever happened here.
+message KubeNamespaceResult {
+  string namespace = 1;
+  // created: it did not exist, and fleet created it.
+  bool created = 2;
+  // error says why fleet did not create it, or could not tell whether it
+  // exists (the cluster was not reached); empty when it exists or was
+  // created.
+  string error = 3;
+  // permission_denied: it does not exist and the connection may not create
+  // namespaces; manifest is then the namespace to apply as someone who may.
+  bool permission_denied = 4;
+  string manifest = 5;
 }
 
 message UpdateKubeClusterRequest {
@@ -934,6 +959,9 @@ message UpdateKubeClusterRequest {
 
 message UpdateKubeClusterReply {
   KubeClusterStatus cluster = 1;
+  // namespace is what fleet did about the namespace when the update changed
+  // it or the target (context, kubeconfig_paths); unset otherwise.
+  KubeNamespaceResult namespace = 2;
 }
 
 // KubeRemoveMode is what RemoveKubeCluster does with the instances and agents

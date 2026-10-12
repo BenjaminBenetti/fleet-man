@@ -28,8 +28,9 @@ import (
 
 const liveCLINamespacePrefix = "fleet-it-p1-04-cli-"
 
-// On a real cluster, over the local socket and over Armada SSH alike: `add
-// --create-namespace` makes the namespace through fleetd, a plain namespace
+// On a real cluster, over the local socket and over Armada SSH alike: `add`
+// makes the missing namespace through fleetd (with --namespace-label's
+// labels), a plain namespace
 // tests usable (exit 0) and a baseline-labelled one LIMITED, gc lists
 // nothing to collect under a held Lease, and rm disconnects.
 func TestLiveClusterCLI(t *testing.T) {
@@ -77,13 +78,16 @@ func TestLiveClusterCLI(t *testing.T) {
 				}
 			})
 
-			out, err := fleetCLI(t, "cluster", "add", kctx, "--name", "plain", "--kubeconfig", kubeconfig, "-n", plain, "--create-namespace")
-			if err != nil || !strings.Contains(out, "Created namespace:\n") || !strings.Contains(out, "app.kubernetes.io/managed-by: fleet") {
+			out, err := fleetCLI(t, "cluster", "add", kctx, "--name", "plain", "--kubeconfig", kubeconfig, "-n", plain)
+			if err != nil || !strings.Contains(out, "Created namespace "+plain+"\n") {
 				t.Fatalf("add plain: %v\n%s", err, out)
 			}
+			if ns, err := cs.CoreV1().Namespaces().Get(context.Background(), plain, metav1.GetOptions{}); err != nil || ns.Labels["app.kubernetes.io/managed-by"] != "fleet" {
+				t.Fatalf("the plain namespace: %v %v", ns.GetLabels(), err)
+			}
 			out, err = fleetCLI(t, "cluster", "add", kctx, "--name", "baseline", "--kubeconfig", kubeconfig, "-n", baseline,
-				"--create-namespace", "--namespace-label", "pod-security.kubernetes.io/enforce=baseline")
-			if err != nil || !strings.Contains(out, "pod-security.kubernetes.io/enforce: baseline") {
+				"--namespace-label", "pod-security.kubernetes.io/enforce=baseline")
+			if err != nil || !strings.Contains(out, "Created namespace "+baseline+"\n") {
 				t.Fatalf("add baseline: %v\n%s", err, out)
 			}
 			ns, err := cs.CoreV1().Namespaces().Get(context.Background(), baseline, metav1.GetOptions{})

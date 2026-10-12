@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -28,6 +29,33 @@ func pickerContexts() *fleetgrpc.ListKubeContextsReply {
 	}
 }
 
+// draftResult is a draft test's result as the daemon reports it for req on
+// a cluster of nodes: a node-local default class, a network one Auto picks,
+// a file share, and delivery Auto resolves to the registry (the gateway
+// serves no images).
+func draftResult(req *fleetgrpc.TestKubeClusterRequest, state fleetgrpc.KubeClusterState, nodes int) *fleetgrpc.KubeClusterStatus {
+	c := proto.Clone(req.GetCluster()).(*fleetgrpc.KubeCluster)
+	caps := &fleetgrpc.KubeCapabilities{
+		StorageClasses: []*fleetgrpc.KubeStorageClass{
+			{Name: "efs", Provisioner: "efs.csi.aws.com", DiskHint: "an NFS class for instance disks: root_squash breaks package installs"},
+			{Name: "gp3", Provisioner: "ebs.csi.aws.com", Block: true, AllowExpansion: true},
+			{Name: "local-path", Provisioner: "rancher.io/local-path", Block: true, NodeLocal: true, IsDefault: true},
+		},
+		InstanceStorageClass: c.GetStorageClass(),
+		ImageDelivery:        &fleetgrpc.KubeImageDelivery{Mode: c.GetImage().GetMode(), GatewayReason: "fleetd has no gateway"},
+	}
+	if caps.InstanceStorageClass == "" {
+		caps.InstanceStorageClass = "gp3"
+	}
+	if caps.ImageDelivery.Mode == "" {
+		caps.ImageDelivery.Mode, caps.ImageDelivery.Reason = "registry", "a registry is set"
+	}
+	for i := range nodes {
+		caps.Nodes = append(caps.Nodes, &fleetgrpc.KubeNode{Name: fmt.Sprintf("node-%d", i)})
+	}
+	return &fleetgrpc.KubeClusterStatus{Cluster: c, State: state, Capabilities: caps}
+}
+
 // openPicker opens the picker from the + row and answers its context list.
 func openPicker(t *testing.T, m *model, sp *settingsPage) *kubePicker {
 	t.Helper()
@@ -40,9 +68,21 @@ func openPicker(t *testing.T, m *model, sp *settingsPage) *kubePicker {
 	return p
 }
 
+// pickerAt puts the cursor on a form field.
+func pickerAt(t *testing.T, p *kubePicker, field string) {
+	t.Helper()
+	for i, row := range p.rows() {
+		if row.field == field {
+			p.cursor = i
+			return
+		}
+	}
+	t.Fatalf("no form row %q in %v", field, p.rows())
+}
+
 // The picker shows the DAEMON host's contexts (fleetd's default kubeconfig),
 // starts on the current context, marks connected ones and a login plugin
-// fleetd lacks.
+// fleetd lacks, and says what enter does.
 func TestPickerListsTheDaemonsContexts(t *testing.T) {
 	m, sp := kubeTestModel(t)
 	asked := stubKubeContexts(t, pickerContexts())
@@ -57,8 +97,8 @@ func TestPickerListsTheDaemonsContexts(t *testing.T) {
 	for _, want := range []string{
 		"Connect a Kubernetes cluster", "contexts on fleetd @ ben-desktop · /home/ben/.kube/config",
 		"> * minikube", "✓ gke_acme_prod", "exec: aws ⚠ aws not on fleetd's PATH",
-		"namespace: fleet (suggested: the context's is default · n changes it)",
-		"[/] filter", "[enter] test & connect", "[ctrl+o] other kubeconfig", "[L] login here",
+		"enter on a context sets up its connection here: name, namespace, image delivery, storage",
+		"[/] filter", "[enter] choose & test", "[ctrl+o] other kubeconfig", "[L] login here",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("picker missing %q in:\n%s", want, out)
@@ -122,33 +162,47 @@ func TestPickerFilterSwallowsLetters(t *testing.T) {
 	}
 }
 
-// Enter tests the selected context as a draft (nothing saved), streaming its
-// checks, and connects it when it is usable: the draft pins the files read,
-// takes "fleet" for a context on default, and is named after the context.
-func TestPickerTestsThenConnects(t *testing.T) {
+// enter on a context chooses it and tests it as a draft (nothing saved),
+// which fills the form's choices: the cursor waits on [ Connect ] once the
+// test says it is usable, and enter there connects exactly what was tested.
+// The draft pins the files read, takes "fleet" for a context on default,
+// and is named after the context.
+func TestPickerChoosesTestsThenConnects(t *testing.T) {
 	m, sp := kubeTestModel(t, kubeSt("x-1", "kind-lab", 2))
 	stubKubeContexts(t, pickerContexts())
 	p := openPicker(t, m, sp)
-	ready := kubeSt("", "", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
-	reqs := stubKubeTest(t, func(*fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
-		return testEvents(ready, &fleetgrpc.KubeCheck{Name: "kubeconfig", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS})
+	reqs := stubKubeTest(t, func(req *fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
+		return testEvents(draftResult(req, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, 1),
+			&fleetgrpc.KubeCheck{Name: "kubeconfig", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS},
+			&fleetgrpc.KubeCheck{Name: "namespace", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, Detail: "fleet exists"})
 	})
-	var added *fleetgrpc.KubeCluster
-	origAdd := addKubeClusterRemote
-	addKubeClusterRemote = func(c *fleetgrpc.KubeCluster) (*fleetgrpc.KubeClusterStatus, error) {
-		added = proto.Clone(c).(*fleetgrpc.KubeCluster)
-		st := kubeSt("minikube-ab12cd", c.GetDisplayName(), fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING)
-		return st, nil
-	}
-	t.Cleanup(func() { addKubeClusterRemote = origAdd })
+	added := stubKubeAdd(t, func(c *fleetgrpc.KubeCluster) (*fleetgrpc.AddKubeClusterReply, error) {
+		return &fleetgrpc.AddKubeClusterReply{Cluster: kubeSt("minikube-ab12cd", c.GetDisplayName(), fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING)}, nil
+	})
 
 	pumpKube(t, m, press(m, sp, "enter"))
 	want := &fleetgrpc.KubeCluster{DisplayName: "minikube", Context: "minikube", KubeconfigPaths: []string{"/home/ben/.kube/config"}, Namespace: "fleet"}
 	if len(*reqs) != 1 || !proto.Equal((*reqs)[0].GetCluster(), want) || (*reqs)[0].GetId() != "" {
 		t.Fatalf("test requests = %v, want one draft test of %v", *reqs, want)
 	}
-	if !proto.Equal(added, want) {
-		t.Fatalf("added %v, want %v", added, want)
+	if len(*added) != 0 || p.chosen != "minikube" || p.current().field != kubeFormConnect {
+		t.Fatalf("choosing must test only, with the cursor on the button (added %v, row %+v)", *added, p.current())
+	}
+	out := flatText(sp.viewSettings(m))
+	for _, want := range []string{
+		"New connection ☸ minikube", "Name: minikube", "Namespace: fleet the context's is default ✓ exists",
+		"Delivery: [Auto→Registry] [Node load] [Registry] [Gateway]", "Storage: [ auto → gp3 ] network · expandable",
+		"> [ Connect ]", "● ready", "Caches, resources, security and the rest: the cluster editor, once connected",
+		"[enter] connect",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("form missing %q in:\n%s", want, out)
+		}
+	}
+
+	pumpKube(t, m, press(m, sp, "enter"))
+	if len(*reqs) != 1 || len(*added) != 1 || !proto.Equal((*added)[0], want) {
+		t.Fatalf("added %v (after %d tests), want %v once, untested again", *added, len(*reqs), want)
 	}
 	if sp.kubeDialog != nil {
 		t.Fatal("a connected context closes the picker")
@@ -159,98 +213,283 @@ func TestPickerTestsThenConnects(t *testing.T) {
 	if !strings.Contains(m.message, "Connected ☸ minikube") {
 		t.Fatalf("message = %q", m.message)
 	}
-	_ = p
 }
 
-// A context whose name is taken gets context/namespace as its name.
-func TestPickerNamesAroundATakenName(t *testing.T) {
-	m, _ := kubeTestModel(t, kubeSt("mk-1", "Minikube", 2))
-	if got := kubeDefaultName(m, "minikube", "team"); got != "minikube/team" {
-		t.Fatalf("name = %q", got)
-	}
-	if got := kubeDefaultName(m, "kind", "x"); got != "kind" {
-		t.Fatalf("name = %q", got)
-	}
-}
-
-// A failed test says why and offers the next step: for a missing namespace
-// [c] Create, which shows the manifest from a dry run before creating it and
-// then tests again; a second enter connects the failing context anyway.
-func TestPickerFailedTestOffersCreateAndConnectAnyway(t *testing.T) {
+// The form's rows are reached with j/k (and tab) and edited in place: the
+// name without a test, the namespace, delivery (Registry adds its row;
+// Gateway is greyed out while the gateway serves no images), storage
+// (Auto, then each class the test listed; a node-local one on several
+// nodes asks for Node-local OK) each tested again, and the connection is
+// made with all of it.
+func TestPickerFormSetsTheBasicConfig(t *testing.T) {
 	m, sp := kubeTestModel(t)
 	stubKubeContexts(t, pickerContexts())
 	p := openPicker(t, m, sp)
-	nsMissing := &fleetgrpc.KubeCheck{Name: "namespace", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL,
-		Detail: "namespace 'fleet' does not exist", Fix: "create it"}
-	failing := kubeSt("", "", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED)
-	failing.Message = "namespace 'fleet' does not exist"
-	reqs := stubKubeTest(t, func(*fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
-		return testEvents(failing, nsMissing)
+	reqs := stubKubeTest(t, func(req *fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
+		return testEvents(draftResult(req, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, 3))
 	})
-	var nsReqs []*fleetgrpc.CreateKubeNamespaceRequest
-	origNS := createKubeNamespaceRemote
-	createKubeNamespaceRemote = func(req *fleetgrpc.CreateKubeNamespaceRequest) (*fleetgrpc.CreateKubeNamespaceReply, error) {
-		nsReqs = append(nsReqs, proto.Clone(req).(*fleetgrpc.CreateKubeNamespaceRequest))
-		return &fleetgrpc.CreateKubeNamespaceReply{Manifest: "apiVersion: v1\nkind: Namespace\nmetadata:\n  labels:\n    app.kubernetes.io/managed-by: fleet\n  name: fleet\n", Created: !req.GetDryRun()}, nil
+	added := stubKubeAdd(t, func(c *fleetgrpc.KubeCluster) (*fleetgrpc.AddKubeClusterReply, error) {
+		return &fleetgrpc.AddKubeClusterReply{Cluster: kubeSt("minikube-1", c.GetDisplayName(), fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING)}, nil
+	})
+	pumpKube(t, m, press(m, sp, "enter"))
+
+	// tab jumps between the chosen context and the form; j/k walk on.
+	press(m, sp, "tab")
+	if p.selected().GetName() != "minikube" {
+		t.Fatalf("tab on the form must come back to the chosen context, at %+v", p.current())
 	}
-	t.Cleanup(func() { createKubeNamespaceRemote = origNS })
-	addCalls := 0
-	origAdd := addKubeClusterRemote
-	addKubeClusterRemote = func(c *fleetgrpc.KubeCluster) (*fleetgrpc.KubeClusterStatus, error) {
-		addCalls++
-		return kubeSt("minikube-1", c.GetDisplayName(), 1), nil
+	press(m, sp, "tab")
+	if p.current().field != kubeFormName {
+		t.Fatalf("tab on a context must jump to the form's first row, at %+v", p.current())
 	}
-	t.Cleanup(func() { addKubeClusterRemote = origAdd })
+	press(m, sp, "tab")
+	press(m, sp, "j")
+	press(m, sp, "j")
+	press(m, sp, "j")
+	if p.current().field != kubeFormName {
+		t.Fatalf("j from the last context must reach the form, at %+v", p.current())
+	}
+	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "[j/k] [enter] edit [tab] contexts") {
+		t.Errorf("a text row's footer:\n%s", out)
+	}
+
+	press(m, sp, "enter")
+	p.input.SetValue("lab")
+	pumpKube(t, m, press(m, sp, "enter"))
+	if len(*reqs) != 1 || p.draft(m, p.chosenContext()).GetDisplayName() != "lab" {
+		t.Fatalf("the name must change without a test (%d tests, name %q)", len(*reqs), p.draft(m, p.chosenContext()).GetDisplayName())
+	}
+
+	press(m, sp, "j")
+	press(m, sp, "enter")
+	if p.inputMode != kubePickerInputField || p.input.Value() != "fleet" {
+		t.Fatalf("enter on Namespace must edit it from the suggestion (%q)", p.input.Value())
+	}
+	p.input.SetValue("team-a")
+	pumpKube(t, m, press(m, sp, "enter"))
+	if len(*reqs) != 2 || (*reqs)[1].GetCluster().GetNamespace() != "team-a" {
+		t.Fatalf("a new namespace must be tested: %v", *reqs)
+	}
+
+	press(m, sp, "j")
+	if p.current().field != kubeFormDelivery {
+		t.Fatalf("at %+v, want Delivery", p.current())
+	}
+	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "Auto picked Registry: a registry is set") || !strings.Contains(out, "Gateway unavailable: fleetd has no gateway") ||
+		!strings.Contains(out, "Node load unavailable: the nodes are not a local cluster") || !strings.Contains(out, "[←/→] change") {
+		t.Errorf("Delivery's lines:\n%s", out)
+	}
+	pumpKube(t, m, press(m, sp, "l"))
+	if p.form(p.chosenContext()).mode != kubeDeliveryRegistry || !slices.Contains(p.formFields(p.chosenContext()), kubeFormRegistry) {
+		t.Fatalf("→ must step over the greyed-out Node load to Registry, and add its row: delivery = %q, fields %v",
+			p.form(p.chosenContext()).mode, p.formFields(p.chosenContext()))
+	}
+	pumpKube(t, m, press(m, sp, "l"))
+	if p.form(p.chosenContext()).mode != kubeDeliveryAuto {
+		t.Fatalf("→ must step over the greyed-out Gateway back to Auto, at %q", p.form(p.chosenContext()).mode)
+	}
+	pumpKube(t, m, press(m, sp, "h"))
+	press(m, sp, "j")
+	press(m, sp, "enter")
+	p.input.SetValue("ghcr.io/ben/fleet")
+	pumpKube(t, m, press(m, sp, "enter"))
+
+	press(m, sp, "j")
+	if p.current().field != kubeFormStorage {
+		t.Fatalf("at %+v, want Storage", p.current())
+	}
+	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "Storage: [ auto → gp3 ] network · expandable") ||
+		!strings.Contains(out, "fleet shares take a class that passes the multi-node test (run once connected), else this one") {
+		t.Errorf("Storage's lines:\n%s", out)
+	}
+	pumpKube(t, m, press(m, sp, "l"))
+	if got := p.form(p.chosenContext()).storage; got != "efs" {
+		t.Fatalf("storage = %q, want the first listed class", got)
+	}
+	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "Storage: [ efs ] file share") || !strings.Contains(out, "⚠ an NFS class for instance disks") {
+		t.Errorf("a file-share class's lines:\n%s", out)
+	}
+	pumpKube(t, m, press(m, sp, "l"))
+	pumpKube(t, m, press(m, sp, "l"))
+	if got := p.form(p.chosenContext()).storage; got != "local-path" || !slices.Contains(p.formFields(p.chosenContext()), kubeFormNodeLocal) {
+		t.Fatalf("storage = %q, fields %v: a node-local class on 3 nodes asks for Node-local OK", got, p.formFields(p.chosenContext()))
+	}
+	press(m, sp, "j")
+	pumpKube(t, m, press(m, sp, "enter"))
+	if !p.form(p.chosenContext()).nodeLocalAck {
+		t.Fatal("enter on Node-local OK must turn it on")
+	}
+
+	press(m, sp, "j")
+	if p.current().field != kubeFormConnect {
+		t.Fatalf("at %+v, want the button", p.current())
+	}
+	pumpKube(t, m, press(m, sp, "enter"))
+	want := &fleetgrpc.KubeCluster{DisplayName: "lab", Context: "minikube", KubeconfigPaths: []string{"/home/ben/.kube/config"}, Namespace: "team-a",
+		Image: &fleetgrpc.KubeImageSettings{Mode: "registry", Registry: "ghcr.io/ben/fleet"}, StorageClass: "local-path", NodeLocalAck: true}
+	if len(*added) != 1 || !proto.Equal((*added)[0], want) {
+		t.Fatalf("added %v, want %v", *added, want)
+	}
+	if last := (*reqs)[len(*reqs)-1].GetCluster(); kubeDraftKey(last) != kubeDraftKey(want) {
+		t.Fatalf("connected %v, last tested %v: only what was tested connects", want, last)
+	}
+}
+
+// A draft whose only failure is a namespace that does not exist connects
+// without a "connect anyway": the daemon creates the namespace as it adds
+// the connection, and the message says so.
+func TestPickerMissingNamespaceIsNoFailure(t *testing.T) {
+	m, sp := kubeTestModel(t)
+	stubKubeContexts(t, pickerContexts())
+	p := openPicker(t, m, sp)
+	stubKubeTest(t, func(req *fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
+		res := draftResult(req, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED, 1)
+		res.Message = "namespace 'fleet' does not exist"
+		return testEvents(res,
+			&fleetgrpc.KubeCheck{Name: "namespace", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, Detail: "namespace 'fleet' does not exist", Fix: "fleet creates it when it connects the cluster"},
+			&fleetgrpc.KubeCheck{Name: "rbac", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_SKIPPED, Detail: "namespace missing"})
+	})
+	added := stubKubeAdd(t, func(c *fleetgrpc.KubeCluster) (*fleetgrpc.AddKubeClusterReply, error) {
+		return &fleetgrpc.AddKubeClusterReply{Cluster: kubeSt("minikube-1", c.GetDisplayName(), fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING),
+			Namespace: &fleetgrpc.KubeNamespaceResult{Namespace: "fleet", Created: true}}, nil
+	})
 
 	pumpKube(t, m, press(m, sp, "enter"))
-	if addCalls != 0 || !p.failed {
-		t.Fatal("an unusable draft must not connect on its own")
+	if p.failed {
+		t.Fatal("a namespace to create is not a failed test")
 	}
 	out := flatText(sp.viewSettings(m))
-	for _, want := range []string{"✕ misconfigured", "namespace 'fleet' does not exist · create it", "[c] Create (shows labels)", "[enter] connect anyway", "[c] create namespace"} {
+	for _, want := range []string{"Namespace: fleet the context's is default does not exist: fleet creates it", "namespace 'fleet' does not exist: fleet creates it when it connects", "> [ Connect ]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("picker missing %q:\n%s", want, out)
 		}
 	}
-
-	pumpKube(t, m, press(m, sp, "c"))
-	if p.ns == nil || len(nsReqs) != 1 || !nsReqs[0].GetDryRun() || nsReqs[0].GetCluster().GetContext() != "minikube" || nsReqs[0].GetNamespace() != "fleet" {
-		t.Fatalf("c must dry-run the draft's namespace first: %v", nsReqs)
-	}
-	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "app.kubernetes.io/managed-by: fleet") || !strings.Contains(out, "[enter] create") {
-		t.Fatalf("the panel must show the manifest, labels included:\n%s", out)
+	if strings.Contains(out, "connect anyway") {
+		t.Errorf("no connect anyway for a namespace fleet creates:\n%s", out)
 	}
 	pumpKube(t, m, press(m, sp, "enter"))
-	if len(nsReqs) != 2 || nsReqs[1].GetDryRun() || p.ns != nil {
-		t.Fatalf("enter must create it and close the panel: %v", nsReqs)
-	}
-	if len(*reqs) != 2 {
-		t.Fatalf("a created namespace must test the context again (%d tests)", len(*reqs))
-	}
-
-	pumpKube(t, m, press(m, sp, "enter"))
-	if addCalls != 1 {
-		t.Fatal("enter after a failed test must connect anyway")
+	if len(*added) != 1 || sp.kubeDialog != nil || !strings.Contains(m.message, "created namespace fleet") {
+		t.Fatalf("added %v, dialog %T, message %q", *added, sp.kubeDialog, m.message)
 	}
 }
 
-// n chooses the namespace; ctrl+o reads other kubeconfig files on the
-// daemon host (any absolute paths, as locally), separated like $KUBECONFIG.
-func TestPickerNamespaceAndOtherKubeconfig(t *testing.T) {
+// [ Test & connect ] waits for the test: a usable result connects at once.
+func TestPickerTestAndConnectWaitsForTheTest(t *testing.T) {
+	m, sp := kubeTestModel(t)
+	stubKubeContexts(t, pickerContexts())
+	p := openPicker(t, m, sp)
+	stubKubeTest(t, func(req *fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
+		return testEvents(draftResult(req, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, 1))
+	})
+	added := stubKubeAdd(t, func(c *fleetgrpc.KubeCluster) (*fleetgrpc.AddKubeClusterReply, error) {
+		return &fleetgrpc.AddKubeClusterReply{Cluster: kubeSt("minikube-1", c.GetDisplayName(), fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING)}, nil
+	})
+	test := press(m, sp, "enter") // chosen; its test not answered yet
+	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "> [ Test & connect ]") {
+		t.Fatalf("while the test runs the button tests & connects:\n%s", out)
+	}
+	press(m, sp, "enter")
+	if !p.connect || len(*added) != 0 {
+		t.Fatal("enter while the test runs must wait for it")
+	}
+	pumpKube(t, m, test)
+	if len(*added) != 1 {
+		t.Fatalf("a limited (usable) result must connect what waits for it: added %v", *added)
+	}
+}
+
+// A failed test says why and offers to connect anyway; the connection's
+// editor (Settings) is where it is fixed.
+func TestPickerFailedTestConnectsAnyway(t *testing.T) {
+	m, sp := kubeTestModel(t)
+	stubKubeContexts(t, pickerContexts())
+	p := openPicker(t, m, sp)
+	stubKubeTest(t, func(req *fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
+		res := &fleetgrpc.KubeClusterStatus{Cluster: req.GetCluster(), State: fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNREACHABLE, Message: "connection refused"}
+		return testEvents(res, &fleetgrpc.KubeCheck{Name: "reachable", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, Detail: "dial tcp 127.0.0.1:9: connection refused"})
+	})
+	added := stubKubeAdd(t, func(c *fleetgrpc.KubeCluster) (*fleetgrpc.AddKubeClusterReply, error) {
+		return &fleetgrpc.AddKubeClusterReply{Cluster: kubeSt("minikube-1", c.GetDisplayName(), fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNREACHABLE)}, nil
+	})
+	pumpKube(t, m, press(m, sp, "enter"))
+	if !p.failed || len(*added) != 0 {
+		t.Fatal("an unusable draft must not connect on its own")
+	}
+	out := flatText(sp.viewSettings(m))
+	for _, want := range []string{"✕ unreachable", "dial tcp 127.0.0.1:9: connection refused", "> [ Connect anyway ]", "[enter] connect anyway",
+		"Storage: [ auto ] none listed: enter types a class name"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("picker missing %q:\n%s", want, out)
+		}
+	}
+	press(m, sp, "k")
+	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "connect anyway with [ Connect anyway ]") {
+		t.Errorf("off the button, the hint names it:\n%s", out)
+	}
+	press(m, sp, "j")
+	pumpKube(t, m, press(m, sp, "enter"))
+	if len(*added) != 1 {
+		t.Fatal("enter on [ Connect anyway ] must connect")
+	}
+}
+
+// When fleetd may not create the namespace, the connection is still made,
+// and its editor opens on the namespace panel with the manifest to apply.
+func TestPickerRefusedNamespaceOpensTheEditor(t *testing.T) {
+	m, sp := kubeTestModel(t)
+	stubKubeContexts(t, pickerContexts())
+	openPicker(t, m, sp)
+	stubKubeTest(t, func(req *fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
+		return testEvents(draftResult(req, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED, 1),
+			&fleetgrpc.KubeCheck{Name: "namespace", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, Detail: "namespace 'fleet' does not exist"})
+	})
+	manifest := "apiVersion: v1\nkind: Namespace\nmetadata:\n  labels:\n    app.kubernetes.io/managed-by: fleet\n  name: fleet\n"
+	stubKubeAdd(t, func(c *fleetgrpc.KubeCluster) (*fleetgrpc.AddKubeClusterReply, error) {
+		return &fleetgrpc.AddKubeClusterReply{Cluster: kubeSt("minikube-1", "minikube", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING),
+			Namespace: &fleetgrpc.KubeNamespaceResult{Namespace: "fleet", PermissionDenied: true, Manifest: manifest,
+				Error: `creating namespace "fleet": forbidden (it needs namespaces create; apply the manifest as someone who has it)`}}, nil
+	})
+	pumpKube(t, m, press(m, sp, "enter"))
+	pumpKube(t, m, press(m, sp, "enter"))
+	e, ok := sp.kubeDialog.(*kubeEditor)
+	if !ok || e.id != "minikube-1" || e.ns == nil || !e.ns.refused || e.ns.manifest != manifest {
+		t.Fatalf("a refused namespace must open the new connection's editor on its manifest, got %T", sp.kubeDialog)
+	}
+	out := flatText(sp.viewSettings(m))
+	for _, want := range []string{"Create namespace fleet", "apply this as someone who may create namespaces, or enter to try again",
+		"app.kubernetes.io/managed-by: fleet", "it needs namespaces create", "y copies the manifest"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("editor missing %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(m.message, "fleet may not create namespace fleet") {
+		t.Errorf("message = %q", m.message)
+	}
+}
+
+// n (kept from before the form) chooses the context under the cursor and
+// edits its namespace; ctrl+o reads other kubeconfig files on the daemon
+// host (any absolute paths, as locally), separated like $KUBECONFIG.
+func TestPickerNamespaceKeyAndOtherKubeconfig(t *testing.T) {
 	m, sp := kubeTestModel(t)
 	asked := stubKubeContexts(t, pickerContexts())
 	p := openPicker(t, m, sp)
+	reqs := stubKubeTest(t, func(req *fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
+		return testEvents(draftResult(req, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, 1))
+	})
 
 	press(m, sp, "n")
-	if p.inputMode != kubePickerInputNamespace || p.input.Value() != "fleet" {
-		t.Fatalf("n must edit the namespace, starting from the suggestion (%q)", p.input.Value())
+	if p.chosen != "minikube" || p.current().field != kubeFormNamespace || p.inputMode != kubePickerInputField || p.input.Value() != "fleet" {
+		t.Fatalf("n must choose minikube and edit its namespace from the suggestion (%q, %q)", p.chosen, p.input.Value())
 	}
 	p.input.SetValue("team-a")
-	press(m, sp, "enter")
-	if d := p.draft(m, p.selected()); d.GetNamespace() != "team-a" {
-		t.Fatalf("draft namespace = %q", d.GetNamespace())
+	pumpKube(t, m, press(m, sp, "enter"))
+	if d := p.draft(m, p.chosenContext()); d.GetNamespace() != "team-a" || len(*reqs) != 1 || (*reqs)[0].GetCluster().GetNamespace() != "team-a" {
+		t.Fatalf("draft namespace = %q, tests %v", d.GetNamespace(), *reqs)
 	}
 
+	press(m, sp, "k")
+	press(m, sp, "k") // the last context row
 	press(m, sp, "ctrl+o")
 	if p.inputMode != kubePickerInputPaths || p.input.Value() != "/home/ben/.kube/config" {
 		t.Fatalf("ctrl+o must edit the kubeconfig files (%q)", p.input.Value())
@@ -259,6 +498,9 @@ func TestPickerNamespaceAndOtherKubeconfig(t *testing.T) {
 	pumpKube(t, m, press(m, sp, "enter"))
 	if got := (*asked)[len(*asked)-1]; !slices.Equal(got, []string{"/srv/kube/a.yaml", "/srv/kube/b.yaml"}) {
 		t.Fatalf("listed %v, want both files", got)
+	}
+	if p.chosen != "" || len(p.forms) != 0 {
+		t.Fatal("other files are other contexts: the form starts over")
 	}
 }
 
@@ -307,8 +549,8 @@ func TestPickerLoginHereOnlyOverTheLocalSocket(t *testing.T) {
 }
 
 // Re-point (from the editor's Context row) moves the connection to the
-// picked context in one masked update, and the daemon's refusal (another
-// cluster) is shown, not swallowed.
+// picked context in one masked update, without the form, and the daemon's
+// refusal (another cluster) is shown, not swallowed.
 func TestPickerRepointsAConnection(t *testing.T) {
 	m, sp := kubeTestModel(t, kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CONTEXT_MISSING))
 	stubKubeContexts(t, pickerContexts())
@@ -328,7 +570,8 @@ func TestPickerRepointsAConnection(t *testing.T) {
 	if !ok || p.repoint != "eu-1" {
 		t.Fatalf("enter on Context must open the picker on a re-point, got %T", sp.kubeDialog)
 	}
-	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "Re-point ☸ prod-eu") || !strings.Contains(out, "[enter] re-point here") {
+	out := flatText(sp.viewSettings(m))
+	if !strings.Contains(out, "Re-point ☸ prod-eu") || !strings.Contains(out, "[enter] re-point here") || strings.Contains(out, "New connection") || strings.Contains(out, "enter on a context sets up") {
 		t.Fatalf("re-point picker:\n%s", out)
 	}
 
@@ -346,6 +589,17 @@ func TestPickerRepointsAConnection(t *testing.T) {
 	}
 	if sp.kubeDialog != editor || m.kubeStatus("eu-1").GetCluster().GetContext() != "gke_acme_prod" {
 		t.Fatalf("a re-point returns to the editor with the new context (dialog %T)", sp.kubeDialog)
+	}
+}
+
+// A context whose name is taken gets context/namespace as its name.
+func TestPickerNamesAroundATakenName(t *testing.T) {
+	m, _ := kubeTestModel(t, kubeSt("mk-1", "Minikube", 2))
+	if got := kubeDefaultName(m, "minikube", "team"); got != "minikube/team" {
+		t.Fatalf("name = %q", got)
+	}
+	if got := kubeDefaultName(m, "kind", "x"); got != "kind" {
+		t.Fatalf("name = %q", got)
 	}
 }
 
@@ -369,34 +623,32 @@ func TestPickerNamesALongContextWithinTheDaemonLimit(t *testing.T) {
 	}
 }
 
-// What connects is what was tested: a namespace chosen with n while the test
-// ran waits for its own test instead of connecting untested.
-func TestPickerConnectsOnlyTheTestedNamespace(t *testing.T) {
+// What connects is what was tested: a namespace set while [ Test &
+// connect ] waited is tested on its own, and waits for enter again.
+func TestPickerConnectsOnlyTheTestedDraft(t *testing.T) {
 	m, sp := kubeTestModel(t)
 	stubKubeContexts(t, pickerContexts())
 	p := openPicker(t, m, sp)
-	ready := kubeSt("", "", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
-	reqs := stubKubeTest(t, func(*fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
-		return testEvents(ready)
+	reqs := stubKubeTest(t, func(req *fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
+		return testEvents(draftResult(req, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, 1))
 	})
-	var added []*fleetgrpc.KubeCluster
-	origAdd := addKubeClusterRemote
-	addKubeClusterRemote = func(c *fleetgrpc.KubeCluster) (*fleetgrpc.KubeClusterStatus, error) {
-		added = append(added, proto.Clone(c).(*fleetgrpc.KubeCluster))
-		return kubeSt("minikube-1", c.GetDisplayName(), fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING), nil
-	}
-	t.Cleanup(func() { addKubeClusterRemote = origAdd })
+	added := stubKubeAdd(t, func(c *fleetgrpc.KubeCluster) (*fleetgrpc.AddKubeClusterReply, error) {
+		return &fleetgrpc.AddKubeClusterReply{Cluster: kubeSt("minikube-1", c.GetDisplayName(), fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING)}, nil
+	})
 
 	test := press(m, sp, "enter") // the test of namespace fleet, not answered yet
+	press(m, sp, "enter")         // [ Test & connect ]: waits for it
 	press(m, sp, "n")
 	p.input.SetValue("team-a")
-	press(m, sp, "enter")
+	retest := press(m, sp, "enter")
 	pumpKube(t, m, test)
-	if len(added) != 0 || sp.kubeDialog != p {
-		t.Fatalf("added %v: team-a was never tested", added)
+	pumpKube(t, m, retest)
+	if len(*added) != 0 || sp.kubeDialog != p {
+		t.Fatalf("added %v: a change while waiting is tested, not connected", *added)
 	}
+	pickerAt(t, p, kubeFormConnect)
 	pumpKube(t, m, press(m, sp, "enter"))
-	if len(*reqs) != 2 || (*reqs)[1].GetCluster().GetNamespace() != "team-a" || len(added) != 1 || added[0].GetNamespace() != "team-a" {
-		t.Fatalf("tests %v, added %v: enter must test team-a, then connect it", *reqs, added)
+	if len(*reqs) != 2 || (*reqs)[1].GetCluster().GetNamespace() != "team-a" || len(*added) != 1 || (*added)[0].GetNamespace() != "team-a" {
+		t.Fatalf("tests %v, added %v: enter must connect the tested team-a", *reqs, *added)
 	}
 }

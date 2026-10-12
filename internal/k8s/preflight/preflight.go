@@ -555,7 +555,13 @@ func (r *run) namespace(ctx context.Context) {
 	switch {
 	case apierrors.IsNotFound(err):
 		msg := fmt.Sprintf("namespace '%s' does not exist", ns)
-		r.fail(CheckNamespace, msg, "create it from the cluster editor (shows the labels), or pick another namespace")
+		// fleet creates the namespace a connection is added with or set to;
+		// a saved one's went missing since, or could not be created.
+		fix := "fleet creates it when it connects the cluster"
+		if r.t.Cluster.ID != "" {
+			fix = "create it from the cluster editor ([ Create ] shows the labels), or pick another namespace"
+		}
+		r.fail(CheckNamespace, msg, fix)
 		r.failState(fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED, msg)
 		return
 	case apierrors.IsForbidden(err):

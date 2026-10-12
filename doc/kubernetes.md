@@ -75,9 +75,10 @@ that dies mid-rebuild has the rebuild rolled back on its next start.
   release's checksums; an offline daemon host needs them there, or named by
   `FLEET_POD_BINARY_<ARCH>` / `FLEET_POD_TMUX_<ARCH>` (`AMD64`, `ARM64`).
 
-**On the cluster**: a namespace (fleet never creates one unasked) and these
-permissions in it for fleet's identity. `fleet cluster test` lists any that
-are missing (`FORBIDDEN`).
+**On the cluster**: a namespace (fleet creates the one a connection names
+when it does not exist, given `namespaces create`) and these permissions in
+it for fleet's identity. `fleet cluster test` lists any that are missing
+(`FORBIDDEN`).
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -136,8 +137,10 @@ StorageClasses (the class picker; without it you type a class name), nodes
 (attach limits), PersistentVolumes (a share's topology), CSIDrivers and
 VolumeSnapshotClasses (clone tiers), RuntimeClasses (sysbox), and the
 `kube-system` namespace (the cluster's identity, so a renamed context can be
-re-pointed). `get`, `list` and `watch` on each is enough; `namespaces create`
-lets the cluster editor's **[ Create ]** make a missing namespace.
+re-pointed). `get`, `list` and `watch` on each is enough. `namespaces create`
+lets fleet make a connection's namespace when it does not exist; without it
+the connection is still saved, and fleet shows the namespace's manifest to
+apply as someone who has it.
 
 **Kubernetes versions.** Docker outside of Docker needs 1.29 or later (native
 sidecars). On SELinux nodes, volumes are relabelled at mount time where the
@@ -152,14 +155,26 @@ the same cluster is another connection.
 **In the TUI**, Settings → Kubernetes lists the connections, each with its
 health, version and the instances and agents that use it:
 
-- **+ Kubernetes Cluster** opens the picker over the contexts of fleetd's
-  kubeconfig (`contexts from fleetd @ <host>`): `/` filters, `n` sets the
-  namespace (`fleet` is suggested when the context's is `default`), `ctrl+o`
-  reads another kubeconfig on the daemon host, `enter` tests and connects, `c`
-  shows the namespace manifest and creates it, `L` runs the context's login
-  plugin in this terminal.
+- **+ Kubernetes Cluster** opens the Connect page over the contexts of
+  fleetd's kubeconfig (`contexts from fleetd @ <host>`): `/` filters, `ctrl+o`
+  reads another kubeconfig on the daemon host, `L` runs the context's login
+  plugin in this terminal. `enter` on a context chooses it and tests it
+  without saving anything, and the form under the list sets up the new
+  connection: **Name**, **Namespace** (`fleet` is suggested when the
+  context's is `default`; fleet creates it when it does not exist),
+  **Delivery** (Auto, Node load, Registry or Gateway, with **Registry** when
+  that is the pick) and **Storage** (the instance disks' class: Auto, or any
+  class the test listed; a fleet share takes it too unless a class passes the
+  multi-node test once connected), plus **Node-local OK** when that class
+  keeps a disk on one node of several. Each choice shows what Auto resolved
+  to, and each change tests again. **[ Test & connect ]** connects once a
+  test passes (a namespace still to create is no failure), or anyway after
+  one failed. `tab` moves between the list and the form.
 - **enter** on a connection opens the cluster editor: every setting in
-  [section 5](#5-connection-settings), grouped and folded. Its Status row has
+  [section 5](#5-connection-settings), grouped and folded but Capabilities
+  (what the last test found). Setting **Namespace** there creates it when it
+  does not exist; when fleet may not, the change is kept and the editor shows
+  the manifest to apply (`y` copies it). Its Status row has
   **[ test ]**, **[ deep test ]** and **[ login on fleetd ]**. Changes apply to
   new instances; Rebuild applies them to existing ones. The fleets' cache
   servers there take a change of what they run with at once (service images,
@@ -181,8 +196,8 @@ health, version and the instances and agents that use it:
 
 ```bash
 fleet cluster contexts                          # contexts in fleetd's kubeconfig
-fleet cluster add prod-eu -n fleet --name prod  # connect a context
-fleet cluster add kind-dev --create-namespace   # create the namespace first
+fleet cluster add prod-eu -n fleet --name prod  # connect a context; a missing namespace is created
+fleet cluster add kind-dev -n team --namespace-label pod-security.kubernetes.io/enforce=baseline
 fleet cluster ls                                # connections and their health
 fleet cluster ls prod                           # warnings and every set field
 fleet cluster set prod allow_privileged=true storage_class=gp3
@@ -193,8 +208,12 @@ fleet cluster rm prod [--destroy-instances | --forget]
 fleet cluster gc prod [--apply]                 # objects no instance accounts for
 ```
 
-Kubeconfig paths, `extra_path` and `plugin_env` are daemon-host paths and
-names, whichever machine you type them on.
+`add`, and `set` of a namespace or a context, create the namespace when it
+does not exist (labelled `app.kubernetes.io/managed-by=fleet`, or with
+`--namespace-label`); when fleetd may not create it, the connection is still
+saved and the namespace's manifest is printed to apply. Kubeconfig paths,
+`extra_path` and `plugin_env` are daemon-host paths and names, whichever
+machine you type them on.
 
 **From MCP**, `fleet_cluster_list {cluster?}` and
 `fleet_cluster_test {cluster, deep?, storage_classes?, test_storage?}`.
@@ -345,11 +364,13 @@ Unset means default.
 
 ## 6. Storage
 
-**Instance disks** (`storage_class`, 50Gi). Auto picks a block class with
-`WaitForFirstConsumer` binding, volume expansion and a snapshot class, and never
-a class of static volumes (`kubernetes.io/no-provisioner`). An NFS class for
-instance disks warns: root squash breaks package installs, and Docker inside
-the instance cannot use overlay storage on a file share. A node-local class on
+**Instance disks** (`storage_class`, 50Gi). Auto picks a block class,
+network-attached before node-local (on one node too: the disk outlives its
+node), then with a snapshot class, `WaitForFirstConsumer` binding and volume
+expansion, and never a class of static volumes
+(`kubernetes.io/no-provisioner`). An NFS class for instance disks warns: root
+squash breaks package installs, and Docker inside the instance cannot use
+overlay storage on a file share. A node-local class on
 a multi-node cluster loses an instance's disk with its node; the connection is
 limited until you acknowledge it with `node_local_ack`.
 

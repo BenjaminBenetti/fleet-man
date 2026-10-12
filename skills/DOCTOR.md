@@ -525,9 +525,12 @@ kubectl --context <ctx> -n <ns> auth can-i create pods/exec
 kubectl --context <ctx> -n <ns> auth can-i --list      # everything fleet's identity may do
 ```
 
-- **Namespace missing:** fleet never creates one unasked. Create it, or let
-  `fleet cluster add <ctx> --create-namespace` (or the cluster editor's
-  `[ Create ]`) do it, which needs `namespaces create`.
+- **Namespace missing:** fleet creates a connection's namespace when it is
+  added or set (`fleet cluster add`, `fleet cluster set <c> namespace=<ns>`,
+  the TUI's Connect page and editor), which needs `namespaces create`;
+  without it fleet prints the manifest to apply as someone who has it. One
+  deleted since: the cluster editor's `[ Create ]`, or set the namespace
+  again.
 - **RBAC:** the `rbac` check names each missing verb. The full Role is in
   [What you need](https://github.com/BenjaminBenetti/fleet-man/blob/main/doc/kubernetes.md#2-what-you-need).
   Ask before applying RBAC changes: they are the cluster owner's call.

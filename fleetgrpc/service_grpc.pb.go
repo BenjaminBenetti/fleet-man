@@ -243,8 +243,10 @@ type FleetServiceClient interface {
 	// LoginKubeCluster runs the connection's login plugin on the daemon host
 	// ([Run login on daemon]) and relays only its device-code URL and code.
 	LoginKubeCluster(ctx context.Context, in *LoginKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LoginKubeClusterEvent], error)
-	// CreateKubeNamespace creates a connection's namespace, an explicit action
-	// (fleet never creates one on its own), or with dry_run only renders it.
+	// CreateKubeNamespace creates a connection's namespace (AddKubeCluster and
+	// UpdateKubeCluster create a missing one themselves; this makes one that
+	// went missing later, or with other labels), or with dry_run only renders
+	// it.
 	CreateKubeNamespace(ctx context.Context, in *CreateKubeNamespaceRequest, opts ...grpc.CallOption) (*CreateKubeNamespaceReply, error)
 	// GetShareSync reports each fleet's sync: its folders, sides, pauses,
 	// shares and conflict count.
@@ -1204,8 +1206,10 @@ type FleetServiceServer interface {
 	// LoginKubeCluster runs the connection's login plugin on the daemon host
 	// ([Run login on daemon]) and relays only its device-code URL and code.
 	LoginKubeCluster(*LoginKubeClusterRequest, grpc.ServerStreamingServer[LoginKubeClusterEvent]) error
-	// CreateKubeNamespace creates a connection's namespace, an explicit action
-	// (fleet never creates one on its own), or with dry_run only renders it.
+	// CreateKubeNamespace creates a connection's namespace (AddKubeCluster and
+	// UpdateKubeCluster create a missing one themselves; this makes one that
+	// went missing later, or with other labels), or with dry_run only renders
+	// it.
 	CreateKubeNamespace(context.Context, *CreateKubeNamespaceRequest) (*CreateKubeNamespaceReply, error)
 	// GetShareSync reports each fleet's sync: its folders, sides, pauses,
 	// shares and conflict count.
