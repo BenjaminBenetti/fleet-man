@@ -20,12 +20,25 @@ else
   nightly_fail "sharesync properties"
 fi
 
+# deadline_only: a fuzz run that failed only on Go's fuzzer reporting its
+# own -fuzztime deadline ("context deadline exceeded" when a worker is still
+# minimizing as time runs out): no failing input written, nothing else after
+# its --- FAIL. A crash always writes its input under testdata/fuzz.
+deadline_only() {
+  ! grep -q 'Failing input written' "$1" &&
+    awk '/^--- FAIL: /{in_fail=1; next} in_fail && (/^FAIL$/ || /^exit status /){in_fail=0; next}
+      in_fail && NF { if ($0 ~ /^[[:space:]]*context deadline exceeded$/) seen=1; else other=1 }
+      END { exit !(seen && !other) }' "$1"
+}
+
 # Every fuzz target in the module, by package.
 grep -rl --include='*_test.go' '^func Fuzz' internal | xargs -n1 dirname | sort -u | while read -r pkg; do
   for target in $(grep -h '^func Fuzz' "${pkg}"/*_test.go | sed -E 's/^func (Fuzz[A-Za-z0-9_]+).*/\1/' | sort -u); do
     log="${NIGHTLY_OUT}/fuzz-${target}.log"
     if go test -run '^$' -fuzz "^${target}\$" -fuzztime "${fuzztime}" -fuzzminimizetime 10x "./${pkg}" > "${log}" 2>&1; then
       echo "- fuzz ${target} (${pkg}): $(grep -oE 'execs: [0-9]+' "${log}" | tail -n 1)" >> "${NIGHTLY_OUT}/fuzz.md"
+    elif deadline_only "${log}"; then
+      echo "- fuzz ${target} (${pkg}): $(grep -oE 'execs: [0-9]+' "${log}" | tail -n 1); ended on Go's own deadline, no failing input" >> "${NIGHTLY_OUT}/fuzz.md"
     else
       tail -n 20 "${log}" >&2
       echo "- **FAILED** fuzz ${target} (${pkg})" >> "${NIGHTLY_OUT}/fuzz.md"
