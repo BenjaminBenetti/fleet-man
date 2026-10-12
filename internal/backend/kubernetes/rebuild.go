@@ -199,50 +199,54 @@ func (rb *rebuilding) running() bool { return rb.replicas > 0 }
 // stopped.
 func (rb *rebuilding) run(ctx context.Context) (*backend.UpResult, error) {
 	if err := rb.connect(ctx); err != nil {
-		return nil, rb.unchanged(err)
+		return nil, rb.unchanged(ctx, err)
 	}
 	defer rb.releaseMoveHolds()
 	if err := rb.prepare(ctx); err != nil {
-		return nil, rb.unchanged(err)
+		return nil, rb.unchanged(ctx, err)
 	}
 	// The share may be prepared only once the run is translated (admit).
 	defer func() { rb.share.done() }()
 	defer rb.releaseVolumes()
 	if err := rb.load(ctx); err != nil {
-		return nil, rb.unchanged(err)
+		return nil, rb.unchanged(ctx, err)
+	}
+	// The journal from the first step on: a daemon that stops during the
+	// export, the build or the delivery leaves it, and the next start sets
+	// the record back to what it was (generation N runs untouched) instead
+	// of failing it.
+	if err := rb.begin(ctx); err != nil {
+		return nil, rb.unchanged(ctx, err)
 	}
 	if err := rb.export(ctx); err != nil {
-		return nil, rb.unchanged(err)
+		return nil, rb.unchanged(ctx, err)
 	}
 	cfg, err := devcli.ReadMerged(ctx, devcli.ReadRequest{Tools: rb.env.Tools, WorkspaceDir: rb.req.WorkspaceDir})
 	if err != nil {
-		return nil, rb.unchanged(kubeerr.Wrap(kubeerr.ImageBuild, err))
+		return nil, rb.unchanged(ctx, kubeerr.Wrap(kubeerr.ImageBuild, err))
 	}
 	if err := rb.preflight(ctx, cfg); err != nil && !rb.quotaWhileRunning(err) {
-		return nil, rb.unchanged(err)
+		return nil, rb.unchanged(ctx, err)
 	}
 	img, err := rb.build(ctx, cfg)
 	if err != nil {
-		return nil, rb.unchanged(err)
+		return nil, rb.unchanged(ctx, err)
 	}
 	rb.delivered = true
 	if err := rb.checkDisk(ctx, img); err != nil {
-		return nil, rb.unchanged(err)
+		return nil, rb.unchanged(ctx, err)
 	}
 	if err := rb.step(ctx, stepAdmit, fleet.StepApplyManifests, "admission"); err != nil {
-		return nil, rb.unchanged(err)
+		return nil, rb.unchanged(ctx, err)
 	}
 	adm, r, err := rb.admit(ctx, img, cfg)
 	// A quota the running pod fills (a pod count, the compute it holds)
 	// is judged again once that pod is stopped.
 	deferred := err != nil && rb.quotaWhileRunning(err)
 	if err != nil && !deferred {
-		return nil, rb.unchanged(err)
+		return nil, rb.unchanged(ctx, err)
 	}
 
-	if err := rb.begin(ctx); err != nil {
-		return nil, rb.unchanged(err)
-	}
 	res, err := rb.reseed(ctx, adm, r, img, cfg, deferred)
 	if err != nil {
 		return nil, rb.failed(ctx, err)
@@ -360,9 +364,11 @@ func (rb *rebuilding) finishKeptUndo(ctx context.Context) error {
 	return nil
 }
 
-// begin starts the journal: from here on every change the rebuild makes is
-// recorded first, and undone if the rebuild fails. The StatefulSet is the
-// anchor that carries the job's mark.
+// begin starts the journal, before the export: from here on every change
+// the rebuild makes is recorded first, and undone if the rebuild fails; one
+// the daemon's end cut short is undone by its next start (until the reset,
+// that is the record's status back). The StatefulSet is the anchor that
+// carries the job's mark.
 func (rb *rebuilding) begin(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("cancelled: %w", context.Cause(ctx))
@@ -535,9 +541,19 @@ const (
 	restoredOutcome  = "the rebuild failed; generation %d was restored"
 )
 
-// unchanged is a rebuild that failed before its journal began: nothing of
-// the instance changed (the daemon host's checkout may hold the export).
-func (rb *rebuilding) unchanged(err error) error {
+// unchanged is a rebuild that failed before it stopped the instance: nothing
+// of it changed (the daemon host's checkout may hold the export). Its
+// journal, once begun, ends; but on the daemon's shutdown it is left, for the
+// next start to set the record back to the status it had.
+func (rb *rebuilding) unchanged(ctx context.Context, err error) error {
+	if rb.jj != nil {
+		if backend.ShutdownCut(ctx) {
+			step := rb.jj.Journal().Step
+			flog.Info("kube rebuild: the daemon is shutting down before the rebuild changed the instance; the job is left for the next start to undo", "fleet", rb.id.fleet, "instance", rb.id.name, "cluster", rb.id.cluster, "key", rb.id.key, "step", step)
+			return kubeerr.Wrap(kubeerr.Interrupted, fmt.Errorf("the daemon shut down during the rebuild (at step %s), before it changed the instance: %w", step, backend.ErrCheckpointed))
+		}
+		rb.endJournal()
+	}
 	if rb.delivered {
 		releaseRebuildHold(rb.id.cluster, rb.id.key, rb.gen)
 	}

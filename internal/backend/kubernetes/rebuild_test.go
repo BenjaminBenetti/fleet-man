@@ -337,6 +337,81 @@ func TestRebuildThatFailsAfterItsJournal(t *testing.T) {
 	}
 }
 
+// A rebuild's journal begins before its export: one that fails before it
+// stopped the instance ends its journal (the StatefulSet's mark cleared) and
+// says nothing changed; a daemon shutdown then leaves the journal, at its
+// step and with the status the record had, for the next start to set back
+// (generation 1 runs untouched); a destroy ends it.
+func TestRebuildThatFailsBeforeItChangedTheInstance(t *testing.T) {
+	exportErr := errors.New("the workspace export: the bulk session dropped")
+	for _, tc := range []struct {
+		name  string
+		cause error // nil: the step failed on its own
+	}{
+		{"failed", nil},
+		{"daemon shutdown", backend.ErrDaemonShutdown},
+		{"destroy", errors.New("instance destroyed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newHandleRig(t)
+			rb := rebuildRigOn(t, r, fleet.KubeCluster{ID: handleCluster})
+			one := int32(1)
+			meta := handleMeta(rb.id.sts)
+			rb.sts = &appsv1.StatefulSet{ObjectMeta: meta, Spec: appsv1.StatefulSetSpec{Replicas: &one}}
+			rb.replicas = 1
+			if err := r.cs.Tracker().Add(rb.sts.DeepCopy()); err != nil {
+				t.Fatal(err)
+			}
+			if err := rb.begin(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := rb.step(context.Background(), "export", fleet.StepExportWorkspace, ""); err != nil {
+				t.Fatal(err)
+			}
+			mark := func() string {
+				set, err := r.cs.AppsV1().StatefulSets(handleNS).Get(context.Background(), rb.id.sts, metav1.GetOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return set.Annotations[names.AnnotationOp]
+			}
+			if got := mark(); got != MarkFor(OpRebuild, "export") {
+				t.Fatalf("the StatefulSet's mark during the export: %q", got)
+			}
+			ctx := context.Background()
+			if tc.cause != nil {
+				c, cancel := context.WithCancelCause(ctx)
+				cancel(tc.cause)
+				ctx = c
+			}
+			err := rb.unchanged(ctx, exportErr)
+			j, jerr := ReadJournal(JournalPath(handleKey))
+			switch tc.name {
+			case "daemon shutdown":
+				if !errors.Is(err, backend.ErrCheckpointed) || !strings.Contains(err.Error(), "at step export") {
+					t.Fatalf("err = %v, want the checkpoint naming the step", err)
+				}
+				if jerr != nil || j.Step != "export" || j.PrevStatus != fleet.StatusRunning || j.ResetStarted || j.PrevReplicas == nil || *j.PrevReplicas != 1 {
+					t.Fatalf("the journal left for the next start: %+v, %v", j, jerr)
+				}
+				if got := mark(); got != MarkFor(OpRebuild, "export") {
+					t.Errorf("the checkpoint cleared the mark: %q", got)
+				}
+			default:
+				if code, detail, _ := kubeerr.Parse(err.Error()); code != kubeerr.RebuildFailed || !strings.HasPrefix(detail, unchangedOutcome) {
+					t.Fatalf("err = %v", err)
+				}
+				if !errors.Is(jerr, os.ErrNotExist) {
+					t.Errorf("the journal outlived a rebuild that changed nothing: %v", jerr)
+				}
+				if got := mark(); got != "" {
+					t.Errorf("the StatefulSet keeps the mark %q", got)
+				}
+			}
+		})
+	}
+}
+
 // An undo that fails keeps the journal, and its error starts the way the
 // reconciler claims such a record by at the next start.
 func TestRebuildWhoseUndoFails(t *testing.T) {
