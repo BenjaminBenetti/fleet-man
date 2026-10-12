@@ -9,17 +9,7 @@ name: Build Checks
 
 on:
   pull_request:
-    branches: [main, feat/kubernetes]
-  # feat/kubernetes is a long-lived integration branch that work merges into
-  # directly, so its pushes run the checks too.
-  push:
-    branches: [feat/kubernetes]
-
-# Serialize branch pushes: a newer push replaces a queued run but never cancels
-# one in flight. PR runs keep one group per run, so they never wait on each other.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || github.run_id }}
-  cancel-in-progress: false
+    branches: [main]
 
 jobs:
   static:
