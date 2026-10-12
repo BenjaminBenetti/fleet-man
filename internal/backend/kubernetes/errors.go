@@ -39,9 +39,11 @@ func apiCode(err error) kubeerr.Code {
 		return kubeerr.Unreachable
 	case errors.Is(err, context.Canceled):
 		return ""
-	case kubeerr.IsUnreachable(err):
-		// Before the deadline: a dial that timed out is the cluster's.
-		return kubeerr.Unreachable
+	case kubeerr.Transport(err) != "":
+		// Before the deadline: a dial that timed out is the cluster's. A
+		// server that was reached but not trusted, or that refused the
+		// login, is the connection's (Misconfigured, Unauthorized).
+		return kubeerr.Transport(err)
 	case errors.Is(err, context.DeadlineExceeded):
 		return kubeerr.Timeout
 	}

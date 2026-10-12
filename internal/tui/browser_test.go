@@ -47,7 +47,7 @@ func stubBrowserConfig(t *testing.T, initialURL string, hasLanding bool) {
 func stubSetFleetSettings(t *testing.T) {
 	t.Helper()
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { return nil }
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) ([]string, error) { return nil, nil }
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 }
 

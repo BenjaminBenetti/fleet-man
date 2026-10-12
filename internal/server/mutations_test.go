@@ -391,6 +391,16 @@ func TestSetInstanceMetadataRejectsDisplayNameWithSpaces(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("clear display name: %v", err)
 	}
+
+	// A label is never a path: what a name may not be (a fleet folder's,
+	// a path) it still may be.
+	for _, label := range []string{"feat/login", "files", ".claude"} {
+		if _, err := svc.SetInstanceMetadata(ctx, &fleetgrpc.SetInstanceMetadataRequest{
+			Fleet: "alpha", Instance: "i1", DisplayName: ptr(label),
+		}); err != nil {
+			t.Fatalf("display name %q: %v", label, err)
+		}
+	}
 }
 
 func TestGroupLayoutSetAndDelete(t *testing.T) {

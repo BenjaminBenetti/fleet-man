@@ -408,33 +408,119 @@ func TestBrowserProxyStartFailureSaysWhy(t *testing.T) {
 	}
 }
 
-// An instance that cannot run the daemon's fleet binary keeps privoxy.
+// An instance that cannot run the daemon's fleet binary keeps privoxy; the
+// look at the instance that decides it is the only other exec.
 func TestBrowserProxyFallsBackToPrivoxyWhereFleetCannotRun(t *testing.T) {
 	dir := browserRig(t)
 	orig := builtinBrowserProxy
-	builtinBrowserProxy = func(backend.Backend) bool { return false }
+	var seen instancePlatform
+	builtinBrowserProxy = func(_ backend.Backend, p instancePlatform) bool { seen = p; return false }
 	defer func() { builtinBrowserProxy = orig }()
 	b := &localBrowserBackend{}
 	if err := ensureBrowserServices(b, "/ws", false); err != nil {
 		t.Fatal(err)
 	}
-	if len(b.scripts) != 1 || !strings.Contains(b.scripts[0], "privoxy --pidfile") {
-		t.Fatalf("the privoxy setup should run: %q", b.scripts)
+	if len(b.scripts) != 2 || !strings.Contains(b.scripts[0], "PLATFORM") || !strings.Contains(b.scripts[1], "privoxy --pidfile") {
+		t.Fatalf("the look, then the privoxy setup, should run: %q", b.scripts)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "args.log")); !os.IsNotExist(err) {
 		t.Fatal("the built-in proxy must not start there")
 	}
+	if !seen.runs(runtime.GOOS, runtime.GOARCH) {
+		t.Fatalf("the look read this host as %+v", seen)
+	}
 }
 
+// The built-in proxy runs where the daemon's binary does: a backend that
+// stages its own build, or a Linux daemon's instance that is Linux on its
+// architecture. Any other (a Coder or Codespaces workspace of another
+// architecture, an instance without uname) gets privoxy, as before.
 func TestBuiltinBrowserProxyRule(t *testing.T) {
-	if !builtinBrowserProxy(&localBrowserBackend{}) {
+	other := "arm64"
+	if runtime.GOARCH == "arm64" {
+		other = "amd64"
+	}
+	machine := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}
+	if !builtinBrowserProxy(&localBrowserBackend{}, instancePlatform{}) {
 		t.Error("a backend that stages its own fleet build runs the built-in proxy")
 	}
 	type plain struct{ backend.Backend }
-	if got := builtinBrowserProxy(plain{}); got != (runtime.GOOS == "linux") {
-		t.Errorf("a backend that gets the daemon's binary: %v on %s", got, runtime.GOOS)
+	same := instancePlatform{os: "Linux", machine: machine[runtime.GOARCH]}
+	if got := builtinBrowserProxy(plain{}, same); got != (runtime.GOOS == "linux" && machine[runtime.GOARCH] != "") {
+		t.Errorf("an instance of the daemon's platform: %v on %s/%s", got, runtime.GOOS, runtime.GOARCH)
+	}
+	for _, p := range []instancePlatform{{os: "Linux", machine: machine[other]}, {os: "Darwin", machine: machine[runtime.GOARCH]}, {}} {
+		if builtinBrowserProxy(plain{}, p) {
+			t.Errorf("an instance of %+v runs the %s/%s daemon's binary", p, runtime.GOOS, runtime.GOARCH)
+		}
+	}
+	for m, want := range map[string]string{"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64", "armv7l": "arm", "i686": "386", "riscv64": "riscv64"} {
+		if got := unameArch(m); got != want {
+			t.Errorf("unameArch(%q) = %q, want %q", m, got, want)
+		}
 	}
 	if browserBindAddr(plain{}) != "" || browserBindAddr(loopbackBrowserBackend{}) != "127.0.0.1" {
 		t.Error("only a PortDialer's instance binds loopback")
+	}
+}
+
+// privoxy's setup counts it as running only when its pid file names a live
+// privoxy: a pid a restarted container gave to another process (here this
+// test's own shell) is started over.
+func TestPrivoxySetupIgnoresAStalePid(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the check reads /proc")
+	}
+	start := strings.Index(proxySetupScript, `p="$(cat /tmp/fleet-proxy.pid`)
+	end := strings.Index(proxySetupScript, `printf '`)
+	if start < 0 || end < start {
+		t.Fatalf("the running check is not where it was: %q", proxySetupScript)
+	}
+	check := strings.ReplaceAll(proxySetupScript[start:end], "/tmp/fleet-proxy.pid", "$PIDFILE") + `echo NOT_RUNNING`
+	pidfile := filepath.Join(t.TempDir(), "fleet-proxy.pid")
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sleeper.Process.Kill(); _, _ = sleeper.Process.Wait() }()
+	if err := os.WriteFile(pidfile, []byte(strconv.Itoa(sleeper.Process.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func() string {
+		cmd := exec.Command("sh", "-c", check)
+		cmd.Env = append(os.Environ(), "PIDFILE="+pidfile)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("the check: %v\n%s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if got := run(); got != "NOT_RUNNING" {
+		t.Fatalf("a live pid that is no privoxy: %q", got)
+	}
+
+	// A live privoxy (a sleep under its name) is running.
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	fake := filepath.Join(t.TempDir(), "privoxy")
+	data, err := os.ReadFile(sleep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fake, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	privoxy := exec.Command(fake, "30")
+	if err := privoxy.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = privoxy.Process.Kill(); _, _ = privoxy.Process.Wait() }()
+	if err := os.WriteFile(pidfile, []byte(strconv.Itoa(privoxy.Process.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(); got != "ALREADY_RUNNING" {
+		t.Fatalf("a live privoxy: %q", got)
 	}
 }

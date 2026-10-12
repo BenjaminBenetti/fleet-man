@@ -36,6 +36,9 @@ import (
 const (
 	publishRetry       = 30 * time.Second
 	publishDialTimeout = 30 * time.Second
+	// publishDialWarnEvery paces the log lines of a port whose dials into
+	// the instance keep failing (dialFailures).
+	publishDialWarnEvery = time.Minute
 )
 
 // portDial connects to a port in the instance.
@@ -72,6 +75,46 @@ type publishedPort struct {
 	failedAt time.Time
 	dial     *portDialHolder
 	conns    *publishedConns
+	fails    *dialFailures
+}
+
+// dialFailures paces a published port's log lines about its dials into the
+// instance: the first failure is logged, then at most one line every
+// publishDialWarnEvery saying how many more failed, and one once a dial
+// works again. A client retrying against a port the pod refuses, or an
+// unreachable cluster, would otherwise log a line per connection.
+type dialFailures struct {
+	mu       sync.Mutex
+	failing  bool
+	unlogged int
+	lastLog  time.Time
+}
+
+// failed counts a failed dial at now, and says whether to log it and how
+// many failed since the last line.
+func (f *dialFailures) failed(now time.Time) (logIt bool, unlogged int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failing && now.Sub(f.lastLog) < publishDialWarnEvery {
+		f.unlogged++
+		return false, 0
+	}
+	unlogged, f.unlogged = f.unlogged, 0
+	f.failing, f.lastLog = true, now
+	return true, unlogged
+}
+
+// worked notes a dial that worked, and says whether it ends a run of
+// failures (to log) and how many of them were not logged.
+func (f *dialFailures) worked() (recovered bool, unlogged int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.failing {
+		return false, 0
+	}
+	unlogged = f.unlogged
+	f.failing, f.unlogged = false, 0
+	return true, unlogged
 }
 
 // portDialHolder holds the dial a listener uses, so a pass can hand it a
@@ -169,7 +212,7 @@ func (pp *portPublisher) sync(key, label, containerID string, ports []backend.Pu
 		p := inst.ports[spec]
 		switch {
 		case p == nil:
-			p = &publishedPort{spec: spec, dial: &portDialHolder{dial: dial}, conns: &publishedConns{m: map[io.Closer]struct{}{}}}
+			p = &publishedPort{spec: spec, dial: &portDialHolder{dial: dial}, conns: &publishedConns{m: map[io.Closer]struct{}{}}, fails: &dialFailures{}}
 			inst.ports[spec] = p
 			p.listen(inst.label, now)
 		case p.ln == nil && now.Sub(p.failedAt) >= pp.retry:
@@ -305,8 +348,13 @@ func (p *publishedPort) relay(label string, local net.Conn) {
 	remote, err := p.dial.get()(ctx, p.spec.ContainerPort)
 	cancel()
 	if err != nil {
-		flog.Warn("published port: dial into the instance", "instance", label, "containerPort", p.spec.ContainerPort, "err", err)
+		if logIt, unlogged := p.fails.failed(time.Now()); logIt {
+			flog.Warn("published port: dial into the instance", "instance", label, "containerPort", p.spec.ContainerPort, "err", err, "failedSinceLastLine", unlogged)
+		}
 		return
+	}
+	if recovered, unlogged := p.fails.worked(); recovered {
+		flog.Info("published port: dials into the instance work again", "instance", label, "containerPort", p.spec.ContainerPort, "unloggedFailures", unlogged)
 	}
 	p.conns.add(remote)
 	defer p.conns.remove(remote)

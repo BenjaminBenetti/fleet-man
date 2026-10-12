@@ -112,7 +112,13 @@ func tuiProvidesAgent() bool {
 // notice would repeat. It still starts the provider, so forwarding survives
 // the TUI going away while this command runs.
 func forwardAgentWhile(ctx context.Context, svc fleetgrpc.FleetServiceClient, shell bool) (stop func()) {
-	url := currentRemoteURL()
+	return forwardAgentTo(ctx, svc, currentRemoteURL(), shell)
+}
+
+// forwardAgentTo is forwardAgentWhile for the armada remote url (gateway or
+// ssh://) svc reaches, when the command was not pointed at it by
+// FLEET_GATEWAY or FLEET_SSH (`fleet ssh-proxy` finds it from its alias).
+func forwardAgentTo(ctx context.Context, svc fleetgrpc.FleetServiceClient, url string, shell bool) (stop func()) {
 	if !agentForwardEnabled(ctx, url) {
 		return func() {}
 	}

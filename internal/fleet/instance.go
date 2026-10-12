@@ -8,7 +8,7 @@ import "time"
 // tmux session prefixes, and CLI lookups — it never changes after creation.
 // DisplayName is the user-facing label shown in the TUI; editing it never
 // touches underlying resources, but like Name it must satisfy
-// ValidateInstanceName.
+// ValidateDisplayName (ValidateInstanceName's rules for a label).
 type Instance struct {
 	Name         string         `json:"name"`
 	DisplayName  string         `json:"display_name,omitempty"`

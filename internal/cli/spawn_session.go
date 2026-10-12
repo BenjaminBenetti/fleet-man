@@ -48,7 +48,7 @@ Examples:
 				return fmt.Errorf("failed to create session %q: %w", sessionName, err)
 			}
 
-			if err := createCmd.Run(); err != nil {
+			if err := runSessionCommand(createCmd); err != nil {
 				return fmt.Errorf("failed to create session %q: %w", sessionName, err)
 			}
 

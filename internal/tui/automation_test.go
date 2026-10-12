@@ -16,7 +16,7 @@ import (
 func newAutomationModel(t *testing.T) (*model, *fleetPage) {
 	t.Helper()
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { return nil }
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) ([]string, error) { return nil, nil }
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 	// The agent dialog asks the daemon where agents can run; this one has
 	// every backend and remembers devcontainer.

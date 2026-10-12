@@ -20,7 +20,8 @@ import (
 //  3. send Close to the pods' agent and bulk sessions (2s);
 //  4. close the port-forward pool and the appPort listeners;
 //  5. cancel the informers and checkpoint the running Kubernetes jobs: each
-//     stops at its next step and leaves its journal for the next start.
+//     stops at its next step and leaves its journal for the next start; then
+//     wait for the image collections the serve loop's end cancelled.
 //
 // Steps 2 to 5 share one budget (shutdownBudget) and run alongside the gRPC
 // drain (stopGRPC), not after it, so all of it fits well inside the hard

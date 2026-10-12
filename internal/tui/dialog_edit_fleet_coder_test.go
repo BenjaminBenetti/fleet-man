@@ -279,7 +279,7 @@ func TestEditFleetCoderFetchStashedDuringWsNameEdit(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	saves := 0
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { saves++; return nil }
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) ([]string, error) { saves++; return nil, nil }
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 
 	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{CoderTemplate: "tmpl"})
@@ -392,7 +392,7 @@ func TestEditFleetCoderFetchUnchangedDoesNotPersist(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	saves := 0
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { saves++; return nil }
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) ([]string, error) { saves++; return nil, nil }
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 
 	param := fleet.CoderParameter{Name: "repo", Value: "v", DefaultValue: "d", DisplayName: "Repo"}
@@ -424,7 +424,7 @@ func TestEditFleetCoderWsNameValidatedLocally(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	saves := 0
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { saves++; return nil }
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) ([]string, error) { saves++; return nil, nil }
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 
 	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{})
@@ -527,11 +527,11 @@ func TestEditFleetCoderClearTemplateFailedSaveKeepsFetchLive(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	failSaves := false
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(string, fleet.FleetSettings) error {
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) ([]string, error) {
 		if failSaves {
-			return errors.New("daemon down")
+			return nil, errors.New("daemon down")
 		}
-		return nil
+		return nil, nil
 	}
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 

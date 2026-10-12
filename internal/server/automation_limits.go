@@ -541,67 +541,90 @@ func (l *automationLimiter) due(c runChecks, load func() *state.State, now time.
 		return ""
 	}
 	var d queueDrain
-	keys := make([]string, 0, len(l.queues))
-	for k := range l.queues {
-		keys = append(keys, k)
+	// Every queue's runs are looked at together, oldest first (ids rise
+	// with each run queued, as the firings came): room on a connection that
+	// frees goes to the run that has waited longest, whichever trigger
+	// queued it. blocked keeps each queue's own order per agent.
+	type waiting struct {
+		key string
+		r   *queuedRun
 	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		blocked := map[string]bool{}
-		var kept []*queuedRun
-		for _, r := range l.queues[key] {
-			if r.pending {
-				blocked[r.agent] = true
-				kept = append(kept, r)
-				continue
-			}
-			if now.Sub(r.queuedAt) >= automationQueueTTL {
-				d.expired = append(d.expired, r)
-				continue
-			}
-			ag, ok := agentOf(r.fleet, r.agent)
-			if !ok {
-				r.why = fmt.Sprintf("agent %s no longer exists", r.agent)
-				d.refused = append(d.refused, r)
-				continue
-			}
-			if why := noLongerFires(r); why != "" {
-				r.why = why
-				d.refused = append(d.refused, r)
-				continue
-			}
-			target := ag.DeployTarget()
-			if target.Backend != fleet.BackendKubernetes {
-				// Moved off its cluster while it waited: it starts as any
-				// other agent's run does.
-				r.def, r.cluster = ag, ""
-				d.start = append(d.start, r)
-				l.holdLocked(agentKey(r.fleet, r.agent), r.reservation())
-				continue
-			}
-			r.cluster = target.KubeCluster
-			if why := refusal(c, st, r.fleet, ag); why != "" {
-				r.why = why
-				d.refused = append(d.refused, r)
-				continue
-			}
-			// A run this drain reserved already counts as a create on its
-			// connection (reserveLocked), so no extra is added here.
-			why, until := l.waitLocked(c, st, r, 0, blocked, now)
-			if why != "" {
-				r.why = why
-				blocked[r.agent] = true
-				if !until.IsZero() && (d.next.IsZero() || until.Before(d.next)) {
-					d.next = until
-				}
-				kept = append(kept, r)
-				continue
-			}
-			r.def = ag
-			l.reserveLocked(nil, r, now)
-			d.start = append(d.start, r)
+	var all []waiting
+	keys := make([]string, 0, len(l.queues))
+	for k, q := range l.queues {
+		keys = append(keys, k)
+		for _, r := range q {
+			all = append(all, waiting{k, r})
 		}
-		l.setQueueLocked(key, kept)
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].r.id < all[j].r.id })
+	// drain decides one run: started (reserved), refused or expired (into
+	// d), or kept waiting (true), with why.
+	drain := func(r *queuedRun, blocked map[string]bool) (keep bool) {
+		if r.pending {
+			blocked[r.agent] = true
+			return true
+		}
+		if now.Sub(r.queuedAt) >= automationQueueTTL {
+			d.expired = append(d.expired, r)
+			return false
+		}
+		ag, ok := agentOf(r.fleet, r.agent)
+		if !ok {
+			r.why = fmt.Sprintf("agent %s no longer exists", r.agent)
+			d.refused = append(d.refused, r)
+			return false
+		}
+		if why := noLongerFires(r); why != "" {
+			r.why = why
+			d.refused = append(d.refused, r)
+			return false
+		}
+		target := ag.DeployTarget()
+		if target.Backend != fleet.BackendKubernetes {
+			// Moved off its cluster while it waited: it starts as any
+			// other agent's run does.
+			r.def, r.cluster = ag, ""
+			d.start = append(d.start, r)
+			l.holdLocked(agentKey(r.fleet, r.agent), r.reservation())
+			return false
+		}
+		r.cluster = target.KubeCluster
+		if why := refusal(c, st, r.fleet, ag); why != "" {
+			r.why = why
+			d.refused = append(d.refused, r)
+			return false
+		}
+		// A run this drain reserved already counts as a create on its
+		// connection (reserveLocked), so no extra is added here.
+		why, until := l.waitLocked(c, st, r, 0, blocked, now)
+		if why != "" {
+			r.why = why
+			blocked[r.agent] = true
+			if !until.IsZero() && (d.next.IsZero() || until.Before(d.next)) {
+				d.next = until
+			}
+			return true
+		}
+		r.def = ag
+		l.reserveLocked(nil, r, now)
+		d.start = append(d.start, r)
+		return false
+	}
+	blockedIn := map[string]map[string]bool{}
+	keptIn := map[string][]*queuedRun{}
+	for _, w := range all {
+		blocked := blockedIn[w.key]
+		if blocked == nil {
+			blocked = map[string]bool{}
+			blockedIn[w.key] = blocked
+		}
+		if drain(w.r, blocked) {
+			keptIn[w.key] = append(keptIn[w.key], w.r)
+		}
+	}
+	for _, key := range keys {
+		l.setQueueLocked(key, keptIn[key])
 	}
 	return d
 }

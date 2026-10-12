@@ -7,15 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"path"
 	"strconv"
 	"sync"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 )
 
 // restConfigType is k8s.io/client-go/rest.Config under a package-local name,
@@ -88,7 +92,7 @@ func ExecConfig(ctx context.Context, cfg *rest.Config, req ExecRequest, stdio St
 	if err != nil {
 		return err
 	}
-	executor, err := newExecutor(cfg, u, req.Protocol)
+	executor, err := newExecutor(connectBounded(cfg, execConnectTimeout), u, req.Protocol)
 	if err != nil {
 		return err
 	}
@@ -145,6 +149,62 @@ func execURL(cfg *rest.Config, req ExecRequest) (*url.URL, error) {
 	}
 	u.RawQuery = q.Encode()
 	return &u, nil
+}
+
+// execConnectTimeout bounds an exec's connection to the API server: the
+// dial, the TLS handshake and the upgrade to the exec stream, as
+// portForwardDialTimeout bounds a port-forward's. An API server whose
+// address swallows the connection would otherwise hold the caller for the
+// kernel's connect retries (over two minutes) before anything says it is
+// down. The exec itself runs for as long as its ctx. A var so tests can
+// shorten it.
+var execConnectTimeout = 30 * time.Second
+
+// connectBounded is cfg with every round trip bounded by d: for an upgrade,
+// the connection and its answer, after which the stream no longer depends
+// on the request. One that ran out is ErrNoAnswer (kubeerr: unreachable).
+func connectBounded(cfg *rest.Config, d time.Duration) *rest.Config {
+	c := rest.CopyConfig(cfg)
+	c.Wrap(func(rt http.RoundTripper) http.RoundTripper { return boundedRoundTrip{rt: rt, d: d} })
+	return c
+}
+
+type boundedRoundTrip struct {
+	rt http.RoundTripper
+	d  time.Duration
+}
+
+func (b boundedRoundTrip) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(req.Context(), b.d)
+	resp, err := b.rt.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		timedOut := ctx.Err() == context.DeadlineExceeded && req.Context().Err() == nil
+		cancel()
+		if timedOut {
+			return nil, fmt.Errorf("%w within %s: %w", kubeerr.ErrNoAnswer, b.d, err)
+		}
+		return nil, err
+	}
+	// The bound ends with the answer's body (read for an upgrade the
+	// server refused), or at d: an upgraded connection outlives it.
+	if resp.Body == nil {
+		resp.Body = http.NoBody
+	}
+	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+// cancelOnClose is a response body that ends its request's bound when it is
+// closed.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 func newExecutor(cfg *rest.Config, u *url.URL, protocol string) (remotecommand.Executor, error) {

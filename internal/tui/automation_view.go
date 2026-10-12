@@ -189,10 +189,12 @@ func (fleetPage *fleetPage) persistAutomationSettings(m *model, fleetName string
 	}
 	prev := f.Settings
 	f.Settings = newSettings
-	if err := setFleetSettingsRemote(fleetName, newSettings); err != nil {
+	warnings, err := setFleetSettingsRemote(fleetName, newSettings)
+	if err != nil {
 		f.Settings = prev
 		return err
 	}
+	fleetPage.noteSaveWarnings(m, warnings)
 	fleetPage.buildRows(m)
 	return nil
 }
@@ -215,9 +217,9 @@ func (fleetPage *fleetPage) toggleTriggerDisabled(m *model, fleetName string, id
 		return nil
 	}
 	if disabled {
-		m.message = fmt.Sprintf("Disabled trigger %q", name)
+		m.message = fleetPage.savedMessage(fmt.Sprintf("Disabled trigger %q", name))
 	} else {
-		m.message = fmt.Sprintf("Enabled trigger %q", name)
+		m.message = fleetPage.savedMessage(fmt.Sprintf("Enabled trigger %q", name))
 	}
 	return nil
 }
@@ -281,7 +283,7 @@ func (fleetPage *fleetPage) deleteTrigger(m *model, fleetName string, idx int) t
 		m.message = fmt.Sprintf("Delete failed: %v", err)
 		return nil
 	}
-	m.message = fmt.Sprintf("Deleted trigger %q", name)
+	m.message = fleetPage.savedMessage(fmt.Sprintf("Deleted trigger %q", name))
 	return nil
 }
 
@@ -303,7 +305,7 @@ func (fleetPage *fleetPage) deleteAgent(m *model, fleetName string, idx int) tea
 		m.message = fmt.Sprintf("Delete failed: %v", err)
 		return nil
 	}
-	m.message = fmt.Sprintf("Deleted agent %q", name)
+	m.message = fleetPage.savedMessage(fmt.Sprintf("Deleted agent %q", name))
 	return nil
 }
 

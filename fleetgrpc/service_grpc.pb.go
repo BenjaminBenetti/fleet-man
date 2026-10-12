@@ -58,6 +58,7 @@ const (
 	FleetService_IssueKubeExecCredential_FullMethodName = "/fleetgrpc.FleetService/IssueKubeExecCredential"
 	FleetService_PodExec_FullMethodName                 = "/fleetgrpc.FleetService/PodExec"
 	FleetService_TriggerLogs_FullMethodName             = "/fleetgrpc.FleetService/TriggerLogs"
+	FleetService_GetAutomationStatus_FullMethodName     = "/fleetgrpc.FleetService/GetAutomationStatus"
 	FleetService_Forward_FullMethodName                 = "/fleetgrpc.FleetService/Forward"
 	FleetService_Mic_FullMethodName                     = "/fleetgrpc.FleetService/Mic"
 	FleetService_ListMicSources_FullMethodName          = "/fleetgrpc.FleetService/ListMicSources"
@@ -185,6 +186,12 @@ type FleetServiceClient interface {
 	// the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
 	// over the service works unchanged when the daemon is remote.
 	TriggerLogs(ctx context.Context, in *TriggerLogsRequest, opts ...grpc.CallOption) (*TriggerLogsReply, error)
+	// GetAutomationStatus is the automation scheduler's view of a fleet's
+	// agents (every fleet's when fleet is empty), as Watch pushes it
+	// (Event.automation_status): which ones the login check refuses, and how
+	// many runs each has queued and running. For clients that do not watch
+	// (`fleet agent list`); served to remote clients as to local ones.
+	GetAutomationStatus(ctx context.Context, in *GetAutomationStatusRequest, opts ...grpc.CallOption) (*GetAutomationStatusReply, error)
 	// Forward is the port-forward data plane: one bidi stream per forwarded TCP
 	// connection (first frame is the ForwardOpen header, the rest raw bytes).
 	// The client listens locally and pipes each accepted connection through this
@@ -738,6 +745,16 @@ func (c *fleetServiceClient) TriggerLogs(ctx context.Context, in *TriggerLogsReq
 	return out, nil
 }
 
+func (c *fleetServiceClient) GetAutomationStatus(ctx context.Context, in *GetAutomationStatusRequest, opts ...grpc.CallOption) (*GetAutomationStatusReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAutomationStatusReply)
+	err := c.cc.Invoke(ctx, FleetService_GetAutomationStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardChunk, ForwardChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[11], FleetService_Forward_FullMethodName, cOpts...)
@@ -1130,6 +1147,12 @@ type FleetServiceServer interface {
 	// the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
 	// over the service works unchanged when the daemon is remote.
 	TriggerLogs(context.Context, *TriggerLogsRequest) (*TriggerLogsReply, error)
+	// GetAutomationStatus is the automation scheduler's view of a fleet's
+	// agents (every fleet's when fleet is empty), as Watch pushes it
+	// (Event.automation_status): which ones the login check refuses, and how
+	// many runs each has queued and running. For clients that do not watch
+	// (`fleet agent list`); served to remote clients as to local ones.
+	GetAutomationStatus(context.Context, *GetAutomationStatusRequest) (*GetAutomationStatusReply, error)
 	// Forward is the port-forward data plane: one bidi stream per forwarded TCP
 	// connection (first frame is the ForwardOpen header, the rest raw bytes).
 	// The client listens locally and pipes each accepted connection through this
@@ -1328,6 +1351,9 @@ func (UnimplementedFleetServiceServer) PodExec(grpc.BidiStreamingServer[ExecIn, 
 }
 func (UnimplementedFleetServiceServer) TriggerLogs(context.Context, *TriggerLogsRequest) (*TriggerLogsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TriggerLogs not implemented")
+}
+func (UnimplementedFleetServiceServer) GetAutomationStatus(context.Context, *GetAutomationStatusRequest) (*GetAutomationStatusReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAutomationStatus not implemented")
 }
 func (UnimplementedFleetServiceServer) Forward(grpc.BidiStreamingServer[ForwardChunk, ForwardChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method Forward not implemented")
@@ -2038,6 +2064,24 @@ func _FleetService_TriggerLogs_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_GetAutomationStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAutomationStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).GetAutomationStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_GetAutomationStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).GetAutomationStatus(ctx, req.(*GetAutomationStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_Forward_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(FleetServiceServer).Forward(&grpc.GenericServerStream[ForwardChunk, ForwardChunk]{ServerStream: stream})
 }
@@ -2530,6 +2574,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TriggerLogs",
 			Handler:    _FleetService_TriggerLogs_Handler,
+		},
+		{
+			MethodName: "GetAutomationStatus",
+			Handler:    _FleetService_GetAutomationStatus_Handler,
 		},
 		{
 			MethodName: "ListMicSources",

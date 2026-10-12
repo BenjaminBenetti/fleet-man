@@ -276,6 +276,11 @@ func (s *service) UpdateKubeCluster(ctx context.Context, req *fleetgrpc.UpdateKu
 		// servers there go (or come back) now.
 		go reensureClusterBuildkit(s.bgCtx, cur.ID)
 	}
+	if cacheServersChanged(cur, next) {
+		// What the fleets' cache servers there run with: their
+		// Deployments are applied again now, not at the next create.
+		go reensureClusterServices(s.bgCtx, cur.ID)
+	}
 	return &fleetgrpc.UpdateKubeClusterReply{Cluster: s.kube.status(cur.ID)}, nil
 }
 
@@ -439,9 +444,13 @@ func (s *service) RemoveKubeCluster(ctx context.Context, req *fleetgrpc.RemoveKu
 	// The fleets' own objects there (their cache volumes included) go with
 	// a connection that is not forgotten: nothing reaches them afterwards. A
 	// forget leaves everything in the cluster.
-	if req.GetMode() != fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET && leaseHeld {
-		for _, line := range kubert.PurgeConnection(ctx, rec.ID) {
-			reply.Warnings = append(reply.Warnings, "left in namespace "+rec.Namespace+": "+line)
+	if req.GetMode() != fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET {
+		if leaseHeld {
+			for _, line := range kubert.PurgeConnection(ctx, rec.ID) {
+				reply.Warnings = append(reply.Warnings, "left in namespace "+rec.Namespace+": "+line)
+			}
+		} else if kubeMadeSomething(rec) {
+			reply.Warnings = append(reply.Warnings, s.kube.leftWithoutLease(rec))
 		}
 	}
 	// The users are looked at again, and the record removed, under the state
@@ -485,6 +494,37 @@ func (s *service) RemoveKubeCluster(ctx context.Context, req *fleetgrpc.RemoveKu
 	}
 	reply.Removed = true
 	return reply, nil
+}
+
+// kubeMadeSomething reports whether fleet may have made objects on the
+// connection: it was reached (its cluster's id was read, or a full check
+// passed), or a fleet was recorded there. One never reached holds nothing of
+// fleet's.
+func kubeMadeSomething(rec fleet.KubeCluster) bool {
+	if rec.ClusterUID != "" || !rec.VerifiedAt.IsZero() {
+		return true
+	}
+	fp, err := kubernetes.LoadFootprint()
+	return err != nil || len(fp.PresencesOf(rec.ID)) > 0
+}
+
+// leftWithoutLease is the warning of a removal (not a forget) that could not
+// delete what fleet made on the connection: this daemon does not hold its
+// owner Lease, because another daemon does (which may still use it all) or
+// the cluster was not reached. No later connection reaches those objects
+// (another connection's names differ), so the warning names their labels.
+func (m *kubeManager) leftWithoutLease(rec fleet.KubeCluster) string {
+	why := "the cluster could not be reached"
+	if st := m.status(rec.ID); st.GetState() == fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_OWNER_CONFLICT {
+		why = "another daemon holds it"
+	}
+	selector := names.LabelManagedBy + "=" + names.ManagedBy + "," + names.LabelCluster + "=" + rec.ID
+	if owner := m.ownerLabel(); owner != "" {
+		selector = names.Selector(owner, rec.ID)
+	}
+	return fmt.Sprintf("left in namespace %s: everything fleet made there for %s (its fleets' objects and cache volumes, pull Secrets, seed caches), "+
+		"as this daemon does not hold the connection's owner Lease (%s); delete them by their labels, %s",
+		rec.Namespace, rec.GetDisplayName(), why, selector)
 }
 
 // errKeepState ends a state.Update that only needed the state lock.

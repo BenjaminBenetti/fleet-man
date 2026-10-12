@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
@@ -194,14 +196,47 @@ func TestAgentList(t *testing.T) {
 		}, nil
 	}
 
+	origStatus := loadAutomationStatus
+	t.Cleanup(func() { loadAutomationStatus = origStatus })
+	loadAutomationStatus = func(_ context.Context, fleetName string) (*fleetgrpc.AutomationStatus, error) {
+		return &fleetgrpc.AutomationStatus{Agents: []*fleetgrpc.AutomationAgentStatus{
+			{Fleet: fleetName, Agent: "nightly-k8s", Queued: 2, Running: 1, Login: "log in to Claude once for this fleet on ☸ prod", LoginTool: "claude"},
+		}}, nil
+	}
+
 	out, err := runCLI(t, "agent", "list", "alpha")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	for _, want := range []string{"NAME", "BACKEND", "TRIGGERS", "builder", "devcontainer", "claude"} {
+	for _, want := range []string{"NAME", "BACKEND", "TRIGGERS", "STATUS", "builder", "devcontainer", "claude"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list output missing %q:\n%s", want, out)
 		}
+	}
+	if !regexp.MustCompile(`builder\s+devcontainer\s+1\s+-\s+claude`).MatchString(out) {
+		t.Errorf("builder's row has no status:\n%s", out)
+	}
+}
+
+// The STATUS column says what the scheduler holds of an agent: its runs
+// running and queued, and why the login check refuses its firings.
+func TestAgentListShowsTheAutomationStatus(t *testing.T) {
+	origLoad, origStatus := loadAutomation, loadAutomationStatus
+	t.Cleanup(func() { loadAutomation, loadAutomationStatus = origLoad, origStatus })
+	loadAutomation = func(context.Context, string) (fleet.FleetSettings, error) {
+		return fleet.FleetSettings{Agents: []fleet.Agent{{Name: "nightly", Backend: fleet.BackendKubernetes, KubeCluster: "prod-abc234", Command: "claude"}}}, nil
+	}
+	loadAutomationStatus = func(_ context.Context, fleetName string) (*fleetgrpc.AutomationStatus, error) {
+		return &fleetgrpc.AutomationStatus{Agents: []*fleetgrpc.AutomationAgentStatus{
+			{Fleet: fleetName, Agent: "nightly", Queued: 2, Running: 1, Login: "log in to Claude once for this fleet on ☸ prod", LoginTool: "claude"},
+		}}, nil
+	}
+	out, err := runCLI(t, "agent", "list", "alpha")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(out, "1 running, 2 queued, log in to Claude once for this fleet on ☸ prod") {
+		t.Fatalf("list output:\n%s", out)
 	}
 }
 
@@ -308,8 +343,11 @@ func TestAgentEditCluster(t *testing.T) {
 
 // The list's BACKEND column names a cluster agent's connection.
 func TestAgentListShowsTheCluster(t *testing.T) {
-	orig := loadAutomation
-	t.Cleanup(func() { loadAutomation = orig })
+	orig, origStatus := loadAutomation, loadAutomationStatus
+	t.Cleanup(func() { loadAutomation, loadAutomationStatus = orig, origStatus })
+	loadAutomationStatus = func(context.Context, string) (*fleetgrpc.AutomationStatus, error) {
+		return &fleetgrpc.AutomationStatus{}, nil
+	}
 	loadAutomation = func(context.Context, string) (fleet.FleetSettings, error) {
 		return fleet.FleetSettings{Agents: []fleet.Agent{{Name: "k", Backend: fleet.BackendKubernetes, KubeCluster: "prod-def567", Command: "claude"}}}, nil
 	}

@@ -53,6 +53,13 @@ type fleetPage struct {
 	browserDlg browserDialogState // switch-browser dialog
 	choosePR   choosePRState      // multi-PR chooser (open which PR?)
 	lpFlow     *layoutPresetFlow  // open preset creation/edit flow (nil unless mode == viewLayoutPreset)
+	// saveWarnings is what the daemon warned about the fleet settings it
+	// saved last (noteSaveWarnings).
+	saveWarnings []string
+	// removingFleets are the empty fleets whose removal job runs
+	// (removeEmptyFleet): kept off the list until it ends, though the
+	// daemon lists them until then.
+	removingFleets map[string]bool
 	// kubeRecovery is the Kubernetes recovery dialog (mode == viewKubeRecovery).
 	kubeRecovery kubeRecoveryState
 	// vscodeDlg is the VS Code Remote-SSH consent dialog (mode == viewEditorConsent).

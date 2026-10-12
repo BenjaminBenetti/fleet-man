@@ -35,6 +35,13 @@ type mcpAgent struct {
 	Backend      string `json:"backend,omitempty"`
 	// Cluster is a kubernetes agent's connection id.
 	Cluster string `json:"cluster,omitempty"`
+	// Queued and Running are how many of its runs wait in its triggers'
+	// queues and have an instance the scheduler watches; Login is why the
+	// automation login check refuses its firings (empty: it lets them run).
+	// The read tool fills them in.
+	Queued  int    `json:"queued,omitempty"`
+	Running int    `json:"running,omitempty"`
+	Login   string `json:"login,omitempty"`
 }
 
 type mcpTrigger struct {
@@ -178,7 +185,19 @@ func (s *service) mcpAutomationList(ctx context.Context, _ *mcp.CallToolRequest,
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	out := toMCPAutomation(settings)
+	reply, err := s.GetAutomationStatus(ctx, &fleetgrpc.GetAutomationStatusRequest{Fleet: in.Fleet})
+	if err != nil {
+		return nil, AutomationOutput{}, mcpErr(err)
+	}
+	for _, st := range reply.GetStatus().GetAgents() {
+		for i := range out.Agents {
+			if out.Agents[i].Name == st.GetAgent() {
+				out.Agents[i].Queued, out.Agents[i].Running, out.Agents[i].Login = int(st.GetQueued()), int(st.GetRunning()), st.GetLogin()
+			}
+		}
+	}
+	return nil, out, nil
 }
 
 // --- agents ---

@@ -127,11 +127,13 @@ func Serve(ctx context.Context) error {
 	// On the way out, let the relay and the MCP sockets go before the process
 	// exits (bounded): a socket file left behind is only replaced on the next
 	// start, and one in an instance's control dir outlives a daemon started
-	// with FLEET_SSH_AGENT_SOCK=off.
+	// with FLEET_SSH_AGENT_SOCK=off. The loops that write ~/.fleet (loops,
+	// below) end within the same bound, so none writes after Serve returns.
+	var loops []<-chan struct{}
 	defer func() {
 		cancelHub()
 		deadline := time.After(3 * time.Second)
-		for _, done := range []<-chan struct{}{agentRelayDone, instanceMCPDone} {
+		for _, done := range append([]<-chan struct{}{agentRelayDone, instanceMCPDone}, loops...) {
 			select {
 			case <-done:
 			case <-deadline:
@@ -156,7 +158,7 @@ func Serve(ctx context.Context) error {
 	// Automation scheduler (issue #188): fires Schedule triggers and reaps idle
 	// agents. Runs unconditionally — cron triggers must fire even when no TUI is
 	// connected — and stops on shutdown via hubCtx.
-	go svc.runScheduler(hubCtx)
+	loops = append(loops, goLoop(func() { svc.runScheduler(hubCtx) }))
 
 	// Control-socket listeners: the server owns every running instance's control
 	// socket and turns received browser.open envelopes (from an in-container
@@ -229,14 +231,14 @@ func Serve(ctx context.Context) error {
 	// shutdown via hubCtx. Launched AFTER startMCPServer so its immediate
 	// first-tick snapshot already sees the freshly-written mcp.port/token/env
 	// files instead of racing them.
-	go svc.runBackupLoop(hubCtx)
+	loops = append(loops, goLoop(func() { svc.runBackupLoop(hubCtx) }))
 
 	// Log rotation loop: at 3am local it cuts the shared event log
 	// (~/.fleet/fleet.log) into ~/.fleet/logs/fleetd/<date>.log and prunes dated
 	// logs past the retention window, so the append-only trail every fleet process
 	// writes to can't grow without bound. Unconditional and stops on shutdown via
 	// hubCtx, like the backup loop above.
-	go svc.runLogRotateLoop(hubCtx)
+	loops = append(loops, goLoop(func() { svc.runLogRotateLoop(hubCtx) }))
 
 	// Tunnel-facing servers fed by the gateway tunnel demux (no extra port/socket):
 	//   - gRPC: the SAME FleetService as the local unix socket, but gated by the
@@ -382,6 +384,17 @@ func Serve(ctx context.Context) error {
 	runShutdownSteps(shutdownBudget, svc.shutdownSteps())
 	<-drained
 	return nil
+}
+
+// goLoop runs loop on a goroutine of its own and returns a channel closed
+// once it returns.
+func goLoop(loop func()) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		loop()
+	}()
+	return done
 }
 
 var (

@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/owner"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/svcruntimetest"
 )
 
 // everyKubeField is a KubeCluster with a valid, non-default value in every
@@ -901,5 +903,106 @@ func TestKubeConnectionsReachThePoolAtOnce(t *testing.T) {
 	}
 	if got := f.pooledIDs(); slices.Contains(got, id) {
 		t.Fatalf("after the remove the pool still has %v", got)
+	}
+}
+
+// A removal that could not take what fleet made on the connection with it
+// (this daemon does not hold its owner Lease: the cluster was not reached,
+// or another daemon holds it) says what stays and how to find it; a forget
+// leaves everything by design and says nothing of it.
+func TestRemoveKubeClusterWithoutTheLeaseSaysWhatStays(t *testing.T) {
+	f := newKubeFixture(t)
+	// One never reached holds nothing of fleet's: no warning.
+	never := f.add(&fleetgrpc.KubeCluster{Context: "prod"}).GetCluster().GetId()
+	reply, err := f.svc.RemoveKubeCluster(context.Background(), &fleetgrpc.RemoveKubeClusterRequest{Id: never})
+	if err != nil || !reply.GetRemoved() || len(reply.GetWarnings()) != 0 {
+		t.Fatalf("remove of a connection never reached = %v, %v; want no warning", reply, err)
+	}
+
+	id := f.add(&fleetgrpc.KubeCluster{Context: "prod"}).GetCluster().GetId()
+	// Reached once (its cluster's id read), unreachable now.
+	if err := state.UpdateKubeClusters(func(k *state.KubeClusters) error {
+		k.Find(id).ClusterUID = "0d3c1f9e-aaaa-bbbb-cccc-000000000002"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.kube.sync()
+	reply, err = f.svc.RemoveKubeCluster(context.Background(), &fleetgrpc.RemoveKubeClusterRequest{Id: id})
+	if err != nil || !reply.GetRemoved() {
+		t.Fatalf("remove = %v, %v", reply, err)
+	}
+	w := strings.Join(reply.GetWarnings(), "\n")
+	for _, want := range []string{"left in namespace team", "does not hold the connection's owner Lease", "could not be reached", names.Selector(testIdentity.Owner(), id)} {
+		if !strings.Contains(w, want) {
+			t.Errorf("warnings %q, want %q", w, want)
+		}
+	}
+
+	id = f.add(&fleetgrpc.KubeCluster{Context: "prod"}).GetCluster().GetId()
+	reply, err = f.svc.RemoveKubeCluster(context.Background(), &fleetgrpc.RemoveKubeClusterRequest{Id: id, Mode: fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET})
+	if err != nil || !reply.GetRemoved() || len(reply.GetWarnings()) != 0 {
+		t.Fatalf("forget = %v, %v; want no warning", reply, err)
+	}
+}
+
+// heldElsewhere is an owner Lease another incarnation of this daemon holds.
+type heldElsewhere struct{}
+
+func (heldElsewhere) Ensure(context.Context) (owner.LeaseStatus, error) {
+	return owner.LeaseStatus{Holder: testIdentity.Owner() + "-bbbbbbbbbbbbbbbb", HolderHost: "restored-host", RenewedAt: time.Now(), FreeAt: time.Now().Add(time.Minute)}, nil
+}
+func (heldElsewhere) Holding() bool                 { return false }
+func (heldElsewhere) Release(context.Context) error { return nil }
+
+// Removed while another daemon holds the connection's Lease: the warning
+// says that one may still use what stays.
+func TestRemoveKubeClusterHeldElsewhereSaysWhatStays(t *testing.T) {
+	f := newKubeFixture(t)
+	f.svc.kube.newLease = func(*kubeLink, fleet.KubeCluster, owner.Identity) kubeLease { return heldElsewhere{} }
+	f.start()
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
+	f.awaitState(id, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_OWNER_CONFLICT)
+	reply, err := f.svc.RemoveKubeCluster(context.Background(), &fleetgrpc.RemoveKubeClusterRequest{Id: id})
+	if err != nil || !reply.GetRemoved() {
+		t.Fatalf("remove = %v, %v", reply, err)
+	}
+	if w := strings.Join(reply.GetWarnings(), "\n"); !strings.Contains(w, "left in namespace fleet") || !strings.Contains(w, "another daemon holds it") {
+		t.Fatalf("warnings %q", w)
+	}
+}
+
+// An edit of what the connection's cache servers run with reaches the
+// servers running now: UpdateKubeCluster re-ensures the fleets' services
+// there; an edit of anything else leaves them be.
+func TestUpdateKubeClusterReensuresTheCacheServers(t *testing.T) {
+	f := newKubeFixture(t)
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
+	seedKubeInstance(t, "alpha", "one", id, "")
+	if err := state.Update(func(st *state.State) error {
+		st.Fleets["alpha"].Settings.DebCacheServer = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recs := clusterRecorders(t, svcruntimetest.New("docker"), nil, id)
+	update := func(c *fleetgrpc.KubeCluster, paths ...string) {
+		t.Helper()
+		if _, err := f.svc.UpdateKubeCluster(context.Background(), &fleetgrpc.UpdateKubeClusterRequest{Id: id, Cluster: c, UpdateMask: &fieldmaskpb.FieldMask{Paths: paths}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update(&fleetgrpc.KubeCluster{DisplayName: "lab"}, "display_name")
+	time.Sleep(50 * time.Millisecond)
+	if got := ensured(recs[id]); len(got) != 0 {
+		t.Fatalf("a rename re-ensured %v", got)
+	}
+	update(&fleetgrpc.KubeCluster{ServiceImages: &fleetgrpc.KubeServiceImages{Debcache: "mirror.example/apt-cacher-ng:3"}}, "service_images")
+	deadline := time.Now().Add(5 * time.Second)
+	for !reflect.DeepEqual(ensured(recs[id]), []string{"alpha/debcache"}) {
+		if time.Now().After(deadline) {
+			t.Fatalf("after the image edit ensured %v, want alpha/debcache", ensured(recs[id]))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

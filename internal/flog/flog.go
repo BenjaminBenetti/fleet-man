@@ -26,6 +26,7 @@
 package flog
 
 import (
+	"flag"
 	"io"
 	"log/slog"
 	"os"
@@ -40,6 +41,17 @@ const logFileName = "fleet.log"
 var (
 	initOnce sync.Once
 	logger   *slog.Logger
+
+	// startHome is HOME as the process started with it, and discard the
+	// logger a test binary gets while it still has it (L).
+	startHome = os.Getenv("HOME")
+	discard   = slog.New(slog.DiscardHandler)
+	// testBinary reports whether this process is a Go test binary: its
+	// flags are registered before any test runs, and `go test` names it
+	// <package>.test.
+	testBinary = sync.OnceValue(func() bool {
+		return flag.Lookup("test.v") != nil || strings.HasSuffix(os.Args[0], ".test")
+	})
 )
 
 // Path returns the absolute path of the event log file (~/.fleet/fleet.log).
@@ -56,7 +68,15 @@ func Path() string {
 // L returns the shared logger, initializing it on first use. It always
 // returns a usable *slog.Logger: if the log file cannot be opened the logger
 // writes to io.Discard so callers never have to nil-check or handle errors.
+//
+// A test binary logs only once its tests have a HOME of their own (a
+// TestMain's, or t.Setenv's): until then, and whenever a test hands HOME
+// back, records are discarded, so `go test` never appends to the invoking
+// user's ~/.fleet/fleet.log. The file is opened under the first such HOME.
 func L() *slog.Logger {
+	if testBinary() && os.Getenv("HOME") == startHome {
+		return discard
+	}
 	initOnce.Do(initLogger)
 	return logger
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/editorlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/execstream"
 	"github.com/BenjaminBenetti/fleet-man/internal/sshalias"
@@ -46,15 +47,16 @@ func newSSHProxyCmd() *cobra.Command {
 	}
 }
 
-// sshProxyResolve finds the daemon an alias leads to (a var for tests).
-var sshProxyResolve = func(ctx context.Context, alias string) (sshalias.Target, editorlaunch.Dialer, error) {
-	return editorlaunch.ResolveAlias(ctx, alias, editorlaunch.LocalDaemon)
+// sshProxyResolve finds the daemon an alias leads to, and the armada remote
+// URL it is reached by ("" for none), a var for tests.
+var sshProxyResolve = func(ctx context.Context, alias string) (sshalias.Target, editorlaunch.Dialer, string, error) {
+	return editorlaunch.ResolveAliasRemote(ctx, alias, editorlaunch.LocalDaemon)
 }
 
 // runSSHProxy carries one ssh connection (in, out) to the ssh-server of the
 // instance alias names, returning ssh-server's exit code.
 func runSSHProxy(ctx context.Context, alias string, in io.Reader, out, errOut io.Writer) (int, error) {
-	target, dial, err := sshProxyResolve(ctx, alias)
+	target, dial, remoteURL, err := sshProxyResolve(ctx, alias)
 	if err != nil {
 		return 0, err
 	}
@@ -63,7 +65,18 @@ func runSSHProxy(ctx context.Context, alias string, in io.Reader, out, errOut io
 		return 0, err
 	}
 	defer conn.Close()
-	code, err := execstream.Run(ctx, conn.Service(), execstream.Options{
+	return sshProxyOver(ctx, conn.Service(), target, remoteURL, in, out, errOut)
+}
+
+// sshProxyOver runs the instance's ssh-server over svc with the connection on
+// its stdio. Through an armada remote with [ agent: on ] this machine's
+// ssh-agent is provided for the connection's life, as a remote `fleet
+// shell` provides it: the editor's git and ssh in the instance use the
+// user's keys.
+func sshProxyOver(ctx context.Context, svc fleetgrpc.FleetServiceClient, target sshalias.Target, remoteURL string, in io.Reader, out, errOut io.Writer) (int, error) {
+	stopAgent := forwardAgentTo(ctx, svc, remoteURL, true)
+	defer stopAgent()
+	code, err := execstream.Run(ctx, svc, execstream.Options{
 		Fleet:    target.Fleet,
 		Instance: target.Instance,
 		Argv:     sshalias.ServerArgv(),

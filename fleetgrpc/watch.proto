@@ -107,6 +107,17 @@ message AutomationStatus {
   repeated AutomationAgentStatus agents = 1;
 }
 
+// GetAutomationStatusRequest asks for the automation status of one fleet's
+// agents (fleet), or of every fleet's (empty).
+message GetAutomationStatusRequest {
+  string fleet = 1;
+}
+
+// GetAutomationStatusReply is AutomationStatus as of the call.
+message GetAutomationStatusReply {
+  AutomationStatus status = 1;
+}
+
 // AutomationAgentStatus is one agent of a fleet in AutomationStatus.
 message AutomationAgentStatus {
   string fleet = 1;

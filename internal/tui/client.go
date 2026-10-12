@@ -218,15 +218,14 @@ var rebuildInstanceRemote = func(fleetName, instanceName string) error {
 
 // destroyInstanceRemote tears down one instance (destroyFleet=false) or the
 // whole fleet (destroyFleet=true), to completion.
-var destroyInstanceRemote = func(fleetName, instanceName string, destroyFleet bool) error {
-	_, err := awaitJobDone(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
+var destroyInstanceRemote = func(fleetName, instanceName string, destroyFleet bool) ([]string, error) {
+	return awaitJobDone(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
 		req := &fleetgrpc.DestroyInstanceRequest{Fleet: fleetName, DestroyFleet: destroyFleet}
 		if instanceName != "" {
 			req.Instance = &instanceName
 		}
 		return svc.DestroyInstance(ctx, req)
 	})
-	return err
 }
 
 // closeMutationConn tears down the mutation connection. Called from Run() after
@@ -246,14 +245,6 @@ func closeMutationConn() {
 var createFleetRemote = func(name, remote string) error {
 	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
 		_, err := svc.CreateFleet(ctx, &fleetgrpc.CreateFleetRequest{Name: name, Remote: remote})
-		return err
-	})
-}
-
-// destroyFleetRemote removes an (empty) fleet record.
-var destroyFleetRemote = func(name string) error {
-	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
-		_, err := svc.DestroyFleet(ctx, &fleetgrpc.DestroyFleetRequest{Name: name})
 		return err
 	})
 }
@@ -363,15 +354,20 @@ var notifyTUIConnectedRemote = func() error {
 }
 
 // setFleetSettingsRemote replaces a fleet's settings (full FleetSettings,
-// preserving tri-state presence).
-var setFleetSettingsRemote = func(fleetName string, s fleet.FleetSettings) error {
-	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
-		_, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
+// preserving tri-state presence), returning what the daemon saved them with
+// but warns about: a custom mount's host folder missing on the daemon host,
+// an agent whose firings the login check will refuse.
+var setFleetSettingsRemote = func(fleetName string, s fleet.FleetSettings) ([]string, error) {
+	var warnings []string
+	err := mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
+		reply, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
 			Fleet:    fleetName,
 			Settings: protoconv.FleetSettingsToProto(s),
 		})
+		warnings = reply.GetWarnings()
 		return err
 	})
+	return warnings, err
 }
 
 // triggerLogsRemote fetches a trigger's recorded event logs (its recent

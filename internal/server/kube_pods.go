@@ -33,7 +33,8 @@ import (
 //   - after a restart the cluster made on its own (an OOM kill, a crash, an
 //     eviction, a drain, a lost node, a deleted pod) it re-runs the
 //     instance's post-start work once the pod runs again, and shows
-//     "sessions reset: <cause>" on the instance's row until the next attach;
+//     "sessions reset: <cause>" on the instance's row until the next attach
+//     or until fleet stops it;
 //   - it parks a crash-looping instance (scaled to 0 and recorded stopped,
 //     the reason in its warning), naming an out-of-memory loop as one;
 //   - it serves a running instance's published ports (-p, appPort) on the
@@ -160,7 +161,8 @@ type kubeInst struct {
 	seenRestart   string
 	postStarted   string
 	postStartBusy bool
-	// notice is the "sessions reset" restart shown until the next attach.
+	// notice is the "sessions reset" restart shown until the next attach,
+	// or until the instance is no longer running by fleet's own hand.
 	notice        *backend.Restart
 	sessionsEnded bool
 	// audio is why the instance can have no audio ("" when it can).
@@ -548,6 +550,12 @@ func (k *kubePods) evaluate(ctx context.Context, ref kubeRef) {
 			// the post-start work.
 			ki.postStarted = r.ID
 		}
+	}
+	if !running && ki.notice != nil {
+		// Fleet stopped it (or is starting or rebuilding it): the sessions
+		// the notice speaks of went with the user's own stop, and the next
+		// start's are new.
+		ki.notice, ki.sessionsEnded = nil, false
 	}
 	var postStart func()
 	if running && obs.Live == backend.LiveStatusRunning && ki.seenRestart != ki.postStarted && !ki.postStartBusy {

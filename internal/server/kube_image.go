@@ -417,9 +417,7 @@ func (m *kubeManager) releaseImages(rec fleet.KubeCluster, leaseHeld bool) {
 			flog.Warn("kube: forget the removed connection's gateway images", "cluster", rec.ID, "err", err)
 		}
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), kubeImageCleanupTime)
-		defer cancel()
+	m.cleanup(func(ctx context.Context) {
 		var seedCaches func(context.Context) ([]string, error)
 		if leaseHeld {
 			if link, err := m.connect(rec, m.environ()); err == nil {
@@ -456,5 +454,76 @@ func (m *kubeManager) releaseImages(rec fleet.KubeCluster, leaseHeld bool) {
 				flog.Warn("kube: remove the connection's directory", "cluster", rec.ID, "err", err)
 			}
 		}
+	})
+}
+
+// cleanup runs work in the background, bounded by kubeImageCleanupTime and
+// ended by the daemon's shutdown (the serve loop's context), as one of the
+// collections waitCleanups waits for.
+func (m *kubeManager) cleanup(work func(ctx context.Context)) {
+	m.mu.Lock()
+	base := m.ctx
+	m.mu.Unlock()
+	if base == nil {
+		base = context.Background()
+	}
+	m.cleanups.add()
+	go func() {
+		defer m.cleanups.done()
+		ctx, cancel := context.WithTimeout(base, kubeImageCleanupTime)
+		defer cancel()
+		work(ctx)
 	}()
+}
+
+// waitCleanups waits for the background collections until ctx ends, and
+// reports whether they all ended.
+func (m *kubeManager) waitCleanups(ctx context.Context) bool {
+	return m.cleanups.wait(ctx)
+}
+
+// cleanupSet counts the collections running in the background. Unlike a
+// sync.WaitGroup it takes a new one while someone waits (a removal that an
+// RPC still in the shutdown's drain makes, as the shutdown waits), and a
+// wait that gives up leaves nothing behind.
+type cleanupSet struct {
+	mu      sync.Mutex
+	running int
+	// idle is closed once running drops to 0 (nil while none ran).
+	idle chan struct{}
+}
+
+func (c *cleanupSet) add() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.running == 0 {
+		c.idle = make(chan struct{})
+	}
+	c.running++
+}
+
+func (c *cleanupSet) done() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.running--; c.running == 0 {
+		close(c.idle)
+	}
+}
+
+// wait reports whether every collection ended (including ones started while
+// it waited) before ctx did.
+func (c *cleanupSet) wait(ctx context.Context) bool {
+	for {
+		c.mu.Lock()
+		running, idle := c.running, c.idle
+		c.mu.Unlock()
+		if running == 0 {
+			return true
+		}
+		select {
+		case <-idle:
+		case <-ctx.Done():
+			return false
+		}
+	}
 }

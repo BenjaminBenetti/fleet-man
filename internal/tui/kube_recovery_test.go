@@ -604,4 +604,8 @@ func TestKubePublishedPortNotes(t *testing.T) {
 	if kubePortNote(&fleetgrpc.KubePublishedPort{Address: "::", HostPort: 1}, true) == "" || kubePortNote(&fleetgrpc.KubePublishedPort{Address: "10.0.0.5", HostPort: 1}, true) != "" {
 		t.Error("only an unspecified address is every interface")
 	}
+	// A port left to the daemon to pick has no host port to name.
+	if got := kubePortNote(&fleetgrpc.KubePublishedPort{Address: "10.9.9.9", ContainerPort: 3000, Error: "cannot assign requested address"}, false); got != "⚠ instance port 3000 not published: cannot assign requested address" {
+		t.Errorf("a picked port that could not listen: %q", got)
+	}
 }

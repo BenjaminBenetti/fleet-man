@@ -20,7 +20,7 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 	// A focused fleet that no longer exists (deleted while focused) drops focus
 	// so the list doesn't render empty.
 	if fleetPage.focusedFleet != "" {
-		if _, ok := m.st.Fleets[fleetPage.focusedFleet]; !ok {
+		if _, ok := m.st.Fleets[fleetPage.focusedFleet]; !ok || fleetPage.removingFleets[fleetPage.focusedFleet] {
 			fleetPage.focusedFleet = ""
 		}
 	}
@@ -30,6 +30,10 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 	for _, name := range names {
 		// Focus mode renders only the focused fleet; everything else is hidden.
 		if fleetPage.focusedFleet != "" && name != fleetPage.focusedFleet {
+			continue
+		}
+		// An empty fleet being removed is gone to the user already.
+		if fleetPage.removingFleets[name] {
 			continue
 		}
 		f := m.st.Fleets[name]

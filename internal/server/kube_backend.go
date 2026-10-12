@@ -150,7 +150,7 @@ func (m *kubeManager) collectImages(rec fleet.KubeCluster, link *kubeLink) {
 	}
 	m.imageGC.busy[rec.ID], m.imageGC.last[rec.ID] = true, m.now()
 	m.imageGC.mu.Unlock()
-	go func() {
+	m.cleanup(func(ctx context.Context) {
 		defer func() {
 			m.imageGC.mu.Lock()
 			delete(m.imageGC.busy, rec.ID)
@@ -164,8 +164,6 @@ func (m *kubeManager) collectImages(rec fleet.KubeCluster, link *kubeLink) {
 		if err != nil {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), kubeImageCleanupTime)
-		defer cancel()
 		t := kubeimage.Target{Cluster: &rec, DaemonID: id.DaemonID, Labels: pullSecretLabels(id.Owner(), rec.ID),
 			Secrets: kubernetes.PullSecrets{Client: link.client, Namespace: rec.Namespace}}
 		res, err := im.manager.GC(ctx, t, kubeimage.GCOptions{Live: func(holder string) bool { return live[holder] }})
@@ -183,7 +181,7 @@ func (m *kubeManager) collectImages(rec fleet.KubeCluster, link *kubeLink) {
 		case len(deleted) > 0:
 			flog.Info("kube: collected the connection's seed caches", "cluster", rec.ID, "deleted", strings.Join(deleted, ", "))
 		}
-	}()
+	})
 }
 
 // liveKubeKeys are the keys of connection id's instances in state.json:

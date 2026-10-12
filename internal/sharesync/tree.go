@@ -39,8 +39,10 @@ type TreeRoot struct {
 	// root is the folder it is in, holding only it (internal/mounts/hostbind).
 	Only []string
 	// ReadOnly: the side never writes Dir (a read-only host bind's folder on
-	// the daemon host, which the hub takes changes from alone): every op is
-	// refused, and the folder need not take the self-test's writes.
+	// the daemon host, which the hub takes changes from alone): an op of
+	// anything but what the folder holds is answered with the folder's own
+	// state (applyReadOnly), and the folder need not take the self-test's
+	// writes.
 	ReadOnly bool
 }
 
@@ -137,6 +139,11 @@ type record struct {
 	// Sent marks a local change the hub has not seen yet: Entry is the
 	// side's own. The hub's ops never replace it until it has.
 	Sent bool `json:"x,omitempty"`
+	// Made marks a synced folder the side made for what an op put in it,
+	// before the folder's own op came (mkdirParents): its mode is not the
+	// side's to report, so the side holds it at no rev, and the folder's op
+	// sets the mode when it comes.
+	Made bool `json:"made,omitempty"`
 }
 
 // treeMeta is a tree root journal's metadata.
@@ -317,7 +324,7 @@ func (t *Tree) Hello() Hello {
 		tr.mu.Lock()
 		rh := RootHello{Root: name, Epoch: tr.epoch, Held: []Held{}}
 		for p, rec := range tr.records {
-			if !rec.Sent && rec.Entry.Live() {
+			if !rec.Sent && !rec.Made && rec.Entry.Live() {
 				rh.Held = append(rh.Held, Held{Path: p, Rev: rec.Rev, Entry: rec.Entry})
 			}
 		}
