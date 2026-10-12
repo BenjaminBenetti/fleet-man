@@ -278,3 +278,31 @@ func waitUntil(t *testing.T, what string, ok func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A port whose dials into the instance keep failing logs the first, then a
+// line a minute with how many more failed, and one once a dial works again.
+func TestDialFailuresArePaced(t *testing.T) {
+	f := &dialFailures{}
+	t0 := time.Now()
+	if logIt, n := f.failed(t0); !logIt || n != 0 {
+		t.Fatalf("first failure: log %v, unlogged %d", logIt, n)
+	}
+	for i := 1; i <= 50; i++ {
+		if logIt, _ := f.failed(t0.Add(time.Duration(i) * time.Second)); logIt {
+			t.Fatalf("failure %d within the minute was logged", i)
+		}
+	}
+	if logIt, n := f.failed(t0.Add(publishDialWarnEvery + time.Second)); !logIt || n != 50 {
+		t.Fatalf("a minute on: log %v, unlogged %d (want 50)", logIt, n)
+	}
+	_, _ = f.failed(t0.Add(publishDialWarnEvery + 2*time.Second))
+	if recovered, n := f.worked(); !recovered || n != 1 {
+		t.Fatalf("a dial that works: recovered %v, unlogged %d (want 1)", recovered, n)
+	}
+	if recovered, _ := f.worked(); recovered {
+		t.Fatal("a second working dial logged a recovery")
+	}
+	if logIt, _ := f.failed(t0.Add(publishDialWarnEvery + 3*time.Second)); !logIt {
+		t.Fatal("the first failure after a recovery was not logged")
+	}
+}

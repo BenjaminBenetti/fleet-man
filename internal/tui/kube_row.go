@@ -124,9 +124,12 @@ func (m *model) kubeRunningNotes(inst *fleet.Instance, rt *fleetgrpc.InstanceRun
 // (another process holds it), and, when this TUI's daemon is remote, one
 // listening on every interface of the daemon host, which puts the instance on
 // that host's network. "" for a port that serves on 127.0.0.1, or on an
-// address the user's own machine owns.
+// address the user's own machine owns. A port the devcontainer left to the
+// daemon to pick (host port 0) is named by the instance's port.
 func kubePortNote(p *fleetgrpc.KubePublishedPort, remote bool) string {
 	switch {
+	case p.GetError() != "" && p.GetHostPort() == 0:
+		return fmt.Sprintf("⚠ instance port %d not published: %s", p.GetContainerPort(), p.GetError())
 	case p.GetError() != "":
 		return fmt.Sprintf("⚠ port %d not published: %s", p.GetHostPort(), p.GetError())
 	case remote && wildcardAddress(p.GetAddress()):
