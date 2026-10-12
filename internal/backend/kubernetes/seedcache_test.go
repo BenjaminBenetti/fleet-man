@@ -566,3 +566,48 @@ func TestSeedFromCacheKeepsCachesOnAReadError(t *testing.T) {
 		t.Fatal("a read error turned the connection's seed caches off")
 	}
 }
+
+// A seed cache whose build fails after its disk was applied leaves nothing:
+// the unfinished disk is deleted, the index never names it and the create
+// does not count it as used. A failure that says nothing of clones (here the
+// trim Job's render) leaves the connection's seed caches on.
+func TestBuildSeedCacheFailureLeavesNothing(t *testing.T) {
+	r := newHandleRig(t)
+	t.Cleanup(func() { seedCaches.turnOff(handleCluster, time.Time{}) })
+	seedCaches.turnOff(handleCluster, time.Time{})
+	c := &creation{b: newHandle(r.inst(), r.pool), p: r.pool, cs: r.cs, ns: handleNS, owner: handleOwner,
+		id: bound{cluster: handleCluster, key: handleKey, fleet: "alpha", name: "web", sts: handleSTS()}}
+	p := &seedCachePlan{id: "abc234def567", name: names.SeedCache("abc234def567"), image: "repo/img@sha256:1"}
+	disk := cacheTestDisk()
+	disk.Name, disk.Namespace = handleSTS(), handleNS
+	adm := &podspec.Admitted{Objects: &podspec.Objects{Disk: disk}}
+	var applied bool
+	r.cs.PrependReactor("patch", "persistentvolumeclaims", func(a k8stesting.Action) (bool, kruntime.Object, error) {
+		if a.(k8stesting.PatchAction).GetName() == p.name {
+			applied = true
+		}
+		return false, nil, nil
+	})
+
+	// An empty render input: the trim Job cannot render, after the disk.
+	c.buildSeedCache(context.Background(), adm, podspec.RenderInput{}, nil, p)
+	if !applied {
+		t.Fatal("the seed cache's disk was never applied: the failure came too early to test the cleanup")
+	}
+	if _, err := r.cs.CoreV1().PersistentVolumeClaims(handleNS).Get(context.Background(), p.name, metav1.GetOptions{}); err == nil {
+		t.Fatal("the unfinished seed cache's disk was left behind")
+	}
+	if c.seedCacheUse != "" {
+		t.Fatalf("the create counts the failed cache as used: %q", c.seedCacheUse)
+	}
+	ix, err := LoadSeedCacheIndex(handleCluster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := ix.Find(p.name); e != nil {
+		t.Fatalf("the index names the failed cache: %+v", e)
+	}
+	if seedCaches.isOff(handleCluster, time.Now()) {
+		t.Fatal("a failure that is no clone's turned the connection's seed caches off")
+	}
+}
