@@ -516,7 +516,7 @@ func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ 
 			"4. Unpack the archive over the settings dir: `tar -xJf <archive> -C " + fleetDir + "`. Each file lands back at its original path under the settings dir (kube/ files included), overwriting the current copy; files the archive does not hold are left alone.",
 			"5. Restart the daemon — run any `fleet` command (it auto-spawns fleetd) or start `fleet server` directly — then verify with the `fleet_version` and `fleet_status` tools.",
 		},
-		Warning: "Stop fleetd BEFORE unpacking. It rewrites these files continuously and snapshots hourly, so restoring under a live daemon can corrupt state.json or have your restore immediately overwritten. The archives contain secrets (mcp.token, armada.json's tokens, kube_clusters.json's gateway pull credentials, the fleets' Buildkit CA keys) — handle them accordingly.",
+		Warning: "Stop fleetd BEFORE unpacking. It rewrites these files continuously and snapshots hourly, so restoring under a live daemon can corrupt state.json or have your restore immediately overwritten. The archives contain secrets (mcp.token, armada.json's tokens, editor_endpoints.json's tokens, kube_clusters.json's gateway pull credentials, the fleets' Buildkit CA keys) — handle them accordingly.",
 	}
 	if len(archives) == 0 {
 		out.Summary = "No backups exist yet under " + out.BackupDir + " (the daemon writes the first within an hour of starting). " + out.Summary
