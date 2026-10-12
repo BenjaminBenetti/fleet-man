@@ -47,6 +47,19 @@ func envMap(entries []string) map[string]string {
 	return m
 }
 
+// shortTempDir is a temp dir short enough for a unix socket path: macOS's
+// t.TempDir() (/var/folders/..., the test name appended) runs past its
+// 104-byte sun_path.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "execas-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // matrixHost is a pod as the identity matrix sees it: the matrix /etc, a
 // devcontainer spec, and a bin dir holding "tool" on the container PATH and
 // "probed-tool" only on the PATH the user's startup files set.
@@ -467,7 +480,7 @@ func TestPlanEnvironmentLayers(t *testing.T) {
 // serve an agent); a socket file of the user's own beats it through remoteEnv
 // either way, as on docker.
 func TestPlanExportsTheAgentSocketOnlyWhileItIsThere(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "agent.sock")
+	sock := filepath.Join(shortTempDir(t), "agent.sock")
 	m := newMatrixHost(t)
 	m.host.AgentSocket = nil
 	m.host.Spec.SSHAuthSock = sock
