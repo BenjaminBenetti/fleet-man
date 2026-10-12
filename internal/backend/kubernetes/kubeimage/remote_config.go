@@ -53,36 +53,11 @@ func (o RemoteOptions) client(ctx context.Context, domain string) (*registryClie
 // would move the host's tag to the other architecture, under every
 // devcontainer-backend instance that uses it.
 func RemoteImageConfig(ctx context.Context, ref, platform string, opts RemoteOptions) (kubeshim.ImageConfig, error) {
-	r, err := ParseReference(ref)
+	pm, err := readPlatformManifest(ctx, ref, platform, opts)
 	if err != nil {
 		return kubeshim.ImageConfig{}, err
 	}
-	c, err := opts.client(ctx, r.Domain)
-	if err != nil {
-		return kubeshim.ImageConfig{}, err
-	}
-	tagOrDigest := r.Digest
-	if tagOrDigest == "" {
-		tagOrDigest = r.Tag
-	}
-	if tagOrDigest == "" {
-		tagOrDigest = "latest"
-	}
-	body, mediaType, digest, err := c.getManifest(ctx, r.Path, tagOrDigest)
-	if err != nil {
-		return kubeshim.ImageConfig{}, fmt.Errorf("reading %s from its registry: %w", ref, err)
-	}
-	manifest, picked := body, false
-	if isIndex(mediaType) {
-		picked = true
-		child, err := pickPlatform(body, platform)
-		if err != nil {
-			return kubeshim.ImageConfig{}, fmt.Errorf("%s: %w", ref, err)
-		}
-		if manifest, _, _, err = c.getManifest(ctx, r.Path, child); err != nil {
-			return kubeshim.ImageConfig{}, fmt.Errorf("reading %s for %s from its registry: %w", ref, platformOr(platform), err)
-		}
-	}
+	c, r, manifest, picked, digest := pm.c, pm.ref, pm.body, pm.picked, pm.digest
 	var m struct {
 		Config struct {
 			Digest string `json:"digest"`
@@ -122,6 +97,55 @@ func RemoteImageConfig(ctx context.Context, ref, platform string, opts RemoteOpt
 		img.RepoTags = []string{r.Repository() + ":" + r.Tag}
 	}
 	return img, nil
+}
+
+// platformManifest is an image's manifest for a platform, as its registry
+// has it.
+type platformManifest struct {
+	// c is the client that read it, ref the image's reference.
+	c   *registryClient
+	ref Reference
+	// body is the platform's manifest; picked when an index named it.
+	body   []byte
+	picked bool
+	// digest is what ref resolves to (the index's when picked).
+	digest string
+}
+
+// readPlatformManifest reads ref's manifest from its registry, the one for
+// platform (pickPlatform) when ref is an index.
+func readPlatformManifest(ctx context.Context, ref, platform string, opts RemoteOptions) (*platformManifest, error) {
+	r, err := ParseReference(ref)
+	if err != nil {
+		return nil, err
+	}
+	c, err := opts.client(ctx, r.Domain)
+	if err != nil {
+		return nil, err
+	}
+	tagOrDigest := r.Digest
+	if tagOrDigest == "" {
+		tagOrDigest = r.Tag
+	}
+	if tagOrDigest == "" {
+		tagOrDigest = "latest"
+	}
+	body, mediaType, digest, err := c.getManifest(ctx, r.Path, tagOrDigest)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s from its registry: %w", ref, err)
+	}
+	pm := &platformManifest{c: c, ref: r, body: body, digest: digest}
+	if isIndex(mediaType) {
+		pm.picked = true
+		child, err := pickPlatform(body, platform)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", ref, err)
+		}
+		if pm.body, _, _, err = c.getManifest(ctx, r.Path, child); err != nil {
+			return nil, fmt.Errorf("reading %s for %s from its registry: %w", ref, platformOr(platform), err)
+		}
+	}
+	return pm, nil
 }
 
 // samePlatform reports whether an image config's os and architecture are

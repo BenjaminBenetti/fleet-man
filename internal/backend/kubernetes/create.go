@@ -372,7 +372,7 @@ func (c *creation) reportPending(step fleet.JobStep) func(context.Context, strin
 // refused), and returns them with their render's input.
 func (c *creation) admit(ctx context.Context, img *built, cfg *devcli.Config) (*podspec.Admitted, podspec.RenderInput, error) {
 	in := c.input(img.capture.Capture, img.capture.Image, cfg)
-	in.LookupGroup = c.groupsOf(ctx, img.capture.Image.ID).lookup(ctx)
+	in.LookupGroup = c.groupsOf(ctx, img.capture).lookup(ctx)
 	res, err := c.translate(ctx, in)
 	if err != nil {
 		return nil, podspec.RenderInput{}, err
@@ -696,14 +696,22 @@ func (c *creation) docker() string {
 	return "docker"
 }
 
-// groupsOf resolves the run's --group-add names against image imageID's
-// /etc/group; a failed read goes to the job's log, beside the refusal of the
-// name it leaves unresolved.
-func (c *creation) groupsOf(ctx context.Context, imageID string) *imageGroups {
-	return &imageGroups{docker: c.docker(), image: imageID, platform: c.facts.Platform, report: func(err error) {
+// groupsOf resolves the run's --group-add names against the captured
+// image's /etc/group, read from its registry when the daemon host has not
+// got the image; a failed read goes to the job's log, beside the refusal of
+// the name it leaves unresolved.
+func (c *creation) groupsOf(ctx context.Context, capture *devcli.CaptureResult) *imageGroups {
+	g := &imageGroups{docker: c.docker(), image: capture.Image.ID, platform: c.facts.Platform, report: func(err error) {
 		backend.ReportWarning(ctx, err.Error())
 		flog.Warn("kube create: reading the image's groups", "cluster", c.id.cluster, "key", c.id.key, "err", err)
 	}}
+	if capture.FromRegistry {
+		g.remote = capture.Run.Image
+		if len(capture.Image.RepoDigests) > 0 {
+			g.remote = capture.Image.RepoDigests[0]
+		}
+	}
+	return g
 }
 
 // currentRecord is connection cl's record as kube_clusters.json holds it

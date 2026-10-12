@@ -13,8 +13,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kclient "k8s.io/client-go/kubernetes"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/devcli"
@@ -56,8 +58,9 @@ import (
 //
 // An instance that never reached running (an interrupted or failed create,
 // which has no ContainerID) has nothing to export or keep: its rebuild is the
-// retry of its create. Whatever the create left is deleted by key, and the
-// create runs again from the daemon host's checkout.
+// retry of its create. Whatever the create left is deleted by key, its disk's
+// volume reclaimed, and the create runs again from the daemon host's
+// checkout.
 
 // The steps a rebuild journals besides the create's (stepStart, stepAgent,
 // stepHooks) and StepReset.
@@ -128,16 +131,18 @@ func (b *Backend) Rebuild(containerID, workspaceDir string, mounts []backend.Mou
 
 // retryCreate is the rebuild of an instance that never reached running: the
 // retry of its create. What the create left (by key: a seeded disk, Secrets,
-// Jobs, a StatefulSet) is deleted and waited out, fleetd's record of its pod
-// dropped, and the create runs again under the same key.
+// Jobs, a StatefulSet) is deleted and waited out, its disk's volume until it
+// is reclaimed, fleetd's record of its pod dropped, and the create runs again
+// under the same key.
 func (b *Backend) retryCreate(ctx context.Context, id bound, req backend.UpRequest) (*backend.UpResult, error) {
 	p := b.p()
 	backend.ReportStep(ctx, fleet.StepBackendDown, "deleting what the failed create left")
+	volumes := p.keyVolumes(ctx, id.cluster, id.key)
 	td, err := p.DeleteByKey(ctx, id.cluster, id.key)
 	if err != nil {
 		return nil, classify(fmt.Errorf("deleting what the failed create left: %w", err))
 	}
-	if err := p.waitKeyGone(ctx, id.cluster, id.key); err != nil {
+	if err := p.waitKeyGone(ctx, id.cluster, id.key, volumes); err != nil {
 		return nil, classify(err)
 	}
 	p.Forget(PodTarget{Cluster: id.cluster, StatefulSet: id.sts})
@@ -149,8 +154,10 @@ func (b *Backend) retryCreate(ctx context.Context, id bound, req backend.UpReque
 }
 
 // waitKeyGone waits until nothing of instance key is left on the connection
-// (foreground deletions take their time), bounded by keyGoneTimeout.
-func (p *Pool) waitKeyGone(ctx context.Context, clusterID, key string) error {
+// (foreground deletions take their time), then until volumes, those its
+// claims were bound to (keyVolumes), are reclaimed, bounded by
+// keyGoneTimeout.
+func (p *Pool) waitKeyGone(ctx context.Context, clusterID, key string, volumes []string) error {
 	s, err := p.Scope(clusterID)
 	if err != nil {
 		return err
@@ -162,15 +169,78 @@ func (p *Pool) waitKeyGone(ctx context.Context, clusterID, key string) error {
 			return err
 		}
 		if len(left) == 0 {
-			return nil
+			if volumes, err = unreclaimed(ctx, s.Client, volumes); err != nil {
+				return err
+			}
+			if len(volumes) == 0 {
+				return nil
+			}
 		}
 		if p.opts.Now().After(deadline) {
+			if len(left) == 0 {
+				return &DeadlineError{Kind: CodeTimeout, Wait: "the failed create's volumes " + strings.Join(volumes, ", ") + " to be reclaimed", After: keyGoneTimeout}
+			}
 			return &DeadlineError{Kind: CodeTimeout, Wait: fmt.Sprintf("the failed create's %d objects to be deleted", len(left)), After: keyGoneTimeout}
 		}
 		if err := sleepCtx(ctx, time.Second); err != nil {
 			return err
 		}
 	}
+}
+
+// keyVolumes are the volumes instance key's claims are bound to, read before
+// a teardown takes the claims; none when they cannot be listed. The create a
+// retry runs again makes its claims under the same names, and a provisioner
+// may keep a volume's files by its claim's namespace and name (minikube's
+// hostpath one does, /tmp/hostpath-provisioner/<namespace>/<claim>): a
+// successor provisioned before its predecessor's volume is reclaimed starts
+// on that volume's files, and loses its directory to the reclaim.
+func (p *Pool) keyVolumes(ctx context.Context, clusterID, key string) []string {
+	s, err := p.Scope(clusterID)
+	if err != nil {
+		return nil
+	}
+	claims, err := s.Client.CoreV1().PersistentVolumeClaims(s.Namespace).List(ctx, metav1.ListOptions{LabelSelector: s.keySelector(key)})
+	if err != nil {
+		flog.Warn("kube rebuild: listing the failed create's claims; their volumes are not waited for", "cluster", clusterID, "key", key, "err", err)
+		return nil
+	}
+	var out []string
+	for _, c := range claims.Items {
+		if c.Spec.VolumeName != "" {
+			out = append(out, c.Spec.VolumeName)
+		}
+	}
+	return out
+}
+
+// unreclaimed are those of volumes their reclaim is still to delete: one
+// gone, kept (not Delete) or whose reclaim failed (nothing deletes it now)
+// is done with. Volumes fleet may not read (a namespaced role) cannot be
+// told, and are not waited for.
+func unreclaimed(ctx context.Context, cs kclient.Interface, volumes []string) ([]string, error) {
+	var out []string
+	for _, name := range volumes {
+		pv, err := cs.CoreV1().PersistentVolumes().Get(ctx, name, metav1.GetOptions{})
+		switch {
+		case gone(err):
+			continue
+		case apierrors.IsForbidden(err):
+			flog.Info("kube rebuild: the failed create's volumes are not readable; their reclaim is not waited for", "volume", name)
+			return nil, nil
+		case err != nil:
+			return nil, fmt.Errorf("reading the failed create's volume %s: %w", name, err)
+		}
+		if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimDelete {
+			continue
+		}
+		if pv.Status.Phase == corev1.VolumeFailed {
+			flog.Warn("kube rebuild: the failed create's volume failed its reclaim; not waiting for it", "volume", name, "message", pv.Status.Message)
+			continue
+		}
+		out = append(out, name)
+	}
+	return out, nil
 }
 
 // rebuilding is one rebuild in progress: the creation of generation gen

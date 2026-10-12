@@ -7,13 +7,15 @@
 //
 // Tests that set HOME themselves (t.Setenv) still do; what this catches is
 // the test that forgets, and work a test leaves running (a goroutine, a job)
-// that writes after the test's own HOME was handed back. Only test files
+// that writes after the test's own HOME was handed back. A test that builds
+// with go under a HOME of its own runs it through GoCommand. Only test files
 // import it.
 package testhome
 
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,4 +104,23 @@ func Use(home string) (restore func()) {
 			undo[i]()
 		}
 	}
+}
+
+// startHome is HOME as the process started, before a TestMain (Run) or a
+// test (t.Setenv) moved it.
+var startHome, startHomeSet = os.LookupEnv("HOME")
+
+// GoCommand is `go args...` run with the HOME the process started with,
+// whatever HOME a TestMain or the test has set since, so go keeps the
+// environment's module and build caches (under HOME unless GOPATH,
+// GOMODCACHE or GOCACHE say otherwise). Under a test's own HOME it would
+// download every module again into that home, read-only, where removing
+// the home fails. Add to the command's Env, never replace it.
+func GoCommand(args ...string) *exec.Cmd {
+	cmd := exec.Command("go", args...)
+	cmd.Env = os.Environ()
+	if startHomeSet {
+		cmd.Env = append(cmd.Env, "HOME="+startHome)
+	}
+	return cmd
 }

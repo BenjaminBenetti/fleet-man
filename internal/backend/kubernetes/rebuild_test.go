@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kruntime "k8s.io/apimachinery/pkg/runtime"
@@ -507,6 +509,81 @@ func TestRetryCreateDeletesWhatTheCreateLeft(t *testing.T) {
 	}
 	if fp, _ := LoadFootprint(); len(fp.TombstonesOf(handleCluster)) != 0 {
 		t.Error("a retry tombstoned the instance's key")
+	}
+}
+
+// retryRig is a failed create whose disk is bound to volume pv, for its
+// retry: the rig, and the handle on the failed instance.
+func retryRig(t *testing.T, pv *corev1.PersistentVolume) (*handleRig, *Backend) {
+	t.Helper()
+	sts := handleSTS()
+	claim := &corev1.PersistentVolumeClaim{ObjectMeta: handleMeta(sts), Spec: corev1.PersistentVolumeClaimSpec{VolumeName: pv.Name}}
+	r := newHandleRig(t, &appsv1.StatefulSet{ObjectMeta: handleMeta(sts)}, claim, pv)
+	inst := r.inst()
+	inst.Status = fleet.StatusFailed
+	return r, newHandle(inst, r.pool)
+}
+
+func reclaimedVolume(name string, policy corev1.PersistentVolumeReclaimPolicy, phase corev1.PersistentVolumePhase) *corev1.PersistentVolume {
+	return &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec:   corev1.PersistentVolumeSpec{PersistentVolumeReclaimPolicy: policy},
+		Status: corev1.PersistentVolumeStatus{Phase: phase}}
+}
+
+// The retry creates its disk's claim under the name the failed create's had,
+// which a provisioner may keep the volume's files by (minikube's hostpath
+// one): it waits for the failed create's volume to be reclaimed first, or
+// the reclaim deletes the new disk's directory under its seed.
+func TestRetryCreateWaitsForTheFailedCreatesVolume(t *testing.T) {
+	r, b := retryRig(t, reclaimedVolume("pvc-old", corev1.PersistentVolumeReclaimDelete, corev1.VolumeReleased))
+	var reads atomic.Int32
+	r.cs.PrependReactor("get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
+		// The provisioner reclaims the volume once the retry has seen it.
+		if reads.Add(1) == 2 {
+			if err := r.cs.Tracker().Delete(corev1.SchemeGroupVersion.WithResource("persistentvolumes"), "", "pvc-old"); err != nil {
+				t.Error(err)
+			}
+		}
+		return false, nil, nil
+	})
+	_, err := b.RebuildContext(context.Background(), "", backend.UpRequest{WorkspaceDir: b.inst.WorkspaceDir})
+	if !errors.Is(err, errNotDaemon) {
+		t.Fatalf("the retried create: %v", err)
+	}
+	if n := reads.Load(); n != 2 {
+		t.Errorf("the failed create's volume was read %d times, want until it was gone (2)", n)
+	}
+}
+
+// A volume no reclaim is going to delete (kept, or whose reclaim failed),
+// or one fleet may not read, is not waited for.
+func TestRetryCreateDoesNotWaitForAVolumeThatStays(t *testing.T) {
+	for name, tc := range map[string]struct {
+		pv     *corev1.PersistentVolume
+		forbid bool
+	}{
+		"kept":            {pv: reclaimedVolume("pvc-old", corev1.PersistentVolumeReclaimRetain, corev1.VolumeReleased)},
+		"failed reclaim":  {pv: reclaimedVolume("pvc-old", corev1.PersistentVolumeReclaimDelete, corev1.VolumeFailed)},
+		"no read allowed": {pv: reclaimedVolume("pvc-old", corev1.PersistentVolumeReclaimDelete, corev1.VolumeReleased), forbid: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, b := retryRig(t, tc.pv)
+			var reads atomic.Int32
+			r.cs.PrependReactor("get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
+				reads.Add(1)
+				if tc.forbid {
+					return true, nil, apierrors.NewForbidden(corev1.Resource("persistentvolumes"), "pvc-old", errors.New("namespaced role"))
+				}
+				return false, nil, nil
+			})
+			_, err := b.RebuildContext(context.Background(), "", backend.UpRequest{WorkspaceDir: b.inst.WorkspaceDir})
+			if !errors.Is(err, errNotDaemon) {
+				t.Fatalf("the retried create: %v", err)
+			}
+			if n := reads.Load(); n != 1 {
+				t.Errorf("the failed create's volume was read %d times, want once", n)
+			}
+		})
 	}
 }
 

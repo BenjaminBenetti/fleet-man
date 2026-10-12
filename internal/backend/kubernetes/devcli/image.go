@@ -21,19 +21,20 @@ import (
 // the registry cannot say is the image pulled: on docker's classic store a
 // pull for another architecture moves the host's tag to that architecture,
 // under the devcontainer-backend instances that use it. The pull's output
-// goes to jobLog.
-func imageFor(ctx context.Context, docker, image, platform string, remote kubeimage.RemoteOptions, jobLog io.Writer) (kubeshim.ImageConfig, error) {
+// goes to jobLog. fromRegistry says the config was read from the registry:
+// the daemon host has not got the image.
+func imageFor(ctx context.Context, docker, image, platform string, remote kubeimage.RemoteOptions, jobLog io.Writer) (img kubeshim.ImageConfig, fromRegistry bool, err error) {
 	img, inspectErr := inspectImage(ctx, docker, image, platform)
 	if inspectErr == nil {
-		return img, nil
+		return img, false, nil
 	}
-	img, err := kubeimage.RemoteImageConfig(ctx, image, platform, remote)
+	img, err = kubeimage.RemoteImageConfig(ctx, image, platform, remote)
 	if err == nil {
 		fmt.Fprintf(jobLog, "read %s from its registry (the daemon host has no image for this cluster's platform)\n", image)
-		return img, nil
+		return img, true, nil
 	}
 	if ctx.Err() != nil {
-		return kubeshim.ImageConfig{}, ctx.Err()
+		return kubeshim.ImageConfig{}, false, ctx.Err()
 	}
 	flog.Info("kubernetes capture-up: reading the image from its registry failed; pulling it", "image", image, "err", err)
 	args := []string{"pull"}
@@ -46,9 +47,10 @@ func imageFor(ctx context.Context, docker, image, platform string, remote kubeim
 	cmd.Stdout = jobLog
 	cmd.Stderr = io.MultiWriter(&stderr, jobLog)
 	if err := cmd.Run(); err != nil {
-		return kubeshim.ImageConfig{}, fmt.Errorf("%w; docker pull %s: %v: %s", inspectErr, image, err, strings.TrimSpace(stderr.String()))
+		return kubeshim.ImageConfig{}, false, fmt.Errorf("%w; docker pull %s: %v: %s", inspectErr, image, err, strings.TrimSpace(stderr.String()))
 	}
-	return inspectImage(ctx, docker, image, platform)
+	img, err = inspectImage(ctx, docker, image, platform)
+	return img, false, err
 }
 
 // inspectImage reads image's config from the real docker. With a platform
