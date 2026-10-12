@@ -653,7 +653,7 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	if req.GetNewDisplayName() != "" {
-		if err := fleet.ValidateInstanceName(req.GetNewDisplayName()); err != nil {
+		if err := fleet.ValidateDisplayName(req.GetNewDisplayName()); err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 	}

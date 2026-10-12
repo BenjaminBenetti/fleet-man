@@ -252,11 +252,11 @@ func (s *service) checkAgentClusters(prev, next []fleet.Agent) error {
 // without touching resources. Only the fields present in the request are
 // changed; an explicit empty string (e.g. clearing a tag) is distinguished from
 // "leave unchanged" by the proto presence bit. A non-empty display name (the
-// rename path) must satisfy fleet.ValidateInstanceName; an empty one clears
+// rename path) must satisfy fleet.ValidateDisplayName; an empty one clears
 // the override so the instance falls back to its immutable Name.
 func (s *service) SetInstanceMetadata(_ context.Context, req *fleetgrpc.SetInstanceMetadataRequest) (*fleetgrpc.MutationReply, error) {
 	if req.DisplayName != nil && req.GetDisplayName() != "" {
-		if err := fleet.ValidateInstanceName(req.GetDisplayName()); err != nil {
+		if err := fleet.ValidateDisplayName(req.GetDisplayName()); err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 	}

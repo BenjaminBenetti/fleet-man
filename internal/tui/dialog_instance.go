@@ -409,7 +409,7 @@ func (fleetPage *fleetPage) saveInstanceEdits(m *model) tea.Cmd {
 		m.message = "Name cannot be empty"
 		return nil
 	}
-	if err := fleet.ValidateInstanceName(displayName); err != nil {
+	if err := fleet.ValidateDisplayName(displayName); err != nil {
 		m.message = err.Error()
 		return nil
 	}

@@ -42,3 +42,18 @@ func TestValidateInstanceName(t *testing.T) {
 		})
 	}
 }
+
+// A display name is a label: the folder rules of a name do not apply to it,
+// only the emptiness and spaces rule they share.
+func TestValidateDisplayName(t *testing.T) {
+	for _, ok := range []string{"agent-1", "files", ".claude", "feat/login", "a\\b"} {
+		if err := ValidateDisplayName(ok); err != nil {
+			t.Errorf("ValidateDisplayName(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "my agent", "agent\t1"} {
+		if ValidateDisplayName(bad) == nil {
+			t.Errorf("ValidateDisplayName(%q) = nil, want error", bad)
+		}
+	}
+}
