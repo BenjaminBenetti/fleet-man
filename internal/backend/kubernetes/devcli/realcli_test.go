@@ -427,9 +427,17 @@ func replay(t *testing.T, res *CaptureResult) string {
 	}
 	args = append(args, res.Run.Image)
 	args = append(args, res.Run.Cmd...)
-	out, err := exec.Command("docker", args...).CombinedOutput()
+	// The ID is stdout alone: docker may warn on stderr (an image whose
+	// platform variant is not the host's, as on GitHub's runners).
+	cmd := exec.Command("docker", args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("replaying the captured run: %v: %s", err, out)
+		t.Fatalf("replaying the captured run: %v: %s", err, stderr.String())
+	}
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		t.Logf("docker run: %s", s)
 	}
 	cid := strings.TrimSpace(string(out))
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", cid).Run() })
