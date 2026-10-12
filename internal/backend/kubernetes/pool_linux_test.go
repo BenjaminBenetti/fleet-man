@@ -33,6 +33,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
+	"github.com/BenjaminBenetti/fleet-man/internal/podagent"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 )
 
@@ -76,6 +77,13 @@ func fakePod(t *testing.T, v string) string {
 }
 
 func TestMain(m *testing.M) {
+	// A held command a test leaves behind (its session dropped, never
+	// re-attached) gives up within a minute rather than podwire.HoldGrace's
+	// 12h: its shepherd is a process of its own, which outlives the test
+	// binary and would hold its memory on the host that long.
+	if os.Getenv(podagent.EnvHoldGrace) == "" {
+		_ = os.Setenv(podagent.EnvHoldGrace, testHoldGrace.String())
+	}
 	code := m.Run()
 	if fakePodDir != "" {
 		_ = os.RemoveAll(fakePodDir)
@@ -119,6 +127,9 @@ type harness struct {
 const (
 	testCluster = "test-cluster-a1b2c3"
 	testOwner   = "owner1234567"
+	// testHoldGrace is how long the fake pods' agents hold a command no
+	// session re-attaches (FLEET_EXEC_HOLD_GRACE).
+	testHoldGrace = time.Minute
 )
 
 func newHarness(t *testing.T, opts PoolOptions) *harness {
