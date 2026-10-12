@@ -123,8 +123,8 @@ func TestCaptureUpReadsAnImageTheHostLacksFromItsRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Image.ID != armConfig || res.Image.Architecture != "arm64" || res.Image.Config.User != "remote-arm64" ||
-		len(res.Image.RepoDigests) != 1 || !strings.HasPrefix(res.Image.RepoDigests[0], "registry.test/team/base@sha256:") {
-		t.Errorf("image %+v", res.Image)
+		len(res.Image.RepoDigests) != 1 || !strings.HasPrefix(res.Image.RepoDigests[0], "registry.test/team/base@sha256:") || !res.FromRegistry {
+		t.Errorf("image %+v (from its registry %v)", res.Image, res.FromRegistry)
 	}
 	if log := f.read(t, "docker.log"); strings.Contains(log, "pull") {
 		t.Errorf("capture-up pulled:\n%s", log)

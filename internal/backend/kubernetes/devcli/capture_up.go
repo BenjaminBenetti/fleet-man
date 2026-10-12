@@ -55,6 +55,9 @@ type CaptureResult struct {
 	Run *kubeshim.RunArgs
 	// Image is the built (or pulled) image the run names.
 	Image kubeshim.ImageConfig
+	// FromRegistry says the daemon host has no Image (for the platform):
+	// it was read from its registry, which alone has its files.
+	FromRegistry bool
 	// Container is the container docker would have created (ContainerFor);
 	// the pod's identity (ContainerID, Name, Created, StartedAt) is left for
 	// the caller.
@@ -152,7 +155,7 @@ func CaptureUp(ctx context.Context, req CaptureRequest) (*CaptureResult, error) 
 	argv, _ := json.Marshal(capture.Redacted().Args)
 	fmt.Fprintf(jobLog, "captured: docker %s %s\n", capture.Verb, argv)
 
-	if res.Image, err = imageFor(ctx, docker, res.Run.Image, req.Platform, req.Remote, jobLog); err != nil {
+	if res.Image, res.FromRegistry, err = imageFor(ctx, docker, res.Run.Image, req.Platform, req.Remote, jobLog); err != nil {
 		return nil, err
 	}
 	if res.Container, err = kubeshim.ContainerFor(capture, res.Image); err != nil {

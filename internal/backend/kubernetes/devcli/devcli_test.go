@@ -158,8 +158,8 @@ func TestCaptureUp(t *testing.T) {
 	if rc := strings.TrimSpace(f.read(t, "run.rc")); rc != "97" {
 		t.Errorf("the shim's run exited %s, want 97", rc)
 	}
-	if res.Run.Image != "vsc-app-1234" || res.Image.ID != "sha256:built" || res.CLIVersion != "0.89.0" {
-		t.Errorf("run %q image %q cli %q", res.Run.Image, res.Image.ID, res.CLIVersion)
+	if res.Run.Image != "vsc-app-1234" || res.Image.ID != "sha256:built" || res.CLIVersion != "0.89.0" || res.FromRegistry {
+		t.Errorf("run %q image %q cli %q from its registry %v", res.Run.Image, res.Image.ID, res.CLIVersion, res.FromRegistry)
 	}
 	if len(res.Capture.Env) != 1 || res.Capture.Env[0] != (kubeshim.EnvVar{Name: "SECRET_TOKEN", Value: "hunter2", Source: "flag"}) {
 		t.Errorf("env %+v", res.Capture.Env)

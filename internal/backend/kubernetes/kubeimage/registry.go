@@ -88,6 +88,10 @@ type registryClient struct {
 	// cred is the credential; empty for anonymous requests.
 	cred  Credential
 	httpc *http.Client
+	// streamc is httpc without its bound on a request, for a blob read as
+	// a stream (a layer, as long as the link takes): the caller's context
+	// bounds it.
+	streamc *http.Client
 	// plain is the insecure client's fallback for a registry on plain HTTP.
 	plain *http.Client
 
@@ -116,6 +120,7 @@ func newRegistryClient(domain string, insecure bool, cred Credential, transport 
 		insecure: insecure,
 		cred:     cred,
 		httpc:    &http.Client{Transport: transport, Timeout: registryTimeout, CheckRedirect: keepAuthOnSameHost},
+		streamc:  &http.Client{Transport: transport, CheckRedirect: keepAuthOnSameHost},
 		tokens:   map[string]string{},
 		scheme:   "https",
 	}
@@ -143,12 +148,17 @@ func (c *registryClient) baseURL() string {
 // do sends one request, answering an auth challenge once. scope is the
 // token scope to ask for when the challenge names none.
 func (c *registryClient) do(ctx context.Context, method, path string, header http.Header, scope string) (*http.Response, error) {
-	resp, err := c.send(ctx, method, path, header, scope)
+	return c.doWith(ctx, c.httpc, method, path, header, scope)
+}
+
+// doWith is do through hc.
+func (c *registryClient) doWith(ctx context.Context, hc *http.Client, method, path string, header http.Header, scope string) (*http.Response, error) {
+	resp, err := c.send(ctx, hc, method, path, header, scope)
 	if err != nil && c.insecure && c.scheme == "https" && looksLikePlainHTTP(err) {
 		c.mu.Lock()
 		c.scheme = "http"
 		c.mu.Unlock()
-		resp, err = c.send(ctx, method, path, header, scope)
+		resp, err = c.send(ctx, hc, method, path, header, scope)
 	}
 	if err != nil {
 		return nil, err
@@ -185,10 +195,10 @@ func (c *registryClient) do(ctx context.Context, method, path string, header htt
 	default:
 		return nil, &RegistryError{Method: method, URL: c.baseURL() + path, Status: http.StatusUnauthorized, Codes: []string{"UNAUTHORIZED"}, Message: "unauthorized, with no usable challenge (" + challenge + ")"}
 	}
-	return c.send(ctx, method, path, header, scope)
+	return c.send(ctx, hc, method, path, header, scope)
 }
 
-func (c *registryClient) send(ctx context.Context, method, path string, header http.Header, scope string) (*http.Response, error) {
+func (c *registryClient) send(ctx context.Context, hc *http.Client, method, path string, header http.Header, scope string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL()+path, nil)
 	if err != nil {
 		return nil, err
@@ -205,7 +215,7 @@ func (c *registryClient) send(ctx context.Context, method, path string, header h
 	case basic:
 		req.SetBasicAuth(c.cred.Username, c.cred.Password)
 	}
-	return c.httpc.Do(req)
+	return hc.Do(req)
 }
 
 // looksLikePlainHTTP reports whether an HTTPS request failed because the
@@ -365,12 +375,12 @@ func pullScope(repoPath string) string { return "repository:" + repoPath + ":pul
 // ping reports whether the registry answers its /v2/ endpoint (an auth
 // challenge counts).
 func (c *registryClient) ping(ctx context.Context) error {
-	resp, err := c.send(ctx, http.MethodGet, "/v2/", nil, "")
+	resp, err := c.send(ctx, c.httpc, http.MethodGet, "/v2/", nil, "")
 	if err != nil && c.insecure && looksLikePlainHTTP(err) {
 		c.mu.Lock()
 		c.scheme = "http"
 		c.mu.Unlock()
-		resp, err = c.send(ctx, http.MethodGet, "/v2/", nil, "")
+		resp, err = c.send(ctx, c.httpc, http.MethodGet, "/v2/", nil, "")
 	}
 	if err != nil {
 		return err
@@ -458,6 +468,32 @@ func (c *registryClient) getBlob(ctx context.Context, repoPath, digest string, l
 		return nil, fmt.Errorf("blob %s has digest %s", path, got)
 	}
 	return body, nil
+}
+
+// openBlob streams a blob of any size, bounded by ctx alone. Nothing read
+// from it is the blob until verify, called once the stream is read to its
+// end, says its digest is right.
+func (c *registryClient) openBlob(ctx context.Context, repoPath, digest string) (body io.ReadCloser, verify func() error, err error) {
+	path := "/v2/" + repoPath + "/blobs/" + digest
+	resp, err := c.doWith(ctx, c.streamc, http.MethodGet, path, nil, pullScope(repoPath))
+	if err != nil {
+		return nil, nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer drain(resp)
+		return nil, nil, registryError(resp)
+	}
+	h := sha256.New()
+	verify = func() error {
+		if got := "sha256:" + hex.EncodeToString(h.Sum(nil)); got != digest {
+			return fmt.Errorf("blob %s has digest %s", path, got)
+		}
+		return nil
+	}
+	return struct {
+		io.Reader
+		io.Closer
+	}{io.TeeReader(resp.Body, h), resp.Body}, verify, nil
 }
 
 // deleteManifest deletes a manifest by digest. Callers check that repoPath
