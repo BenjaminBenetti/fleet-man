@@ -200,6 +200,31 @@ func TestLiveAdmission(t *testing.T) {
 	_, err = admit("fixture", limited, fleet.KubeCluster{}, func(in *Input, _ *RenderInput) { in.Facts.LimitRangeMemoryLimit = "4Gi" })
 	wantCode("limit range", err, CodeAdmissionDenied, "LimitRange", "maximum memory usage per Container is 4Gi")
 
+	// A ResourceQuota on cpu and memory requests with room to spare, and no
+	// LimitRange to fill in what a container leaves out: every container of
+	// the pod must request both, the docker engine's sidecar too, or the
+	// pod is refused ("must specify requests.cpu for: fleet-docker", as it
+	// was before the sidecar requested any).
+	every := c.namespace(t, "quota-every", nil)
+	if _, err := c.api.CoreV1().ResourceQuotas(every).Create(ctx, &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: "every"},
+		Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{
+			corev1.ResourceRequestsCPU: resource.MustParse("100"), corev1.ResourceRequestsMemory: resource.MustParse("1Ti"),
+		}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, fx := range []string{"fixture", "fixture-dood"} {
+		a, err := admit(fx, every, fleet.KubeCluster{}, nil)
+		if err != nil {
+			t.Errorf("%s under a quota on cpu and memory requests: %v", fx, err)
+			continue
+		}
+		if fx == "fixture-dood" && a.Result.Pod.DooD == nil {
+			t.Errorf("%s: no docker engine", fx)
+		}
+	}
+
 	// The preflight, before any build, is admitted and refused as the
 	// real capture is.
 	preflight := func(fixture string) func(*Input, *RenderInput) {

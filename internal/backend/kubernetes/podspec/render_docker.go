@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 )
@@ -141,6 +142,7 @@ func (r *renderer) dockerSidecar() corev1.Container {
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Command:         DockerSidecarCommand(args...),
 		RestartPolicy:   ptr(corev1.ContainerRestartPolicyAlways),
+		Resources:       r.dockerResources(),
 		VolumeMounts:    r.dockerSidecarMounts(),
 		SecurityContext: sc,
 		StartupProbe: &corev1.Probe{
@@ -151,6 +153,22 @@ func (r *renderer) dockerSidecar() corev1.Container {
 		},
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 	}
+}
+
+// dockerSidecarRequests are the engine's own requests: the instance's docker
+// commands are its work, and their containers' with it, counted against the
+// dev container's limits (dockerResources).
+var dockerSidecarRequests = corev1.ResourceList{
+	corev1.ResourceCPU:    resource.MustParse("50m"),
+	corev1.ResourceMemory: resource.MustParse("128Mi"),
+}
+
+// dockerResources are the sidecar's resources: its own requests, and the
+// dev container's limits (the engine's containers, which run in its cgroup,
+// get the room the dev container has; and a ResourceQuota the dev container
+// satisfies admits the sidecar too, companionLimits).
+func (r *renderer) dockerResources() corev1.ResourceRequirements {
+	return companionResources(dockerSidecarRequests, r.companionLimits(func(_ corev1.ResourceName, dev resource.Quantity) resource.Quantity { return dev }))
 }
 
 // dockerSidecarMounts are the sidecar's mounts: the folder it shares with

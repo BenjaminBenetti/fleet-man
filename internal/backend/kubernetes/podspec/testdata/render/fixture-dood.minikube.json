@@ -173,7 +173,12 @@
                 "set -eu\ndir=/opt/fleet/docker\nchmod 0755 \"$dir\" 2>/dev/null || :\nsock=\"$dir/docker.sock\"\ncfg=\"$dir/daemon.json\"\n[ -s \"$cfg\" ] || echo '{}' > \"$cfg\"\nrm -f \"$sock\"\nfind /run /var/run -iname 'docker*.pid' -delete 2>/dev/null || :\nfind /run /var/run -iname 'container*.pid' -delete 2>/dev/null || :\nexport container=docker\nif [ -d /sys/kernel/security ] && ! mountpoint -q /sys/kernel/security; then\n\tmount -t securityfs none /sys/kernel/security 2>/dev/null || :\nfi\nmount --make-rshared / 2>/dev/null || :\nparent=\ncg=`sed -n 's/^0:://p' /proc/self/cgroup`\nc=\"/sys/fs/cgroup${cg%/}\"\nif [ -n \"$cg\" ] && [ -w \"$c/cgroup.subtree_control\" ]; then\n\tmkdir -p \"$c/init\" \"$c/docker\"\n\ti=0\n\tuntil { xargs -rn1 < \"$c/cgroup.procs\" > \"$c/init/cgroup.procs\" || :; sed -e 's/ / +/g' -e 's/^/+/' < \"$c/cgroup.controllers\" > \"$c/cgroup.subtree_control\"; } 2>/dev/null; do\n\t\ti=`expr \"$i\" + 1`\n\t\t[ \"$i\" -lt 100 ] || break\n\t\tsleep 0.1\n\tdone\n\tif [ \"$i\" -lt 100 ]; then\n\t\tparent=\"--cgroup-parent=${cg%/}/docker\"\n\telse\n\t\techo \"fleet-docker: the engine's containers get no cgroup controllers: processes kept arriving in $c\" >&2\n\tfi\nfi\nif ! iptables -nL >/dev/null 2>&1 && [ -x /usr/local/sbin/.iptables-legacy/iptables ] && /usr/local/sbin/.iptables-legacy/iptables -nL >/dev/null 2>&1; then\n\tPATH=\"/usr/local/sbin/.iptables-legacy:$PATH\"\n\texport PATH\nfi\niface=`awk '$2 == \"00000000\" && $8 == \"00000000\" { print $1; exit }' /proc/net/route 2>/dev/null || :`\nmtu=`cat \"/sys/class/net/${iface:-eth0}/mtu\" 2>/dev/null || :`\ndockerd --host=\"unix://$sock\" --config-file=\"$cfg\" ${mtu:+\"--mtu=$mtu\"} $parent \"$@\" &\npid=$!\ntrap 'kill -TERM \"$pid\" 2>/dev/null || :' TERM INT\nsum=`cksum < \"$cfg\" 2>/dev/null || :`\nwhile kill -0 \"$pid\" 2>/dev/null; do\n\tsleep 2 &\n\twait \"$!\" || :\n\tnow=`cksum < \"$cfg\" 2>/dev/null || :`\n\tif [ \"$now\" != \"$sum\" ]; then\n\t\tsum=\"$now\"\n\t\techo \"fleet-docker: $cfg changed; reloading the engine\" >&2\n\t\tkill -HUP \"$pid\" 2>/dev/null || :\n\tfi\ndone\nwait \"$pid\"\n",
                 "fleet-docker"
               ],
-              "resources": {},
+              "resources": {
+                "requests": {
+                  "cpu": "50m",
+                  "memory": "128Mi"
+                }
+              },
               "restartPolicy": "Always",
               "volumeMounts": [
                 {
