@@ -98,8 +98,8 @@ pass "short summary"
 aggregates the rows into a terminal summary and the `$GITHUB_STEP_SUMMARY`
 markdown table.
 
-`run.sh` calls `teardown_test` after every test to nuke containers and
-state so the next test starts clean.
+`run.sh` calls `teardown_test` after every test to nuke containers, the test's
+daemons and state so the next test starts clean.
 
 ## Backends and markers
 

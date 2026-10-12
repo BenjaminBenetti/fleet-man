@@ -173,8 +173,8 @@ _be_cluster_id() {
 
 # _be_teardown — the backstop after `fleet destroy`: delete what is left of
 # this test's connection by label (managed-by=fleet plus its fleet.dev/cluster
-# id, which is unique to the test), then stop this test's daemons so the next
-# test starts with its own. Teardown runs from run.sh, so this never exits.
+# id, which is unique to the test); teardown_test then stops this test's
+# daemons. Teardown runs from run.sh, so this never exits.
 _be_teardown() {
   local id
   id=$(_be_cluster_id 2>/dev/null || true)
@@ -184,13 +184,6 @@ _be_teardown() {
       -l "${sel}" --wait=false >/dev/null 2>&1 || true
     _be_kubectl -n "${FLEET_ITEST_NAMESPACE}" delete pods -l "${sel}" --grace-period=0 --force --wait=false >/dev/null 2>&1 || true
   fi
-  # The daemons of this test: a SIGTERM runs their bounded shutdown.
-  pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
-  local deadline=$(( $(date +%s) + 25 ))
-  while [ "$(server_count)" != "0" ] && [ "$(date +%s)" -lt "${deadline}" ]; do
-    sleep 0.2
-  done
-  pkill -9 -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
 }
 
 # _be_dump <dir> — what a failed test leaves for its artifact, before its
