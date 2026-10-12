@@ -447,9 +447,19 @@ func TestActiveJobsSurfacedInGetState(t *testing.T) {
 	close(release)
 	drainJob(t, stream)
 
-	// After completion the job is no longer active.
-	reply, _ := client.GetState(context.Background(), &fleetgrpc.GetStateRequest{})
-	if len(reply.GetActiveJobs()) != 0 {
-		t.Fatalf("completed job still active: %v", reply.GetActiveJobs())
+	// After completion the job is no longer active: it leaves the active set
+	// just after its JobDone goes out, so a GetState that races the stream's
+	// end may still see it for a moment.
+	var active []*fleetgrpc.JobSummary
+	for i := 0; i < 100; i++ {
+		reply, err := client.GetState(context.Background(), &fleetgrpc.GetStateRequest{})
+		if err != nil {
+			t.Fatalf("GetState: %v", err)
+		}
+		if active = reply.GetActiveJobs(); len(active) == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	t.Fatalf("completed job still active: %v", active)
 }

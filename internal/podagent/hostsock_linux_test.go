@@ -251,15 +251,16 @@ func TestDesiredStateMirrorsTheGatewayPorts(t *testing.T) {
 		t.Fatalf("a port the pod listens at: %q, %v", out, err)
 	}
 	// A client that sends nothing and waits: a reset, not an empty answer.
+	// On a loaded machine the reset can beat the client's own connect.
 	conn, err := net.Dial("tcp4", gatewayAddr(refused))
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		_, err = io.ReadAll(conn)
+		conn.Close()
 	}
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-	if _, err := io.ReadAll(conn); !errors.Is(err, syscall.ECONNRESET) {
+	if !errors.Is(err, syscall.ECONNRESET) {
 		t.Fatalf("a refused connection: %v, want a reset", err)
 	}
-	conn.Close()
 	select {
 	case got := <-seen:
 		t.Fatalf("fleetd served %+v", got)
