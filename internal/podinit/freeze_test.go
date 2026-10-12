@@ -113,8 +113,31 @@ func TestFreezeTakesTheUserTreeWithItsDockerContainers(t *testing.T) {
 		t.Fatalf("%s/cgroup.freeze after the thaw = %q", tree, got)
 	}
 	// A layout with a relative tree is no layout to freeze.
-	if _, err := (&Layout{User: procs, UserTree: "fleet-user", fs: ffs}).Freeze(marker, now, now); !errors.Is(err, ErrNoLayout) {
+	if _, err := (&Layout{V: LayoutVersion, User: procs, UserTree: "fleet-user", fs: ffs}).Freeze(marker, now, now); !errors.Is(err, ErrNoLayout) {
 		t.Fatalf("relative user tree: %v", err)
+	}
+
+	// A freeze an agent of an older fleet made (procs) is thawed too.
+	ffs.files[procs+"/cgroup.freeze"] = "1"
+	if th, err := l.Thaw(marker, ""); err != nil || !th.WasFrozen {
+		t.Fatalf("thaw of an older agent's freeze %+v, %v", th, err)
+	}
+	if got := ffs.files[procs+"/cgroup.freeze"]; got != "0" {
+		t.Fatalf("procs' cgroup.freeze after the thaw = %q", got)
+	}
+
+	// A layout an older pod-init recorded is frozen at procs, as it was:
+	// that pod-init's watchdog (PID 1 keeps its binary) thaws only procs.
+	old := &Layout{V: treeFreezeVersion - 1, Container: dir, Agent: dir + "/" + AgentCgroup, User: procs, UserTree: tree, Docker: docker, fs: &freezerFS{fakeCgroupFS: cfs, user: procs}}
+	cfs.files[procs+"/cgroup.events"] = "populated 1\nfrozen 0\n"
+	if _, err := old.Freeze(marker, now, now.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if ffs.files[procs+"/cgroup.freeze"] != "1" || ffs.files[tree+"/cgroup.freeze"] != "0" {
+		t.Fatalf("an older layout froze tree %q procs %q; want procs alone", ffs.files[tree+"/cgroup.freeze"], ffs.files[procs+"/cgroup.freeze"])
+	}
+	if _, err := old.Thaw(marker, ""); err != nil {
+		t.Fatal(err)
 	}
 }
 

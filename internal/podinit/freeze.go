@@ -91,15 +91,32 @@ func (l *Layout) usable() error {
 	return nil
 }
 
+// treeFreezeVersion is the first layout version whose pod-init's watchdog
+// thaws a freeze of the user tree.
+const treeFreezeVersion = 3
+
 // frozenDir is the cgroup a freeze acts on: the user tree, which holds the
 // user processes (User) and a nested docker engine's containers (Docker),
 // so a clone's copy sees neither write. A layout an older pod-init recorded
-// (version 1) has User alone, which was the whole tree.
+// is frozen at User, as it was: PID 1 keeps the binary its pod started with
+// (an agent is restaged with the daemon's), and that pod-init's watchdog
+// thaws only User, so it would never thaw a freeze of the tree. (A
+// version-1 layout's User was the whole tree.)
 func (l *Layout) frozenDir() string {
-	if l.UserTree != "" {
+	if l.V >= treeFreezeVersion && l.UserTree != "" {
 		return l.UserTree
 	}
 	return l.User
+}
+
+// thawDirs are the cgroups a thaw clears: the one a freeze acts on, and
+// User, which an agent of an older fleet froze (one restaged before the
+// daemon was upgraded, or after it was downgraded).
+func (l *Layout) thawDirs() []string {
+	if d := l.frozenDir(); d != l.User {
+		return []string{d, l.User}
+	}
+	return []string{l.User}
 }
 
 // Freeze freezes the user cgroup until a thaw, or until the watchdog thaws it
@@ -188,13 +205,25 @@ func (l *Layout) frozen() (bool, error) {
 }
 
 // freezing reports whether the user cgroup is asked to be frozen
-// (cgroup.freeze reads 1).
+// (cgroup.freeze of one of thawDirs reads 1).
 func (l *Layout) freezing() (bool, error) {
-	data, err := l.cfs().ReadFile(path.Join(l.frozenDir(), "cgroup.freeze"))
-	if err != nil {
-		return false, err
+	frozen, err := l.frozenDirs()
+	return len(frozen) > 0, err
+}
+
+// frozenDirs are those of thawDirs whose cgroup.freeze reads 1.
+func (l *Layout) frozenDirs() ([]string, error) {
+	var out []string
+	for _, d := range l.thawDirs() {
+		data, err := l.cfs().ReadFile(path.Join(d, "cgroup.freeze"))
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(string(data)) == "1" {
+			out = append(out, d)
+		}
 	}
-	return strings.TrimSpace(string(data)) == "1", nil
+	return out, nil
 }
 
 // Thaw thaws the user cgroup. by is the watchdog thawing ("" for a thaw
@@ -205,13 +234,13 @@ func (l *Layout) Thaw(marker, by string) (ThawResult, error) {
 		return ThawResult{}, err
 	}
 	res := ThawResult{ThawedAt: time.Now()}
-	was, err := l.freezing()
+	frozen, err := l.frozenDirs()
 	if err != nil {
 		return res, fmt.Errorf("read %s's freeze: %w", UserCgroup, err)
 	}
-	res.WasFrozen = was
-	if was {
-		if err := l.cfs().WriteFile(path.Join(l.frozenDir(), "cgroup.freeze"), []byte("0")); err != nil {
+	res.WasFrozen = len(frozen) > 0
+	for _, d := range frozen {
+		if err := l.cfs().WriteFile(path.Join(d, "cgroup.freeze"), []byte("0")); err != nil {
 			return res, fmt.Errorf("thaw %s: %w", UserCgroup, err)
 		}
 	}
