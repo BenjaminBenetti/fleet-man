@@ -311,3 +311,44 @@ func TestRootFolderGoneIsNotADeleteOfEverything(t *testing.T) {
 	r.sync()
 	r.assertConverged()
 }
+
+// onScanStep runs hook at each step of every scan of the root folder dir,
+// until the test ends.
+func onScanStep(t *testing.T, dir string, hook func(step string)) {
+	t.Helper()
+	dir = filepath.Clean(dir)
+	f := func(at, step string) {
+		if at == dir {
+			hook(step)
+		}
+	}
+	scanStep.Store(&f)
+	t.Cleanup(func() { scanStep.Store(nil) })
+}
+
+// TestRootFolderMovedMidScanIsNotADelete checks a root folder moved away and
+// made again while a scan walks it (past the scan's first look at the
+// folder) stops that scan with ErrRootMoved: what the walk then found
+// missing is not reported deleted.
+func TestRootFolderMovedMidScanIsNotADelete(t *testing.T) {
+	r := newRig(t, "host", "c1")
+	r.write("host", "user", "a", "keep")
+	r.write("host", "user", "d/b", "keep")
+	r.sync()
+	r.sides["c1"].stop()
+	root := r.path("c1", "user", ".")
+	onScanStep(t, root, func(step string) {
+		if step != "walk" {
+			return
+		}
+		if err := os.Rename(root, root+".gone"); err != nil {
+			t.Error(err)
+		}
+		os.MkdirAll(root, 0o755)
+		os.RemoveAll(root + ".gone")
+	})
+	rep, _, err := r.sides["c1"].tree.Scan(context.Background(), "user", nil)
+	if !errors.Is(err, ErrRootMoved) || len(rep.Changes) != 0 {
+		t.Fatalf("a scan whose folder moved mid-walk: %d changes, %v; want none, ErrRootMoved", len(rep.Changes), err)
+	}
+}

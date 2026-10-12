@@ -12,10 +12,22 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/safefs"
 )
+
+// scanStep, when set, runs as a scan of the root folder dir starts its walk
+// ("walk") and once it has walked ("walked"): a test seam, for what happens
+// to the folder mid-scan.
+var scanStep atomic.Pointer[func(dir, step string)]
+
+func stepScan(dir, step string) {
+	if f := scanStep.Load(); f != nil {
+		(*f)(dir, step)
+	}
+}
 
 // candidate is a path a scan found changed, before it is examined.
 type candidate struct {
@@ -51,6 +63,7 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 		// .claude) is not a delete of everything in it to send everywhere.
 		return Report{}, nil, err
 	}
+	stepScan(tr.Dir, "walk")
 	areas := tr.reach(cover(paths))
 	observed := map[string]fs.FileInfo{}
 	var problems, again []string
@@ -110,6 +123,7 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 			return Report{}, nil, err
 		}
 	}
+	stepScan(tr.Dir, "walked")
 
 	tr.mu.Lock()
 	var cands []candidate
@@ -172,6 +186,12 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	// The folder may have gone, or been moved and made again, while the
+	// walk read it: what the walk then found missing is not a delete to send
+	// everywhere.
+	if err := tr.stillThere(); err != nil {
+		return Report{}, nil, err
+	}
 	for name, err := range failed {
 		if !tr.failing[name] {
 			t.log.Warn("sharesync: cannot scan", "root", root, "path", name, "err", err)
