@@ -37,7 +37,7 @@ inst="${FIXTURE_REPO_NAME}/alpha"
 fleet_up alpha
 log="${HOME}/.fleet/fleet.log"
 share=$(itest_k8s_fleet_object "${FIXTURE_REPO_NAME}" persistentvolumeclaims share)
-[ -n "${share}" ] || fail "the fleet has no share"
+[ -n "${share}" ] || fail "the fleet has no share: $(grep 'kube: the deep test' "${log}" | tail -1)"
 # size <pvc> — its request, its capacity and its class.
 size() { itest_k8s_kubectl get pvc "$1" -o 'jsonpath={.spec.resources.requests.storage} {.status.capacity.storage} {.spec.storageClassName}'; }
 assert_equals "1Gi 1Gi ${class}" "$(size "${share}")" "the share before"
