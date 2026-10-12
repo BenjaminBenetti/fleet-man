@@ -183,7 +183,7 @@ type kubeManager struct {
 	// connection's release, a connection's image collection): the shutdown
 	// ends and waits for them (kube_image.go), so none writes the daemon's
 	// files once it is gone.
-	cleanups sync.WaitGroup
+	cleanups cleanupSet
 }
 
 func newKubeManager(svc *service) *kubeManager {

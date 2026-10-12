@@ -74,3 +74,43 @@ func TestKubeCleanupsEndWithTheServeLoop(t *testing.T) {
 		t.Fatalf("the collection ended with %v, want the serve loop's cancel", err)
 	}
 }
+
+// A collection started while the shutdown waits (a removal an RPC in the
+// drain still makes) is waited for too, and a wait that gives up leaves
+// nothing waiting behind it.
+func TestCleanupSetTakesOneStartedWhileWaiting(t *testing.T) {
+	var c cleanupSet
+	if !c.wait(context.Background()) {
+		t.Fatal("an empty set is not idle")
+	}
+	c.add()
+	waited := make(chan bool, 1)
+	go func() { waited <- c.wait(context.Background()) }()
+	c.add() // started while the wait runs
+	c.done()
+	select {
+	case <-waited:
+		t.Fatal("the wait ended while a collection started during it still ran")
+	case <-time.After(50 * time.Millisecond):
+	}
+	c.done()
+	select {
+	case ok := <-waited:
+		if !ok {
+			t.Fatal("the wait gave up")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait never saw the set go idle")
+	}
+
+	c.add()
+	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if c.wait(short) {
+		t.Fatal("a wait whose context ended reported the set idle")
+	}
+	c.done()
+	if !c.wait(context.Background()) {
+		t.Fatal("the set is not idle once its last collection ended")
+	}
+}
