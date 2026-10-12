@@ -475,7 +475,10 @@ server.
   port-forward, pooled per pod. Containerd and cri-dockerd do not pass a
   half-close through it; a forward that needs one (an upload that waits for the
   answer after closing its side) takes `--half-close` (`h` in the dialog),
-  which uses the agent session instead.
+  which uses the agent session instead. Keep it for the forwards that need
+  it: the agent session carries the instance's audio and polls too, and over
+  a slow link its window caps a stream at about 1.7 MB/s at a 150ms round
+  trip, where the pooled port-forward reached 3-12 MB/s.
 - **appPort and `-p`** listen on the daemon host. On a cluster they bind
   127.0.0.1 unless the spec names an address (Docker defaults to 0.0.0.0); a
   remote client is warned of one open on the daemon host's network.
@@ -869,3 +872,7 @@ In instances: `FLEET_PEER_DOMAIN` (sibling DNS) and, with DooD,
   docker-in-docker feature's entrypoint still creates an empty `init` cgroup at
   the node's cgroup root (its containers no longer land there).
 - `fleet logs` shows the dev container only, not a DooD sidecar.
+- `fleet exec` output rides the pod's agent session, so over a slow link it
+  is window-bound (about 1 MB/s at a 150ms round trip, where `kubectl exec`
+  reaches about 20); `fleet copy`, folder copies and the shared-folder sync
+  use the bulk session (a 48MB copy took about 5s each way there).
