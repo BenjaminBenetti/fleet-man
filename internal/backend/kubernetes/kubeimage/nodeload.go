@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/localcluster"
 )
 
@@ -91,17 +94,132 @@ func runTool(ctx context.Context, log io.Writer, path string, args ...string) er
 }
 
 // minikubeLoader: `minikube image load --daemon` saves the image from the
-// daemon host's docker and imports it on every node of the profile.
+// daemon host's docker into minikube's image cache, a tarball under
+// $MINIKUBE_HOME/cache/images/<arch>/, and imports it on every node of the
+// profile. minikube never removes that tarball, and fleet loads every image
+// it builds (one per devcontainer change, each the size of the image): so
+// the tarball of one of fleet's own tags (fleet.invalid/..., NodeLoadTag) goes
+// once its load is done, and again when the image is removed (what a load
+// that was cut short, or an older fleet, left). No other cache entry is
+// touched.
 type minikubeLoader struct {
 	path, profile string
 }
 
 func (l minikubeLoader) load(ctx context.Context, log io.Writer, ref string, force bool) error {
+	unlock := lockCachedTag(ref)
+	defer unlock()
+	defer forgetMinikubeCache(ref)
 	return runTool(ctx, log, l.path, "-p", l.profile, "image", "load", "--daemon=true", fmt.Sprintf("--overwrite=%t", force), ref)
 }
 
 func (l minikubeLoader) remove(ctx context.Context, log io.Writer, ref string) error {
+	unlock := lockCachedTag(ref)
+	defer unlock()
+	forgetMinikubeCache(ref)
 	return runTool(ctx, log, l.path, "-p", l.profile, "image", "rm", ref)
+}
+
+// cachedTags serializes the loads and removals of one tag: the image cache is
+// minikube's (every profile's) and a load reads the tarball another load of
+// the same tag (into another profile) would remove.
+var cachedTags = struct {
+	mu   sync.Mutex
+	busy map[string]chan struct{}
+}{busy: map[string]chan struct{}{}}
+
+// lockCachedTag waits for the tag's other load or removal, and returns what
+// lets the next one go.
+func lockCachedTag(ref string) func() {
+	for {
+		cachedTags.mu.Lock()
+		ch, held := cachedTags.busy[ref]
+		if !held {
+			ch = make(chan struct{})
+			cachedTags.busy[ref] = ch
+			cachedTags.mu.Unlock()
+			return func() {
+				cachedTags.mu.Lock()
+				delete(cachedTags.busy, ref)
+				cachedTags.mu.Unlock()
+				close(ch)
+			}
+		}
+		cachedTags.mu.Unlock()
+		<-ch
+	}
+}
+
+// minikubeHome is minikube's own folder: $MINIKUBE_HOME, with .minikube added
+// unless it ends in it, else ~/.minikube (as minikube's localpath.MiniPath
+// finds it). fleetd runs minikube with its own environment. A var for
+// tests.
+var minikubeHome = func() string {
+	if h := os.Getenv("MINIKUBE_HOME"); h != "" {
+		if filepath.Base(h) == ".minikube" {
+			return h
+		}
+		return filepath.Join(h, ".minikube")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".minikube")
+}
+
+// minikubeCacheFiles are where minikube's image cache keeps ref's tarball,
+// one per architecture folder it has (minikube's own: cache/images/<arch>/<ref>
+// with each ':' as '_'), and how many folders deep under the architecture's
+// the tarball is (all fleet's); nil unless ref is a node load tag of fleet's
+// (fleet.invalid/<path>:<tag>, whose parts the reference grammar keeps free
+// of "..").
+func minikubeCacheFiles(ref string) (files []string, depth int) {
+	r, err := ParseReference(ref)
+	if err != nil || r.Domain != nodeLoadDomain || r.Tag == "" || r.Digest != "" {
+		return nil, 0
+	}
+	home := minikubeHome()
+	if home == "" {
+		return nil, 0
+	}
+	images := filepath.Join(home, "cache", "images")
+	arches, err := os.ReadDir(images)
+	if err != nil {
+		return nil, 0
+	}
+	name := nodeLoadDomain + "/" + r.Path
+	rel := filepath.FromSlash(name + "_" + r.Tag)
+	for _, a := range arches {
+		if a.IsDir() {
+			files = append(files, filepath.Join(images, a.Name(), rel))
+		}
+	}
+	return files, strings.Count(name, "/")
+}
+
+// forgetMinikubeCache removes minikube's cached tarball of ref, one of
+// fleet's node load tags (anything else is left alone), and the folders of
+// fleet's that it leaves empty. Best effort, logged.
+func forgetMinikubeCache(ref string) {
+	files, depth := minikubeCacheFiles(ref)
+	for _, f := range files {
+		err := os.Remove(f)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			continue
+		case err != nil:
+			flog.Warn("kubernetes image: removing minikube's cached copy of a loaded image", "ref", ref, "file", f, "err", err)
+			continue
+		}
+		flog.Info("kubernetes image: removed minikube's cached copy of a loaded image", "ref", ref, "file", f)
+		// fleet.invalid/<daemon8>/ and fleet.invalid/, once empty.
+		for dir, n := filepath.Dir(f), depth; n > 0; dir, n = filepath.Dir(dir), n-1 {
+			if os.Remove(dir) != nil {
+				break
+			}
+		}
+	}
 }
 
 // kindLoader: `kind load docker-image` imports into every node, skipping

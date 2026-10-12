@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -429,6 +430,85 @@ func TestMinikubeNodeLoadAndRedelivery(t *testing.T) {
 	}
 	if out, _ := exec.Command("docker", "image", "inspect", tag).CombinedOutput(); !strings.Contains(strings.ToLower(string(out)), "no such image") {
 		t.Errorf("the host still has %s", tag)
+	}
+}
+
+// TestMinikubeNodeLoadLeavesNoCacheTarball: minikube keeps every image
+// `minikube image load` loads as a tarball in its image cache; fleet's own
+// node loads leave none (its tag's tarball goes once the load is done, and a
+// leftover one, as an older fleet left it, goes with the image), while
+// everything else in the cache stays. No namespace: it only loads.
+func TestMinikubeNodeLoadLeavesNoCacheTarball(t *testing.T) {
+	profile := os.Getenv("FLEET_KUBEIMAGE_MINIKUBE")
+	if profile == "" {
+		t.Skip("set FLEET_KUBEIMAGE_MINIKUBE=<minikube profile> to run against a real cluster")
+	}
+	ctx := context.Background()
+	images := filepath.Join(minikubeHome(), "cache", "images", runtime.GOARCH)
+	cached := func(ref string) string {
+		return filepath.Join(images, filepath.FromSlash(strings.ReplaceAll(ref, ":", "_")))
+	}
+	built, id := buildUniqueImage(t)
+	daemonID := realDaemonID(t)
+	tag := NodeLoadTag(daemonID, id)
+	// Someone else's load of the same image under another name: minikube
+	// caches it, and fleet leaves that alone.
+	keep := "fleet-it-p6-04a/keep:" + strings.TrimPrefix(built, "fleet-it-p2-06:")
+	run(t, "docker", "tag", id, keep)
+	t.Cleanup(func() {
+		runQuiet("minikube", "-p", profile, "image", "rm", keep, tag)
+		runQuiet("docker", "image", "rm", keep, tag)
+		_ = os.Remove(cached(keep))
+		_ = os.Remove(filepath.Dir(cached(keep)))
+		_ = os.Remove(cached(tag))
+	})
+	run(t, "minikube", "-p", profile, "image", "load", "--daemon=true", keep)
+	if !exists(cached(keep)) {
+		t.Fatalf("minikube cached no tarball of %s at %s: its cache is laid out otherwise", keep, cached(keep))
+	}
+
+	indexDir := t.TempDir()
+	m := &Manager{IndexPath: func(c string) string { return filepath.Join(indexDir, c, "images.json") }}
+	cluster := &fleet.KubeCluster{ID: "p604a-minikube", Image: fleet.KubeImageSettings{Retention: "0"}}
+	tgt := Target{Cluster: cluster, DaemonID: daemonID, Local: localcluster.Cluster{Kind: localcluster.Minikube, Name: profile}, Platform: "linux/" + runtime.GOARCH, Secrets: &fakeSecrets{}}
+	d, err := m.Deliver(ctx, tgt, builtImage(id), "inst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Ref != tag || d.Strategy != StrategyNodeLoad {
+		t.Fatalf("Deliver = %+v", d)
+	}
+	if out := run(t, "minikube", "-p", profile, "image", "ls"); !strings.Contains(out, strings.TrimPrefix(tag, nodeLoadDomain+"/")) {
+		t.Fatalf("the node has no %s after the load:\n%s", tag, out)
+	}
+	if exists(cached(tag)) {
+		t.Errorf("fleet's load left %s in minikube's cache", cached(tag))
+	}
+	if !exists(cached(keep)) {
+		t.Errorf("fleet's load removed %s from minikube's cache", cached(keep))
+	}
+	t.Logf("loaded %s; minikube's cache has no %s, still has %s", tag, cached(tag), cached(keep))
+
+	// What an older fleet's load left: the GC removes it with the image.
+	run(t, "minikube", "-p", profile, "image", "load", "--daemon=true", tag)
+	if !exists(cached(tag)) {
+		t.Fatalf("minikube cached no tarball of %s at %s: its cache is laid out otherwise", tag, cached(tag))
+	}
+	if err := m.Release(cluster.ID, "inst"); err != nil {
+		t.Fatal(err)
+	}
+	m.Now = func() time.Time { return time.Now().Add(time.Hour) }
+	if res, err := m.GC(ctx, tgt, GCOptions{}); err != nil || len(res.Deleted) != 1 {
+		t.Fatalf("GC = %+v, %v", res, err)
+	}
+	if exists(cached(tag)) {
+		t.Errorf("the GC left %s in minikube's cache", cached(tag))
+	}
+	if !exists(cached(keep)) {
+		t.Errorf("the GC removed %s from minikube's cache", cached(keep))
+	}
+	if out := run(t, "minikube", "-p", profile, "image", "ls"); strings.Contains(out, strings.TrimPrefix(tag, nodeLoadDomain+"/")) {
+		t.Errorf("the node still has %s", tag)
 	}
 }
 

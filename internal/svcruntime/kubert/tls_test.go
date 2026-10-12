@@ -256,6 +256,81 @@ func TestEnsureBuildkit(t *testing.T) {
 	}
 }
 
+// TestBuildkitShapeChangeEmptiesItsCache: one cache volume never serves both
+// shapes: a server of the other shape than the one whose cache the volume
+// holds (allow_privileged changed) starts on an empty one, since a rootful
+// server runs as root on the node what a rootless one (another user, in its
+// own user namespace) wrote, and a rootless one cannot use root's files. The
+// volume records its shape; one from before that is judged by its server.
+func TestBuildkitShapeChangeEmptiesItsCache(t *testing.T) {
+	f := useFake(t)
+	rt := For(testCluster)
+	m := meta("alpha")
+	ctx := context.Background()
+	pvcs := f.cs.CoreV1().PersistentVolumeClaims("fleet")
+	volume := func() *corev1.PersistentVolumeClaim {
+		t.Helper()
+		pvc, err := pvcs.Get(ctx, m.name(names.SuffixBuildkit), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pvc
+	}
+	ensure := func(privileged *bool) *corev1.PersistentVolumeClaim {
+		t.Helper()
+		f.rec.AllowPrivileged = privileged
+		if err := rt.EnsureService("alpha", fleet.ServiceBuildkit); err != nil {
+			t.Fatal(err)
+		}
+		return volume()
+	}
+	yes, no := true, false
+	rootless := ensure(&no)
+	if got := rootless.Annotations[annotationBuildkitShape]; got != "rootless" {
+		t.Fatalf("the volume records shape %q", got)
+	}
+	if again := ensure(&no); again.UID != rootless.UID {
+		t.Fatal("the volume was made again with the shape unchanged")
+	}
+	rootful := ensure(&yes)
+	if rootful.UID == rootless.UID || rootful.Annotations[annotationBuildkitShape] != "rootful" {
+		t.Fatalf("rootless -> rootful: volume %s (was %s), shape %q; want a new one", rootful.UID, rootless.UID, rootful.Annotations[annotationBuildkitShape])
+	}
+	if c := buildkitDeployment(t, f, m).Spec.Containers[0]; c.Image != DefaultBuildkitImage || !*c.SecurityContext.Privileged {
+		t.Fatalf("the rootful server is %s", c.Image)
+	}
+
+	// A volume from before the shape was recorded: its server says.
+	delete(rootful.Annotations, annotationBuildkitShape)
+	if _, err := pvcs.Update(ctx, rootful, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ensure(&no); got.UID == rootful.UID || got.Annotations[annotationBuildkitShape] != "rootless" {
+		t.Fatalf("a rootful server's unrecorded volume under a rootless one: %s (was %s), shape %q", got.UID, rootful.UID, got.Annotations[annotationBuildkitShape])
+	}
+	// ... and with no server on it, nothing tells: it is kept.
+	kept := volume()
+	delete(kept.Annotations, annotationBuildkitShape)
+	if _, err := pvcs.Update(ctx, kept, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.cs.AppsV1().Deployments("fleet").Delete(ctx, m.name(names.SuffixBuildkit), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ensure(&yes); got.UID != kept.UID || got.Annotations[annotationBuildkitShape] != "rootful" {
+		t.Fatalf("an unrecorded volume with no server: %s (was %s), shape %q", got.UID, kept.UID, got.Annotations[annotationBuildkitShape])
+	}
+
+	// The other caches have one shape.
+	if err := rt.EnsureService("alpha", fleet.ServiceDebCache); err != nil {
+		t.Fatal(err)
+	}
+	apt, _ := pvcs.Get(ctx, m.name(names.SuffixAptCache), metav1.GetOptions{})
+	if _, has := apt.Annotations[annotationBuildkitShape]; has {
+		t.Fatal("the deb cache's volume records a Buildkit shape")
+	}
+}
+
 // TestBuildkitRefused: a connection whose Allow shared Buildkit is off, or
 // whose admission denies the server's pod, refuses it by name (it is
 // ErrNoServiceEndpoint, so instances there go without), its ensure removing

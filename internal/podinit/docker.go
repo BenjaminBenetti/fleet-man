@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -100,11 +102,14 @@ func dindSetsPools() bool {
 }
 
 // dockerConfig is what pod-init writes into a daemon.json; the zero value of
-// a field leaves the config's own.
+// a field is a setting fleet no longer makes (one it made goes, mergeDockerConfig).
 type dockerConfig struct {
 	mtu          int
 	pools        []AddressPool
 	cgroupParent string
+	// keep are keys whose value fleet could not tell this time (the pod's
+	// MTU unreadable): whatever the config has stays.
+	keep []string
 }
 
 // configureDocker writes d (with the pod network's MTU when it names none)
@@ -125,6 +130,7 @@ func configureDocker(d *Docker, layout *Layout) []string {
 		mtu, err := podMTU()
 		if err != nil {
 			warns = append(warns, fmt.Sprintf("docker mtu: %v", err))
+			cfg.keep = append(cfg.keep, keyMTU)
 		}
 		cfg.mtu = mtu
 	}
@@ -143,12 +149,37 @@ func configureDocker(d *Docker, layout *Layout) []string {
 	return warns
 }
 
+// The daemon.json keys pod-init sets.
+const (
+	keyMTU          = "mtu"
+	keyAddressPools = "default-address-pools"
+	keyCgroupParent = "cgroup-parent"
+)
+
+// dockerSetRecord is what fleet set in a daemon.json, kept beside it
+// (setRecordFile; dockerd refuses keys it does not know, so not in it): each
+// key's value as fleet wrote it, and the value it had before, so a setting
+// fleet no longer makes (a cleared dind_address_pool) goes again instead of
+// staying for good, and the image's or user's own value comes back. A key
+// whose value someone changed since fleet set it is theirs and stays.
+type dockerSetRecord struct {
+	V int `json:"v"`
+	// Set are fleet's values; Prior the values the config had before fleet
+	// set them (a key it lacked has none).
+	Set   map[string]any `json:"set,omitempty"`
+	Prior map[string]any `json:"prior,omitempty"`
+}
+
+// setRecordFile is where the record of what fleet set in file is kept.
+func setRecordFile(file string) string { return file + ".fleet-set" }
+
 // mergeDockerConfig sets cfg's settings in a dockerd config (creating it),
-// keeping every other key, and reports whether it changed anything. A config
-// that is not a JSON object is left alone, with an error: dockerd would
-// refuse it anyway, and overwriting it would lose the user's settings. A
-// config that picks the systemd cgroup driver keeps its own cgroup parent
-// (a systemd slice), with a warning.
+// keeping every other key, and takes out the ones fleet set before that cfg
+// no longer makes (back to what they were before fleet set them), and
+// reports whether it changed anything. A config that is not a JSON object is
+// left alone, with an error: dockerd would refuse it anyway, and overwriting
+// it would lose the user's settings. A config that picks the systemd cgroup
+// driver keeps its own cgroup parent (a systemd slice), with a warning.
 func mergeDockerConfig(file string, cfg dockerConfig) (changed bool, warn string, err error) {
 	conf := map[string]any{}
 	data, err := os.ReadFile(file)
@@ -169,26 +200,57 @@ func mergeDockerConfig(file string, cfg dockerConfig) (changed bool, warn string
 	}
 	want := map[string]any{}
 	if cfg.mtu > 0 {
-		want["mtu"] = float64(cfg.mtu)
+		want[keyMTU] = float64(cfg.mtu)
 	}
 	if len(cfg.pools) > 0 {
 		var pools []any
 		for _, p := range cfg.pools {
 			pools = append(pools, map[string]any{"base": p.Base, "size": float64(p.Size)})
 		}
-		want["default-address-pools"] = pools
+		want[keyAddressPools] = pools
 	}
 	if cfg.cgroupParent != "" {
 		if systemdDriver(conf) {
 			warn = fmt.Sprintf("docker cgroups: %s picks the systemd cgroup driver, so its containers' cgroups stay outside %s", file, UserCgroup)
 		} else {
-			want["cgroup-parent"] = cfg.cgroupParent
+			want[keyCgroupParent] = cfg.cgroupParent
 		}
 	}
-	for k, v := range want {
-		if !reflect.DeepEqual(conf[k], v) {
-			conf[k] = v
+	rec := readSetRecord(setRecordFile(file))
+	before := rec.clone()
+	for k, was := range rec.Set {
+		if _, still := want[k]; still || slices.Contains(cfg.keep, k) {
+			continue
+		}
+		if reflect.DeepEqual(conf[k], was) {
+			if prior, ok := rec.Prior[k]; ok {
+				conf[k] = prior
+			} else {
+				delete(conf, k)
+			}
 			changed = true
+		}
+		delete(rec.Set, k)
+		delete(rec.Prior, k)
+	}
+	for k, v := range want {
+		if reflect.DeepEqual(conf[k], v) {
+			continue
+		}
+		if _, ours := rec.Set[k]; !ours {
+			if have, ok := conf[k]; ok {
+				rec.Prior[k] = have
+			}
+		}
+		rec.Set[k] = v
+		conf[k] = v
+		changed = true
+	}
+	// The record goes first: a config written without it would keep a
+	// setting of fleet's for good.
+	if !reflect.DeepEqual(rec, before) {
+		if err := writeSetRecord(setRecordFile(file), rec); err != nil {
+			return false, warn, fmt.Errorf("record what fleet sets in %s: %w", file, err)
 		}
 	}
 	if !changed {
@@ -214,6 +276,54 @@ func mergeDockerConfig(file string, cfg dockerConfig) (changed bool, warn string
 		return false, warn, err
 	}
 	return true, warn, nil
+}
+
+// readSetRecord is the record at file; an empty one when there is none or
+// it cannot be read (fleet then takes back nothing it set before).
+func readSetRecord(file string) dockerSetRecord {
+	rec := dockerSetRecord{V: 1}
+	if data, err := os.ReadFile(file); err == nil {
+		_ = json.Unmarshal(data, &rec)
+	}
+	if rec.Set == nil {
+		rec.Set = map[string]any{}
+	}
+	if rec.Prior == nil {
+		rec.Prior = map[string]any{}
+	}
+	return rec
+}
+
+func (r dockerSetRecord) clone() dockerSetRecord {
+	return dockerSetRecord{V: r.V, Set: maps.Clone(r.Set), Prior: maps.Clone(r.Prior)}
+}
+
+// writeSetRecord writes rec at file (by rename), or removes the file when
+// rec holds nothing.
+func writeSetRecord(file string, rec dockerSetRecord) error {
+	if len(rec.Set) == 0 && len(rec.Prior) == 0 {
+		if err := os.Remove(file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	rec.V = 1
+	data, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return err
+	}
+	tmp := file + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, file); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // systemdDriver reports a dockerd config whose exec-opts pick the systemd

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -216,6 +217,12 @@ func (c *conn) buildkitRootful(ctx context.Context, m fleetMeta) bool {
 	if err != nil {
 		return false
 	}
+	return deploymentRootful(dep)
+}
+
+// deploymentRootful reports whether dep runs the shared Buildkit server
+// rootful (privileged).
+func deploymentRootful(dep *appsv1.Deployment) bool {
 	for _, ctr := range dep.Spec.Template.Spec.Containers {
 		if ctr.Name == string(fleet.ServiceBuildkit) {
 			sc := ctr.SecurityContext
@@ -223,6 +230,18 @@ func (c *conn) buildkitRootful(ctx context.Context, m fleetMeta) bool {
 		}
 	}
 	return false
+}
+
+// annotationBuildkitShape on Buildkit's cache volume is the shape of the
+// server whose cache it holds (buildkitShape; keepBuildkitShape).
+const annotationBuildkitShape = "fleet.dev/buildkit-shape"
+
+// buildkitShape names a Buildkit server's shape.
+func buildkitShape(rootful bool) string {
+	if rootful {
+		return "rootful"
+	}
+	return "rootless"
 }
 
 // BuildkitRefusedError is a connection that does not run the fleets' shared

@@ -109,6 +109,16 @@ func TestLiveBuildkitTLS(t *testing.T) {
 		}
 		return cred
 	}
+	// volume is the server's cache volume.
+	volume := func(t *testing.T) *corev1.PersistentVolumeClaim {
+		t.Helper()
+		pvc, err := r.cs.CoreV1().PersistentVolumeClaims(r.ns).Get(ctx, host, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pvc
+	}
+	rootlessVolume := volume(t)
 	shapes := []struct {
 		name    string
 		rootful bool
@@ -123,6 +133,13 @@ func TestLiveBuildkitTLS(t *testing.T) {
 					t.Fatal(err)
 				}
 				r.waitRollout(m)
+				// The rootful server never takes the rootless one's cache.
+				if v := volume(t); v.UID == rootlessVolume.UID || v.Annotations[annotationBuildkitShape] != "rootful" {
+					t.Fatalf("the rootful server's cache volume is %s (the rootless one's was %s), shape %q", v.UID, rootlessVolume.UID, v.Annotations[annotationBuildkitShape])
+				}
+				t.Logf("the rootful server has a cache volume of its own: %s (the rootless one's was %s)", volume(t).UID, rootlessVolume.UID)
+			} else if got := rootlessVolume.Annotations[annotationBuildkitShape]; got != "rootless" {
+				t.Fatalf("the rootless server's cache volume records shape %q", got)
 			}
 			tpl := r.buildkitTemplate(m)
 			if got := tpl.Spec.Containers[0].Image; (got == DefaultBuildkitImage) != shape.rootful {

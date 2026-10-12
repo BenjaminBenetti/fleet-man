@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/owner"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/serviceimages"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
 )
 
@@ -289,6 +291,56 @@ func TestFullBaselineNamespaceIsLimited(t *testing.T) {
 		if strings.Contains(w, "privileged allowed") {
 			t.Errorf("warns privileged allowed where it is denied: %v", res.Warnings)
 		}
+	}
+}
+
+// The shared-Buildkit canary names the image the server runs: the pinned
+// rootless one (it named an unpinned moby/buildkit:rootless, which a policy
+// that admits only pinned images refused though the server would pass), or
+// the connection's own service_images.buildkit_rootless.
+func TestBuildkitCanaryNamesTheServersImage(t *testing.T) {
+	for _, tt := range []struct {
+		name, override, want string
+	}{
+		{"pinned default", "", serviceimages.BuildkitRootless},
+		{"the connection's", "registry.example/mirror/buildkit:v0.25.1-rootless@sha256:" + strings.Repeat("ab", 32), "registry.example/mirror/buildkit:v0.25.1-rootless@sha256:" + strings.Repeat("ab", 32)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath", isDefault))
+			var mu sync.Mutex
+			var named []string
+			c.deny = func(pod *corev1.Pod) string {
+				for _, ctr := range pod.Spec.Containers {
+					if ctr.Name == "buildkitd" {
+						mu.Lock()
+						named = append(named, ctr.Image)
+						mu.Unlock()
+						if !strings.Contains(ctr.Image, "@sha256:") {
+							return "images must be pinned by digest"
+						}
+					}
+				}
+				return ""
+			}
+			// Privileged pods not allowed: the server runs rootless.
+			no := false
+			rec := fleet.KubeCluster{AllowPrivileged: &no}
+			rec.ServiceImages.BuildkitRootless = tt.override
+			res := Full(context.Background(), target(c, rec), nil)
+			if !res.Capabilities.GetBuildkitAdmitted() {
+				t.Errorf("buildkit refused: %q", res.Capabilities.GetBuildkitReason())
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(named) == 0 {
+				t.Fatal("no Buildkit canary pod was asked about")
+			}
+			for _, img := range named {
+				if img != tt.want {
+					t.Errorf("the canary names %s, want %s", img, tt.want)
+				}
+			}
+		})
 	}
 }
 

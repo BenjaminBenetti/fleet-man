@@ -425,7 +425,8 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 		HostSockets:    recordedHostSockets(adm.Result.Pod.HostSockets),
 		HostSocketDirs: recordedHostSocketDirs(adm.Result.Pod.HostSocketDirs),
 		HostGateway:    adm.Result.Pod.HostGateway, GatewaySkip: adm.Result.Pod.GatewaySkip,
-		Share: c.share.record(&adm.Result.Pod),
+		Share:       c.share.record(&adm.Result.Pod),
+		DockerImage: dockerImageOf(o),
 	}
 	rec.addImageDigest(del.Digest)
 	rec.addImageDigest(del.ImageID)

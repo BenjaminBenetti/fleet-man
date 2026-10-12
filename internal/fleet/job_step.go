@@ -40,6 +40,9 @@ const (
 	StepRollback        JobStep = 27
 
 	StepConfigureCaches JobStep = 28
+	// StepTestCluster is the cluster's deep test, run before a connection's
+	// first fleet share is made (its two-pod probe decides the share's mode).
+	StepTestCluster JobStep = 29
 )
 
 // jobStepLabels are the words an instance row shows for each step, lower case
@@ -73,6 +76,7 @@ var jobStepLabels = map[JobStep]string{
 	StepExportWorkspace:    "exporting workspace",
 	StepRollback:           "rolling back",
 	StepConfigureCaches:    "configuring caches",
+	StepTestCluster:        "testing the cluster",
 }
 
 // Label is the step as an instance row shows it, or "" for StepUnspecified and

@@ -48,6 +48,12 @@ type Environment struct {
 	// ctx) when none has finished yet; an error when the connection is
 	// unusable, with its kubernetes: code.
 	Facts func(ctx context.Context, clusterID string) (Facts, error)
+	// DeepFacts is Facts for a create about to make a fleet's share there:
+	// when no deep test has told the connection's share mode yet (whether
+	// two pods on one node mount one volume decides between single-node
+	// shares and the copy tier), after one, which it starts or joins and
+	// waits for, passing progress each of its checks. nil is Facts.
+	DeepFacts func(ctx context.Context, clusterID string, progress func(*fleetgrpc.KubeCheck)) (Facts, error)
 	// Tools are the programs capture-up and set-up run (the zero value:
 	// the devcontainer CLI and docker on PATH, the daemon's own executable
 	// as the docker shim).

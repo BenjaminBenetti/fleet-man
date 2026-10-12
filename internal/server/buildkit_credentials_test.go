@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -227,12 +228,74 @@ func TestReensureClusterBuildkit(t *testing.T) {
 	})
 	recs := clusterRecorders(t, svcruntimetest.New("docker"), nil, "c1", "c2")
 	recs["c1"].FailOn("EnsureService", fmt.Errorf("%w: not allowed", svcruntime.ErrNoEndpoint))
+	gave := stubGiveBuilder(t, nil)
 	reensureClusterBuildkit(context.Background(), "c1")
 	if got := ensured(recs["c1"]); !reflect.DeepEqual(got, []string{"alpha/buildkit"}) {
 		t.Fatalf("c1 ensured %v", got)
 	}
 	if got := recs["c2"].Calls(); len(got) != 0 {
 		t.Fatalf("c2 calls %+v", got)
+	}
+	if got := gave(); len(got) != 0 {
+		t.Fatalf("a connection that refused the server gave builders to %v", got)
+	}
+}
+
+// stubGiveBuilder records the instances given a builder (giveInstanceBuilder),
+// failing those fail names.
+func stubGiveBuilder(t *testing.T, fail map[string]error) func() []string {
+	t.Helper()
+	var mu sync.Mutex
+	var gave []string
+	orig := giveInstanceBuilder
+	giveInstanceBuilder = func(_ svcruntime.Runtime, fleetName string, inst *fleet.Instance) (bool, error) {
+		mu.Lock()
+		gave = append(gave, fleetName+"/"+inst.Name)
+		mu.Unlock()
+		if err := fail[fleetName+"/"+inst.Name]; err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	t.Cleanup(func() { giveInstanceBuilder = orig })
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := slices.Clone(gave)
+		sort.Strings(out)
+		return out
+	}
+}
+
+// Buildkit allowed again on a connection: the running instances of the
+// fleets whose server came back get the shared builder now, as a start
+// gives it, not at their next start (they only had their credentials
+// renewed); stopped ones, other connections' and fleets without Buildkit
+// get nothing. A failure is a warning on the instance.
+func TestReensureClusterBuildkitGivesRunningInstancesTheBuilder(t *testing.T) {
+	isolateFleetDir(t)
+	kube := func(name, cluster string, st fleet.InstanceStatus) *fleet.Instance {
+		return &fleet.Instance{Name: name, Backend: fleet.BackendKubernetes, KubeCluster: cluster, Status: st, ContainerID: "kubernetes:" + cluster + "/" + name}
+	}
+	seedFleets(t, map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{BuildkitServer: true}, Instances: []*fleet.Instance{
+			kube("k1", "c1", fleet.StatusRunning), kube("k2", "c1", fleet.StatusRunning), kube("k3", "c1", fleet.StatusStopped), kube("k4", "c2", fleet.StatusRunning),
+		}},
+		"beta": {Name: "beta", Settings: fleet.FleetSettings{DebCacheServer: true}, Instances: []*fleet.Instance{kube("k1", "c1", fleet.StatusRunning)}},
+	})
+	clusterRecorders(t, svcruntimetest.New("docker"), nil, "c1", "c2")
+	gave := stubGiveBuilder(t, map[string]error{"alpha/k2": errors.New("no buildx")})
+	// k1 started while the connection refused the server.
+	state.WriteWarn("alpha", "k1", "other warning\nbuildkit server: shared Buildkit is not allowed on c1")
+	reensureClusterBuildkit(context.Background(), "c1")
+	if got := gave(); !reflect.DeepEqual(got, []string{"alpha/k1", "alpha/k2"}) {
+		t.Fatalf("builders given to %v; want alpha's running instances on c1", got)
+	}
+	if got := banner(t, "alpha", "k1"); got != "other warning" {
+		t.Fatalf("alpha/k1's banner %q; want the refusal gone, the rest kept", got)
+	}
+	if got := banner(t, "alpha", "k2"); got != "buildkit server: no buildx" {
+		t.Fatalf("alpha/k2's banner %q", got)
 	}
 }
 

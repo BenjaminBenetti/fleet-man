@@ -42,6 +42,12 @@ type Expect struct {
 	// FieldManager is the manager the StatefulSet's managedFields must name
 	// (DefaultFieldManager when empty).
 	FieldManager string
+	// DockerImage is the image fleet rendered for the docker engine's
+	// sidecar (privileged root beside the dev container), "" when it
+	// rendered none or has no record of it: the pod's sidecar must name it,
+	// and once it runs, carry its digest when the reference is pinned (the
+	// spec hash leaves images out).
+	DockerImage string
 }
 
 // TamperedError is a pod that is not the one fleet made: another image, a
@@ -99,6 +105,11 @@ func VerifyPod(pod *corev1.Pod, sts *appsv1.StatefulSet, want Expect, hash func(
 	if status != nil && status.ImageID != "" && !digestIn(status.ImageID, want.ImageDigests) {
 		reasons = append(reasons, fmt.Sprintf("its %s container runs %s, not the image fleet delivered", DevContainer, status.ImageID))
 	}
+	// The share's init container runs the delivered image too.
+	if s := initContainerStatus(pod, podspec.ShareInit); s != nil && s.ImageID != "" && !digestIn(s.ImageID, want.ImageDigests) {
+		reasons = append(reasons, fmt.Sprintf("its %s container runs %s, not the image fleet delivered", podspec.ShareInit, s.ImageID))
+	}
+	reasons = append(reasons, dockerSidecarReasons(pod, want.DockerImage)...)
 	if len(reasons) > 0 {
 		return &TamperedError{Namespace: pod.Namespace, Pod: pod.Name, Reasons: reasons}
 	}
@@ -109,6 +120,46 @@ func VerifyPod(pod *corev1.Pod, sts *appsv1.StatefulSet, want Expect, hash func(
 		return fmt.Errorf("%w: pod %s/%s is %s", ErrPodNotReady, pod.Namespace, pod.Name, pod.Status.Phase)
 	case status == nil || status.State.Running == nil || status.ImageID == "":
 		return fmt.Errorf("%w: pod %s/%s's %s container is not running", ErrPodNotReady, pod.Namespace, pod.Name, DevContainer)
+	}
+	return nil
+}
+
+// dockerImageOf is the image of the docker engine's sidecar o's pod runs, ""
+// without one.
+func dockerImageOf(o *podspec.Objects) string {
+	for _, c := range o.StatefulSet.Spec.Template.Spec.InitContainers {
+		if c.Name == podspec.DockerSidecar {
+			return c.Image
+		}
+	}
+	return ""
+}
+
+// dockerSidecarReasons are how pod's docker engine sidecar is not the one
+// fleet rendered with image want ("" checks nothing): another image named,
+// or (pinned by digest) another one running. A pinned image named by
+// another repository with the same digest is the one rendered: an admission
+// policy that sends pulls through a registry mirror rewrites the name, never
+// the digest.
+func dockerSidecarReasons(pod *corev1.Pod, want string) []string {
+	if want == "" {
+		return nil
+	}
+	var spec *corev1.Container
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == podspec.DockerSidecar {
+			spec = &pod.Spec.InitContainers[i]
+		}
+	}
+	pinned := imageDigest(want)
+	switch {
+	case spec == nil:
+		return []string{fmt.Sprintf("it has no %s container", podspec.DockerSidecar)}
+	case spec.Image != want && (pinned == "" || imageDigest(spec.Image) != pinned):
+		return []string{fmt.Sprintf("its %s container names image %s, not %s fleet rendered", podspec.DockerSidecar, spec.Image, want)}
+	}
+	if s := initContainerStatus(pod, podspec.DockerSidecar); pinned != "" && s != nil && s.ImageID != "" && imageDigest(s.ImageID) != pinned {
+		return []string{fmt.Sprintf("its %s container runs %s, not %s", podspec.DockerSidecar, s.ImageID, pinned)}
 	}
 	return nil
 }

@@ -30,6 +30,66 @@ func sidecarOf(o *Objects) *corev1.Container {
 	return nil
 }
 
+// The engine's sidecar and the share-layout init container name requests
+// for cpu and memory, and a limit of each the dev container limits (the
+// engine's containers get the dev container's room; the init container a
+// small one): a ResourceQuota on cpu or memory refuses a pod with a
+// container that names none, where no LimitRange fills it in (the sidecar
+// named none). Without the dev container's limits they get none either.
+func TestCompanionContainersNameTheDevContainersResources(t *testing.T) {
+	withShare := func(in *Input, r *RenderInput) {
+		shareMounts(in)
+		r.Share = testShare(*in, "fs-fleet-man-abcdefgh-share")
+	}
+	inits := func(o *Objects) map[string]corev1.Container {
+		out := map[string]corev1.Container{}
+		for _, c := range o.StatefulSet.Spec.Template.Spec.InitContainers {
+			out[c.Name] = c
+		}
+		return out
+	}
+	limited := mustRender(t, []string{"--mount", dockerSockBind, "-m", "4g", "--cpus", "2"}, withShare)
+	got := inits(limited)
+	sc, sh := got[DockerSidecar], got[ShareInit]
+	if sc.Name == "" || sh.Name == "" {
+		t.Fatalf("init containers %v; want the sidecar and the share's", got)
+	}
+	dev := devOf(limited)
+	for _, c := range []corev1.Container{sc, sh} {
+		for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
+			if _, ok := c.Resources.Requests[name]; !ok {
+				t.Errorf("%s requests no %s: %v", c.Name, name, c.Resources)
+			}
+			if _, ok := c.Resources.Limits[name]; !ok {
+				t.Errorf("%s limits no %s beside a dev container limited to %v", c.Name, name, dev.Resources.Limits)
+			}
+		}
+	}
+	if !sc.Resources.Limits.Memory().Equal(*dev.Resources.Limits.Memory()) || !sc.Resources.Limits.Cpu().Equal(*dev.Resources.Limits.Cpu()) {
+		t.Errorf("sidecar limits %v; want the dev container's %v", sc.Resources.Limits, dev.Resources.Limits)
+	}
+	if sh.Resources.Limits.Memory().Cmp(shareInitMemory) != 0 {
+		t.Errorf("share init memory limit %v; want %v", sh.Resources.Limits.Memory(), shareInitMemory.String())
+	}
+
+	open := mustRender(t, []string{"--mount", dockerSockBind}, withShare)
+	if d := devOf(open); len(d.Resources.Limits) != 0 {
+		t.Fatalf("dev container limits %v with no -m", d.Resources.Limits)
+	}
+	for name, c := range inits(open) {
+		if len(c.Resources.Limits) != 0 || len(c.Resources.Requests) != 2 {
+			t.Errorf("%s resources %v; want requests only, as the dev container", name, c.Resources)
+		}
+	}
+
+	// A dev container limited below the sidecar's own request: the request
+	// is lowered to the limit (the API refuses a request above it).
+	tiny := sidecarOf(mustRender(t, []string{"--mount", dockerSockBind, "-m", "64m"}, nil))
+	if tiny.Resources.Requests.Memory().Cmp(*tiny.Resources.Limits.Memory()) > 0 {
+		t.Errorf("sidecar requests %v above its limit %v", tiny.Resources.Requests.Memory(), tiny.Resources.Limits.Memory())
+	}
+}
+
 // A run that binds the docker engine's socket gets the engine as a native
 // sidecar: started first, kept running beside the dev container, which
 // waits for its startup probe; privileged; its data on vol/fleet-docker; its

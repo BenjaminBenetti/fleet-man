@@ -56,5 +56,6 @@ func (r InstanceRecord) expect() Expect {
 		ImageDigests:   append([]string(nil), r.ImageDigests...),
 		SpecHash:       r.SpecHash,
 		StatefulSetUID: types.UID(r.StatefulSetUID),
+		DockerImage:    r.DockerImage,
 	}
 }

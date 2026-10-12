@@ -163,12 +163,26 @@ func ShareLayout(p *PodSpec, s *Share) podshare.Layout {
 	return l
 }
 
-// shareInitResources are the init container's: it touches a handful of
-// paths.
-var shareInitResources = corev1.ResourceRequirements{Requests: corev1.ResourceList{
-	corev1.ResourceCPU:    resource.MustParse("10m"),
-	corev1.ResourceMemory: resource.MustParse("32Mi"),
-}}
+// shareInitRequests are the init container's requests, and shareInitMemory
+// the most memory it is limited to (where the dev container's memory is
+// limited, companionLimits): it touches a handful of paths.
+var (
+	shareInitRequests = corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("10m"),
+		corev1.ResourceMemory: resource.MustParse("32Mi"),
+	}
+	shareInitMemory = resource.MustParse("128Mi")
+)
+
+// shareInitResources are the init container's resources.
+func (r *renderer) shareInitResources() corev1.ResourceRequirements {
+	return companionResources(shareInitRequests, r.companionLimits(func(name corev1.ResourceName, dev resource.Quantity) resource.Quantity {
+		if name == corev1.ResourceMemory && dev.Cmp(shareInitMemory) > 0 {
+			return shareInitMemory.DeepCopy()
+		}
+		return dev
+	}))
+}
 
 // initTree is where the init container finds the tree, its volume mounted
 // whole at podshare.InitDir.
@@ -189,7 +203,7 @@ func (r *renderer) shareInit(s *Share) corev1.Container {
 		Image:           r.in.Image.Ref,
 		ImagePullPolicy: r.pullPolicy(),
 		Command:         ShareInitCommand(s.initTree()),
-		Resources:       *shareInitResources.DeepCopy(),
+		Resources:       r.shareInitResources(),
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: volumeDisk, MountPath: podseed.InstallDir, SubPath: podseed.DirFleet, ReadOnly: true},
 			{Name: volumeSpec, MountPath: podseed.SpecDir, ReadOnly: true},

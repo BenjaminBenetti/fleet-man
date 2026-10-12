@@ -375,6 +375,78 @@ func TestDockerConfig(t *testing.T) {
 	}
 }
 
+// A setting fleet made goes once fleet no longer makes it (a cleared
+// dind_address_pool, a pod that lost its cgroup layout): back to the value
+// the config had before fleet set it, or out when it had none. A value
+// someone changed since fleet set it stays theirs, and one fleet could not
+// tell this time (the pod's MTU unreadable) stays as it is.
+func TestMergeDockerConfigTakesBackWhatFleetNoLongerSets(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "etc", "docker", "daemon.json")
+	read := func() map[string]any {
+		t.Helper()
+		var got map[string]any
+		data, _ := os.ReadFile(cfg)
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatalf("%s: %v", data, err)
+		}
+		return got
+	}
+	merge := func(c dockerConfig) {
+		t.Helper()
+		if _, _, err := mergeDockerConfig(cfg, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pools := []AddressPool{{Base: "10.200.0.0/16", Size: 24}}
+	fleetPools := []any{map[string]any{"base": "10.200.0.0/16", "size": float64(24)}}
+	imagePools := []any{map[string]any{"base": "172.80.0.0/16", "size": float64(24)}}
+	parent := "/kubepods/pod1/ctr/fleet-user/docker"
+	mustMkdirAll(t, filepath.Dir(cfg))
+
+	// The image's own pools come back once the connection's are cleared.
+	_ = os.WriteFile(cfg, []byte(`{"default-address-pools":[{"base":"172.80.0.0/16","size":24}],"log-level":"warn"}`), 0o644)
+	merge(dockerConfig{mtu: 1450, pools: pools, cgroupParent: parent})
+	if got := read(); !reflect.DeepEqual(got["default-address-pools"], fleetPools) {
+		t.Fatalf("pools %v, want the connection's", got["default-address-pools"])
+	}
+	merge(dockerConfig{mtu: 1450, cgroupParent: parent})
+	got := read()
+	if !reflect.DeepEqual(got["default-address-pools"], imagePools) || got["log-level"] != "warn" || got["mtu"] != float64(1450) || got["cgroup-parent"] != parent {
+		t.Fatalf("after clearing the pools: %v; want the image's pools back and the rest kept", got)
+	}
+
+	// A key the config lacked goes; the record goes with the last of them.
+	_ = os.WriteFile(cfg, []byte(`{}`), 0o644)
+	_ = os.Remove(setRecordFile(cfg))
+	merge(dockerConfig{mtu: 1450, pools: pools, cgroupParent: parent})
+	merge(dockerConfig{mtu: 1450})
+	if got := read(); got["default-address-pools"] != nil || got["cgroup-parent"] != nil || got["mtu"] != float64(1450) {
+		t.Fatalf("after clearing the pools and the layout: %v", got)
+	}
+	merge(dockerConfig{keep: []string{keyMTU}})
+	if got := read(); got["mtu"] != float64(1450) {
+		t.Fatalf("an MTU fleet could not read this time went: %v", got)
+	}
+	merge(dockerConfig{})
+	if got := read(); len(got) != 0 {
+		t.Fatalf("with nothing set: %v", got)
+	}
+	if _, err := os.Stat(setRecordFile(cfg)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("an empty record stayed: %v", err)
+	}
+
+	// Pools someone set over fleet's are theirs.
+	merge(dockerConfig{pools: pools})
+	_ = os.WriteFile(cfg, []byte(`{"default-address-pools":[{"base":"172.80.0.0/16","size":24}]}`), 0o644)
+	if changed, _, err := mergeDockerConfig(cfg, dockerConfig{}); err != nil || changed {
+		t.Fatalf("clearing over the user's pools: %v %v", changed, err)
+	}
+	if got := read(); !reflect.DeepEqual(got["default-address-pools"], imagePools) {
+		t.Fatalf("the user's pools went: %v", got)
+	}
+}
+
 // configureDocker configures an image's docker engine only: an image without
 // one gets no daemon.json; the docker-in-docker feature's own address pool
 // option wins over the connection's.

@@ -4,7 +4,9 @@ package podspec
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -200,6 +202,31 @@ func TestLiveAdmission(t *testing.T) {
 	_, err = admit("fixture", limited, fleet.KubeCluster{}, func(in *Input, _ *RenderInput) { in.Facts.LimitRangeMemoryLimit = "4Gi" })
 	wantCode("limit range", err, CodeAdmissionDenied, "LimitRange", "maximum memory usage per Container is 4Gi")
 
+	// A ResourceQuota on cpu and memory requests with room to spare, and no
+	// LimitRange to fill in what a container leaves out: every container of
+	// the pod must request both, the docker engine's sidecar too, or the
+	// pod is refused ("must specify requests.cpu for: fleet-docker", as it
+	// was before the sidecar requested any).
+	every := c.namespace(t, "quota-every", nil)
+	if _, err := c.api.CoreV1().ResourceQuotas(every).Create(ctx, &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: "every"},
+		Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{
+			corev1.ResourceRequestsCPU: resource.MustParse("100"), corev1.ResourceRequestsMemory: resource.MustParse("1Ti"),
+		}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, fx := range []string{"fixture", "fixture-dood"} {
+		a, err := admit(fx, every, fleet.KubeCluster{}, nil)
+		if err != nil {
+			t.Errorf("%s under a quota on cpu and memory requests: %v", fx, err)
+			continue
+		}
+		if fx == "fixture-dood" && a.Result.Pod.DooD == nil {
+			t.Errorf("%s: no docker engine", fx)
+		}
+	}
+
 	// The preflight, before any build, is admitted and refused as the
 	// real capture is.
 	preflight := func(fixture string) func(*Input, *RenderInput) {
@@ -255,6 +282,107 @@ func TestLiveAdmission(t *testing.T) {
 			if SpecHash(&stored.Spec) != SpecHash(&p.Spec) {
 				t.Errorf("%s in %s: the stored pod %s hashes differently from the render", tt.fixture, tt.ns, p.Name+p.GenerateName)
 			}
+		}
+	}
+}
+
+// TestLiveInjectedFSGroup: an admission that gives fleet's pods an fsGroup
+// (an OpenShift SCC does, from the namespace's range; here a
+// MutatingAdmissionPolicy on one namespace stands in for it) is a warning of
+// the render, naming the group and the share's logins it makes readable to
+// it. Needs a cluster that serves admissionregistration.k8s.io/v1
+// MutatingAdmissionPolicy (1.34+) and kubectl.
+func TestLiveInjectedFSGroup(t *testing.T) {
+	c := newLiveCluster(t)
+	kctx := os.Getenv("FLEET_KUBE_TEST_CONTEXT")
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		t.Skip("no kubectl")
+	}
+	ns := c.namespace(t, "scc", map[string]string{"fleet.dev/it-p6-04a": "scc"})
+	policy := c.prefix + "-scc"
+	kubectl := func(stdin string, args ...string) (string, error) {
+		cmd := exec.Command("kubectl", append([]string{"--context", kctx}, args...)...)
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	manifest := fmt.Sprintf(`apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: %[1]s
+spec:
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE"]
+      resources: ["pods"]
+  reinvocationPolicy: Never
+  mutations:
+  - patchType: ApplyConfiguration
+    applyConfiguration:
+      expression: >
+        Object{spec: Object.spec{securityContext: Object.spec.securityContext{fsGroup: 1000650000}}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: %[1]s
+spec:
+  policyName: %[1]s
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        fleet.dev/it-p6-04a: scc
+`, policy)
+	if out, err := kubectl(manifest, "apply", "-f", "-"); err != nil {
+		if strings.Contains(out, "no matches for kind") {
+			t.Skipf("the cluster serves no MutatingAdmissionPolicy: %s", out)
+		}
+		t.Fatalf("kubectl apply: %v\n%s", err, out)
+	}
+	t.Cleanup(func() {
+		_, _ = kubectl("", "delete", "mutatingadmissionpolicybinding,mutatingadmissionpolicy", policy, "--ignore-not-found")
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	// The policy takes a moment to reach the API server's admission.
+	var warning string
+	for warning == "" {
+		in, r := liveInput(t, "fixture", ns, fleet.KubeCluster{})
+		a, err := Admit(ctx, c.api, in, r)
+		if err != nil {
+			t.Fatalf("admit: %v", err)
+		}
+		for _, w := range a.Objects.Warnings {
+			if strings.Contains(w, "fsGroup") {
+				warning = w
+			}
+		}
+		if warning == "" {
+			select {
+			case <-ctx.Done():
+				t.Fatal("no fsGroup warning while the policy gives the pods fsGroup 1000650000")
+			case <-time.After(time.Second):
+			}
+		}
+	}
+	for _, want := range []string{"fsGroup 1000650000", "fleet sets none", "0660"} {
+		if !strings.Contains(warning, want) {
+			t.Errorf("warning %q lacks %q", warning, want)
+		}
+	}
+	t.Logf("warning: %s", warning)
+	// Elsewhere, no such warning.
+	open := c.namespace(t, "no-scc", nil)
+	in, r := liveInput(t, "fixture", open, fleet.KubeCluster{})
+	a, err := Admit(ctx, c.api, in, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range a.Objects.Warnings {
+		if strings.Contains(w, "fsGroup") {
+			t.Errorf("warned outside the policy's namespace: %s", w)
 		}
 	}
 }

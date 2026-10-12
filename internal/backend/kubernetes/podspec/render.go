@@ -681,6 +681,38 @@ func (r *renderer) resources() corev1.ResourceRequirements {
 	return *r.requirements.DeepCopy()
 }
 
+// companionLimits are the limits of a container fleet runs beside the dev
+// container (the share-layout init container, the docker engine's sidecar):
+// one of each of cpu and memory the dev container limits, own giving its
+// value from the dev container's; nil when it limits neither. A namespace's
+// ResourceQuota on cpu or memory refuses a pod unless every container, its
+// init containers too, names what it counts (where no LimitRange fills it
+// in), and the dev container's resources are the ones fleet sees to that.
+func (r *renderer) companionLimits(own func(name corev1.ResourceName, dev resource.Quantity) resource.Quantity) corev1.ResourceList {
+	var out corev1.ResourceList
+	for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
+		if dev, ok := r.requirements.Limits[name]; ok {
+			if out == nil {
+				out = corev1.ResourceList{}
+			}
+			out[name] = own(name, dev)
+		}
+	}
+	return out
+}
+
+// companionResources are requests and limits, each request no larger than
+// its limit (the API refuses one that is).
+func companionResources(requests, limits corev1.ResourceList) corev1.ResourceRequirements {
+	res := corev1.ResourceRequirements{Requests: requests.DeepCopy(), Limits: limits}
+	for name, limit := range limits {
+		if req, ok := res.Requests[name]; ok && req.Cmp(limit) > 0 {
+			res.Requests[name] = limit.DeepCopy()
+		}
+	}
+	return res
+}
+
 // parseQuantities reads the translation's quantities as the API takes them:
 // the resources and the disk size. A connection setting the translation
 // read but the API does not (a size docker spells but Kubernetes does not)

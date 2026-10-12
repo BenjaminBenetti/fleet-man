@@ -20,20 +20,21 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/serviceimages"
 )
 
 // objects.go renders a fleet's objects on one connection. The builders are
 // pure: the same fleet, connection record and anchor render the same objects,
 // which the golden tests hold them to.
 
-// The services' default images, pinned by digest (the connection's
-// service_images overrides them; Harden refuses an override that is not
-// pinned).
+// The services' default images, pinned by digest (serviceimages; the
+// connection's service_images overrides them; Harden refuses an override
+// that is not pinned).
 const (
-	DefaultDebCacheImage         = "docker.io/sameersbn/apt-cacher-ng:latest@sha256:82f55f9c8f627cee8ef5f710c1745388d79d3a3f2f3150353e6500021bec11b4"
-	DefaultImageCacheImage       = "docker.io/library/registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
-	DefaultBuildkitRootlessImage = "docker.io/moby/buildkit:v0.25.1-rootless@sha256:0c0ce4929976ace509f7a53878303504b2de8857829aea4932af9f7325a30f51"
-	DefaultBuildkitImage         = "docker.io/moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e18d9b39b68e2b0c2475cc1b6"
+	DefaultDebCacheImage         = serviceimages.DebCache
+	DefaultImageCacheImage       = serviceimages.ImageCache
+	DefaultBuildkitRootlessImage = serviceimages.BuildkitRootless
+	DefaultBuildkitImage         = serviceimages.Buildkit
 )
 
 // The metadata ranges the egress policy keeps a fleet's pods from: IPv4
@@ -261,25 +262,7 @@ func cacheSize(rec *fleet.KubeCluster, svc fleet.SharedService) (resource.Quanti
 // cacheImage is svc's image on rec: the connection's service_images, else
 // the pinned default. Buildkit runs rootless unless rootful.
 func cacheImage(rec *fleet.KubeCluster, svc fleet.SharedService, rootful bool) string {
-	img := rec.ServiceImages
-	pick := func(override, def string) string {
-		if v := strings.TrimSpace(override); v != "" {
-			return v
-		}
-		return def
-	}
-	switch svc {
-	case fleet.ServiceDebCache:
-		return pick(img.DebCache, DefaultDebCacheImage)
-	case fleet.ServiceImageCache:
-		return pick(img.ImageCache, DefaultImageCacheImage)
-	case fleet.ServiceBuildkit:
-		if rootful {
-			return pick(img.Buildkit, DefaultBuildkitImage)
-		}
-		return pick(img.BuildkitRootless, DefaultBuildkitRootlessImage)
-	}
-	return ""
+	return serviceimages.For(rec, svc, rootful)
 }
 
 // cacheVolume is svc's volume. It names no owner: it outlives the fleet's

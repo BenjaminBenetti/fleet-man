@@ -238,6 +238,54 @@ func podLayout(entries []backend.LayoutEntry, uid, gid int) podshare.Layout {
 	return l
 }
 
+// deepTestFirst has the connection's deep test told the share mode before a
+// fleet's first share is made there (Environment.DeepFacts: the first fleet
+// on a connection waits for the test, which runs once), its checks shown as
+// the create's step, and takes the facts it gives. The instance's identity
+// stays the one connect decided by: the test re-runs the same admission
+// checks moments later.
+func (c *creation) deepTestFirst(ctx context.Context) error {
+	if c.env.DeepFacts == nil {
+		return nil
+	}
+	reported := false
+	facts, err := c.env.DeepFacts(ctx, c.id.cluster, func(ch *fleetgrpc.KubeCheck) {
+		reported = true
+		backend.ReportStep(ctx, fleet.StepTestCluster, deepCheckLine(ch))
+	})
+	if err != nil {
+		return err
+	}
+	c.facts = facts
+	if reported {
+		mode := facts.Capabilities.GetShareMode()
+		if mode == "" {
+			mode = "none"
+		}
+		backend.ReportStep(ctx, fleet.StepTestCluster, "done: share mode "+mode)
+	}
+	return nil
+}
+
+// deepCheckLine is a deep test check as the create's step shows it ("share
+// pods …", "share pods: pass").
+func deepCheckLine(c *fleetgrpc.KubeCheck) string {
+	name := strings.ReplaceAll(c.GetName(), "_", " ")
+	switch c.GetResult() {
+	case fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_RUNNING:
+		return name + " …"
+	case fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS:
+		return name + ": pass"
+	case fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN:
+		return name + ": warn: " + c.GetDetail()
+	case fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL:
+		return name + ": fail: " + c.GetDetail()
+	case fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_SKIPPED:
+		return name + ": skipped"
+	}
+	return name
+}
+
 // shareModeOf is the mode a new share in class takes on a connection whose
 // preflight found caps: the copy tier when the deep test found two pods on
 // one node cannot mount one RWO volume, multi-node when class is the one
@@ -371,6 +419,11 @@ func (c *creation) prepareShareFor(ctx context.Context, entries []backend.Layout
 	}
 	switch {
 	case gone(err):
+		// The fleet's first share there: its mode is decided now, by the
+		// deep test when none has told it yet.
+		if err := c.deepTestFirst(ctx); err != nil {
+			return err
+		}
 		if why := c.facts.Capabilities.GetShareRefused(); why != "" {
 			return &kubeerr.Error{Code: kubeerr.Misconfigured.Narrow("shared_storage"), Err: fmt.Errorf("the fleet's share cannot be made on %s: %s", clusterName(c.rec), why),
 				Hint: "pick a shared StorageClass that passes the multi-node test, or clear the setting for Auto; then test the cluster again"}

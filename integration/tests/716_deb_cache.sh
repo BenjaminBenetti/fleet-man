@@ -42,19 +42,52 @@ apt_proxy() {
   "${FLEET_BIN}" exec "$1" -- sh -c 'eval "$(apt-config shell P Acquire::http::Proxy D Acquire::http::Proxy-Auto-Detect)"
     if [ -n "${D:-}" ]; then "$D" http://deb.debian.org/debian/; else printf "%s\n" "${P:-}"; fi'
 }
+# apt_log <ref> <package> — where apt_install keeps apt's output (with its
+# Debug::Acquire::http lines) of installing <package> in <ref>.
+apt_log() { printf '%s/apt-%s-%s.log' "${TEST_SCRATCH_DIR}" "${1//\//_}" "$2"; }
 # apt_install <ref> <package> — apt-get update + install, failing the test with
-# apt's output when either fails.
+# apt's output when either fails. apt runs with Debug::Acquire::http, so a
+# failed cache-hit check can show how it reached each host (apt_debug).
 apt_install() {
-  local out
-  out=$("${FLEET_BIN}" exec "$1" -- sh -c 'sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends "$1"' sh "$2" 2>&1) \
-    || fail "apt-get install $2 in $1 failed: ${out}"
+  local log
+  log=$(apt_log "$1" "$2")
+  mkdir -p "$(dirname "${log}")"
+  "${FLEET_BIN}" exec "$1" -- sh -c 'sudo apt-get -o Debug::Acquire::http=true update -qq && sudo apt-get -o Debug::Acquire::http=true install -y -qq --no-install-recommends "$1"' sh "$2" > "${log}" 2>&1 \
+    || fail "apt-get install $2 in $1 failed: $(grep -v -E '^(GET |Host: |User-Agent: |Accept|Cache-Control: |If-|Answer for: |HTTP/1|[A-Z][A-Za-z-]+: |Connection: |Range: |$)' "${log}" | tail -40)"
 }
-# cache_hits <ref> — request hits so far in the cache's own report, read from
-# inside <ref> over the fleet network; empty when the report has none (a
-# cache that has served nothing yet).
-cache_hits() {
+# apt_debug <ref> <package> — what the detector answered apt when it installed
+# <package> in <ref>, and the requests it sent (through a proxy, a GET names
+# the whole URL; direct, only its path); then what the detector answers now,
+# and how long it took.
+apt_debug() {
+  info "apt in $1 installing $2 (Debug::Acquire::http):"
+  grep -E "auto detect|Using auto proxy|[Pp]roxy|^GET " "$(apt_log "$1" "$2")" | head -40 >&2 || true
+  info "$1's detector now: $("${FLEET_BIN}" exec "$1" -- sh -c 's=$(date +%s%N); a=$(/etc/apt/fleet-proxy-detect http://deb.debian.org/debian/); e=$(date +%s%N); echo "${a} after $(( (e - s) / 1000000 ))ms"' 2>&1)"
+}
+# cache_stats <ref> — the cache's own report of today's requests (period,
+# hits, misses, total, then the same in bytes), read from inside <ref> over
+# the fleet network.
+cache_stats() {
   "${FLEET_BIN}" exec "$1" -- sh -c 'curl -fsS "$1/acng-report.html?doCount=Count+Data"' sh "${proxy}" \
-    | grep -o '<td class="colcont">[^<]*</td>' | sed -n '2s/.*">\([0-9]*\).*/\1/p' || true
+    | grep -o '<td class="colcont">[^<]*</td>' | sed 's/<[^>]*>//g' | head -7 | tr '\n' '|' || true
+}
+# cache_hits <ref> — request hits so far in the cache's own report; empty when
+# the report has none (a cache that has served nothing yet).
+cache_hits() { cache_stats "$1" | cut -d'|' -f2 | sed -n 's/^\([0-9]*\).*/\1/p'; }
+# wait_hits_above <ref> <n> — the hit count once it is above <n>, waiting
+# up to a minute: the cache writes a client's requests to the log its report
+# counts only once that client has disconnected, which under load comes some
+# time after apt is done.
+wait_hits_above() {
+  local hits deadline=$(( $(date +%s) + $(_scale_timeout 60) )) start
+  start=$(date +%s)
+  while :; do
+    hits=$(cache_hits "$1")
+    if [ "${hits:-0}" -gt "$2" ] || [ "$(date +%s)" -ge "${deadline}" ]; then break; fi
+    sleep 2
+  done
+  [ "$(date +%s)" -le "$(( start + 1 ))" ] || info "the cache's report counted the hits $(( $(date +%s) - start ))s after apt was done" >&2
+  printf '%s\n' "${hits}"
 }
 
 info "fleet up alpha + beta (deb cache on)"
@@ -92,10 +125,13 @@ info "cache hits after alpha: ${hits_before:-?}"
 info "beta installs the same package, served from the cache"
 apt_install "${beta}" hello
 assert_equals "Hello, world!" "$("${FLEET_BIN}" exec "${beta}" -- hello)" "the package should install and run in beta"
-hits_after=$(cache_hits "${beta}")
+hits_after=$(wait_hits_above "${beta}" "${hits_before}")
 info "cache hits after beta: ${hits_after:-?}"
-[ "${hits_after:-0}" -gt "${hits_before}" ] \
-  || fail "beta's download should be cache hits (hits ${hits_before} -> ${hits_after:-?})"
+if [ "${hits_after:-0}" -le "${hits_before}" ]; then
+  info "the cache's report: $(cache_stats "${beta}")"
+  itest_backend_is kubernetes && { apt_debug "${alpha}" hello; apt_debug "${beta}" hello; }
+  fail "beta's download should be cache hits (hits ${hits_before} -> ${hits_after:-?})"
+fi
 
 # cached <package> — the package's .deb is in the fleet's cache on the daemon
 # host (docker: the bind-mounted .aptcache dir).
@@ -147,9 +183,12 @@ assert_equals "${proxy}" "$(apt_proxy "${beta}")" "the instances should keep the
 hits_before=$(cache_hits "${beta}")
 apt_install "${beta}" figlet
 apt_install "${alpha}" figlet
-hits_after=$(cache_hits "${alpha}")
-[ "${hits_after:-0}" -gt "${hits_before:-0}" ] \
-  || fail "alpha's download of what beta fetched through the emptied cache should be cache hits (hits ${hits_before:-?} -> ${hits_after:-?})"
+hits_after=$(wait_hits_above "${alpha}" "${hits_before:-0}")
+if [ "${hits_after:-0}" -le "${hits_before:-0}" ]; then
+  info "the cache's report: $(cache_stats "${alpha}")"
+  itest_backend_is kubernetes && { apt_debug "${beta}" figlet; apt_debug "${alpha}" figlet; }
+  fail "alpha's download of what beta fetched through the emptied cache should be cache hits (hits ${hits_before:-?} -> ${hits_after:-?})"
+fi
 if itest_backend_is devcontainer; then
   cached figlet || fail "apt after Delete cache should go through the emptied cache"
 

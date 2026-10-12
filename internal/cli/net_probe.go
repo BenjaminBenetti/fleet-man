@@ -14,7 +14,7 @@ import (
 // (debcache.ProxyDetector), so apt uses the fleet's deb cache only while it
 // answers; on the host it is meaningless.
 func newNetProbeCmd() *cobra.Command {
-	timeout := netprobe.DefaultTimeout
+	timeout, wait := netprobe.DefaultTimeout, netprobe.DefaultWait
 	cmd := &cobra.Command{
 		Use:          "net-probe <url>...",
 		Short:        "Print the first URL that answers, else DIRECT (internal)",
@@ -22,7 +22,7 @@ func newNetProbeCmd() *cobra.Command {
 		Args:         cobra.MinimumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			got, err := netprobe.First(cmd.Context(), args, timeout)
+			got, err := netprobe.First(cmd.Context(), args, timeout, wait)
 			if err != nil {
 				return err
 			}
@@ -30,6 +30,7 @@ func newNetProbeCmd() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().DurationVar(&timeout, "timeout", timeout, "connect timeout per URL")
+	cmd.Flags().DurationVar(&timeout, "timeout", timeout, "connect timeout of each try")
+	cmd.Flags().DurationVar(&wait, "wait", wait, "keep trying this long while none answers")
 	return cmd
 }

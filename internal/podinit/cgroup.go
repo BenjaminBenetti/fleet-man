@@ -39,8 +39,9 @@ const (
 	UserDockerCgroup = "docker"
 )
 
-// LayoutVersion is the version of the layout pod-init records.
-const LayoutVersion = 2
+// LayoutVersion is the version of the layout pod-init records: 3 is a
+// pod-init whose freeze watchdog thaws the user tree (treeFreezeVersion).
+const LayoutVersion = 3
 
 // LayoutFile is where pod-init records the layout for the pod agent, which
 // moves the processes it spawns for users into the user cgroup.

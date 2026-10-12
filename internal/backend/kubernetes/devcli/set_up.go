@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -179,9 +180,9 @@ func prepareDataFolder(ctx context.Context, ex kubeshim.Execer, folder, user str
 	return nil
 }
 
-// execOK runs req and fails unless it exits 0.
+// execOK runs req and fails unless it exits 0, its output in the error.
 func execOK(ctx context.Context, ex kubeshim.Execer, req kubeshim.ExecRequest) error {
-	var out bytes.Buffer
+	var out lockedBuffer
 	code, err := ex.Exec(ctx, req, kubeshim.ExecStdio{Stdout: &out, Stderr: &out})
 	if err != nil {
 		return err
@@ -190,4 +191,24 @@ func execOK(ctx context.Context, ex kubeshim.Execer, req kubeshim.ExecRequest) e
 		return fmt.Errorf("exit %d: %s", code, strings.TrimSpace(out.String()))
 	}
 	return nil
+}
+
+// lockedBuffer is one buffer for a command's stdout and stderr, which an
+// Execer writes from a goroutine each (the pod agent's stream demuxes
+// them).
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
