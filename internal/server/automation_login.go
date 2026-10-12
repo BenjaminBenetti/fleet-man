@@ -16,8 +16,9 @@ import (
 )
 
 // automation_login.go is the automation login check. Logins are per
-// location (the daemon host, or one cluster), so an agent fired at a cluster where its tool was never logged in for the
-// fleet would sit at a login prompt until it is reaped. Each location's
+// location (the daemon host, or one cluster), so an agent fired at a cluster
+// where its tool was never logged in for the fleet would sit at a login
+// prompt until it is reaped. Each location's
 // sync keeps the fleet's copy of that location's login files on the daemon
 // host (state.SyncLocationDir), so the check reads only local files and
 // needs no cluster call at fire time.

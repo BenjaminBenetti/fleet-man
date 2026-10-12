@@ -1181,8 +1181,9 @@ file_mode() {
 #                                the unit that ports its feature adds it
 #   devcontainer-only: <reason>  checks a Docker mechanism clusters lack, so
 #                                the kubernetes run skips it; <reason> says
-#                                what replaces it. These must reach 0 before
-#                                the kubernetes backend merges.
+#                                what replaces it. None may remain: the
+#                                parity check (run.sh
+#                                FLEET_ITEST_REQUIRE_K8S_PARITY=1) fails it.
 # An unmarked test that creates instances is not ported to kubernetes yet.
 # run.sh fails a test with a malformed marker without running it.
 

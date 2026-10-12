@@ -148,8 +148,8 @@ func (poolSpokes) retire(ctx context.Context, cluster, fleetName string, keep bo
 type shareSync struct {
 	svc    *service
 	spokes shareSpokes
-	// records are the connections (their share_retention); usable says whether one can be reached now (a fleet
-	// destroy reaches only those).
+	// records are the connections (their share_retention); usable says
+	// whether one can be reached now (a fleet destroy reaches only those).
 	records func() []fleet.KubeCluster
 	usable  func(ctx context.Context, id string) bool
 	now     func() time.Time
@@ -870,8 +870,8 @@ func (m *shareSync) convergeSpokes(ctx context.Context, fs *fleetSync, w *fleetW
 		case sw == nil || !sw.active || sw.info != run.info || !slices.Contains(sw.keys, run.key) || !sameRoots(sw.roots, run.roots):
 			// Its share is gone or idle, its instance no longer mounts it,
 			// it is to be attached as another side, or the share's folders
-			// changed (an
-			// instance mounting one the others lack came or went).
+			// changed (an instance mounting one the others lack came or
+			// went).
 			run.cancel()
 		}
 	}

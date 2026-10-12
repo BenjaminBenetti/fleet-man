@@ -240,7 +240,7 @@ nested_run() {
   shift
   rm -rf "${work}/ran" "${work}/summary.md"
   mkdir -p "${work}/ran"
-  out=$(cd "${h}" && env -u FLEET_ITEST_RANGE -u FLEET_ITEST_SKIP -u FLEET_ITEST_CLUSTER \
+  out=$(cd "${h}" && env -u FLEET_ITEST_RANGE -u FLEET_ITEST_SKIP -u FLEET_ITEST_CLUSTER -u FLEET_ITEST_REQUIRE_K8S_PARITY \
     HOME="${work}/nested-home" TEST_SCRATCH_DIR="${work}/nested-scratch" \
     TUI_SESSION="fleet-itest-harness-$$" RAN_DIR="${work}/ran" PATH="${fake_path}" FLEET_BIN="${FLEET_BIN}" \
     GITHUB_STEP_SUMMARY="${work}/summary.md" FLEET_ITEST_NO_DOCKER=1 "${pod_var}=${work}/fleet-pod" \
