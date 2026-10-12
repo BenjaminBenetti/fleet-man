@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: on a cluster, webhook firings queued behind the connection's max_instances survive a fleetd restart: with one instance allowed, a burst of three runs one and queues two (202, kept in the watch list); fleetd killed with SIGKILL and started again restores them ("queued=2"), and as each run is reaped the next starts, never two at once, every event getting its run with none refused, dropped or expired. On devcontainer it passes saying so: the queue is the cluster limits'.
+# Description: on a cluster, webhook firings queued behind the connection's max_instances survive a fleetd restart: with one instance allowed, a burst of three runs one and queues two (202, kept in the watch list); fleetd killed with SIGKILL once the first run's agent is up and started again restores them ("queued=2"), and as each run is reaped the next starts, never two at once, every event getting its run with none refused, dropped or expired. On devcontainer it passes saying so: the queue is the cluster limits'.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -90,6 +90,14 @@ deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
 until [ "$(jq '.queued | length' "${WATCH}" 2>/dev/null || echo 0)" = 2 ]; do
   [ "$(date +%s)" -lt "${deadline}" ] || fail "the watch list does not hold the two queued firings: $(cat "${WATCH}" 2>/dev/null)"
   sleep 0.5
+done
+
+# The first run up and its agent launched (a create a restart interrupts is
+# destroyed, not run: its firing would be lost by design).
+deadline=$(( $(date +%s) + $(_scale_timeout 300) ))
+until [ "$(jq '[.runs[]? | select(.launched == true)] | length' "${WATCH}" 2>/dev/null || echo 0)" -ge 1 ]; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the first run never launched its agent: $(cat "${WATCH}" 2>/dev/null)"
+  sleep 1
 done
 
 info "fleetd killed and started again: the queue comes back"
