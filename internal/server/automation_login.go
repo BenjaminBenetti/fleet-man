@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -120,8 +121,11 @@ func sharesHostLogins(id string) bool {
 // fleetDevcontainerEnv is the names the fleet's devcontainer.json sets in
 // containerEnv and remoteEnv, read from the newest checkout of the fleet on
 // the daemon host (an instance's workspace, or a template fleet's own
-// folder). Best-effort: with no checkout, or one that does not parse, it is
-// empty, and only the agent's command counts.
+// folder). A name counts only when its value is set: "${localEnv:X}" is
+// resolved the way the devcontainer CLI resolves it on this host, so a key
+// passed through from a variable the daemon does not have is not one.
+// Best-effort: with no checkout, or one that does not parse, it is empty, and
+// only the agent's command counts.
 func fleetDevcontainerEnv(st *state.State, fleetName string) map[string]bool {
 	names := map[string]bool{}
 	if st == nil {
@@ -144,16 +148,44 @@ func fleetDevcontainerEnv(st *state.State, fleetName string) map[string]bool {
 			if json.Unmarshal(devcontainer.ToStrictJSON(data), &doc) != nil {
 				continue
 			}
-			for k := range doc.ContainerEnv {
-				names[k] = true
-			}
-			for k := range doc.RemoteEnv {
-				names[k] = true
+			for _, env := range []map[string]any{doc.ContainerEnv, doc.RemoteEnv} {
+				for k, v := range env {
+					if devcontainerEnvSet(v, os.LookupEnv) {
+						names[k] = true
+					}
+				}
 			}
 			return names
 		}
 	}
 	return names
+}
+
+// localEnvRef is a devcontainer.json ${localEnv:NAME} or
+// ${localEnv:NAME:default} reference.
+var localEnvRef = regexp.MustCompile(`\$\{localEnv:([^}:]*)(?::([^}]*))?\}`)
+
+// devcontainerEnvSet reports whether a containerEnv or remoteEnv value sets
+// its variable to something: a string not empty once its ${localEnv:...}
+// references are resolved through lookup (the default when the variable is
+// unset or empty, as the devcontainer CLI does), or any other JSON value but
+// null. Other references (${containerEnv:...}) are the container's to
+// resolve, so they count.
+func devcontainerEnvSet(v any, lookup func(string) (string, bool)) bool {
+	switch v := v.(type) {
+	case nil:
+		return false
+	case string:
+		resolved := localEnvRef.ReplaceAllStringFunc(v, func(ref string) string {
+			m := localEnvRef.FindStringSubmatch(ref)
+			if val, ok := lookup(m[1]); ok && val != "" {
+				return val
+			}
+			return m[2]
+		})
+		return resolved != ""
+	}
+	return true
 }
 
 // devcontainerDirs are the fleet's checkouts on the daemon host, newest

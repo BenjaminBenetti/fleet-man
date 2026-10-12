@@ -469,3 +469,28 @@ func TestLimiterIsSafeForConcurrentUse(t *testing.T) {
 		t.Fatalf("books after the storm: queued %v running %v creating %v holders %v", q, r, l.creating, l.holder)
 	}
 }
+
+// Room that frees on a connection goes to the run that has waited longest,
+// whichever trigger queued it (the queues used to be drained in trigger-name
+// order, so a later firing of "aaa" overtook an earlier one of "zzz").
+func TestLimiterDrainsTheOldestFiringFirst(t *testing.T) {
+	l := newAutomationLimiter()
+	c := (&fakeChecks{limits: map[string]clusterLimits{"c1": {name: "prod"}}, maxInsts: map[string]int{"c1": 1}}).checks()
+	st := limitState([]fleet.Agent{clusterAgent("late", "c1"), clusterAgent("early", "c1")},
+		&fleet.Instance{Name: "manual", KubeCluster: "c1", KubeKey: "k1"})
+	t0 := time.Now()
+	if p := planOne(l, c, st, fleet.Trigger{Name: "zzz", AgentNames: []string{"early"}}, t0); len(p.queued) != 1 {
+		t.Fatalf("zzz's firing = start %v queued %v, want it queued on the quota", runNames(p.start), runNames(p.queued))
+	}
+	if p := planOne(l, c, st, fleet.Trigger{Name: "aaa", AgentNames: []string{"late"}}, t0.Add(time.Second)); len(p.queued) != 1 {
+		t.Fatalf("aaa's firing = start %v queued %v, want it queued on the quota", runNames(p.start), runNames(p.queued))
+	}
+	st.Fleets["alpha"].Instances = nil // room for one
+	d := l.due(c, func() *state.State { return st }, t0.Add(2*time.Second))
+	if got := runNames(d.start); len(got) != 1 || !strings.HasPrefix(got[0], "early#") {
+		t.Fatalf("started %v, want early (zzz fired first)", got)
+	}
+	if q := l.queuedRuns(); len(q) != 1 || q[0].agent != "late" {
+		t.Fatalf("still queued %v, want late", runNames(q))
+	}
+}
