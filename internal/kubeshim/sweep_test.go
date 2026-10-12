@@ -11,7 +11,10 @@ import (
 // environment) is removed once it is old; a young one, and anything else in
 // the temp dir, is left.
 func TestSweepStale(t *testing.T) {
-	tmp := t.TempDir()
+	// Short enough that NewDir uses it: macOS's t.TempDir() is too deep for
+	// the exec socket, and NewDir falls back to /tmp there
+	// (TestNewDirUnderADeepTempDir).
+	tmp := shortTempDir(t)
 	t.Setenv("TMPDIR", tmp)
 	mk := func(name string, age time.Duration) string {
 		p := filepath.Join(tmp, name)
