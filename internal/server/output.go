@@ -565,6 +565,9 @@ func (h *outputHub) serveSource(ctx context.Context, key string, s *outputSource
 		clock = podwire.NewFrameClock(outputFrameInterval, flow.Late)
 		clock.SetThreshold(audioLateThreshold())
 	}
+	// How late the audible bursts' frames arrive, logged per burst.
+	jitter := newFrameJitter(outputFrameInterval)
+	defer jitter.report(key)
 	quiet := outputQuietFrames + 1
 	for {
 		pcm := make([]byte, output.ChunkBytes)
@@ -574,6 +577,7 @@ func (h *outputHub) serveSource(ctx context.Context, key string, s *outputSource
 			}
 			return true, true, err
 		}
+		now := time.Now()
 		alive.Reset(outputAliveDeadline)
 		if clock != nil {
 			// Every frame of a burst is due on the burst's schedule, its
@@ -583,7 +587,7 @@ func (h *outputHub) serveSource(ctx context.Context, key string, s *outputSource
 			if quiet >= outputQuietFrames {
 				clock.Reset()
 			}
-			clock.Arrived(time.Now())
+			clock.Arrived(now)
 		}
 		if output.Silent(pcm) {
 			quiet++
@@ -592,6 +596,12 @@ func (h *outputHub) serveSource(ctx context.Context, key string, s *outputSource
 			if flow != nil {
 				flow.OutputAudible()
 			}
+		}
+		switch {
+		case quiet <= outputQuietFrames:
+			jitter.arrived(key, now)
+		case quiet == outputQuietFrames+1:
+			jitter.report(key) // the burst's silent tail is over
 		}
 		if quiet <= outputQuietFrames {
 			h.route(key, s, pcm, false)
