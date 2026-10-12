@@ -200,19 +200,17 @@ func (c *kubeConsent) line() string {
 // Capabilities group leaves to it).
 var kubeStorageChecks = map[string]bool{"root_storage": true, "shared_storage": true, "attach_limits": true, "snapshots": true, "share_pods": true}
 
-// kubeStorageSummary is the folded Storage group's line: the share mode,
-// the fleet-size cap, the classes.
+// kubeStorageSummary is the folded Storage group's line: the shares' class
+// with whether it spans nodes, the disks' class, the moves under way.
 func kubeStorageSummary(st *fleetgrpc.KubeClusterStatus) string {
 	caps := st.GetCapabilities()
 	var parts []string
-	if mode := caps.GetShareMode(); mode != "" {
-		parts = append(parts, mode+" mode")
-	}
-	if n := caps.GetSingleNodeFleetCap(); n > 0 {
-		parts = append(parts, fmt.Sprintf("cap %d", n))
-	}
 	if c := kubeEffectiveClass(st, kubeSharedClassPath); c != "" {
-		parts = append(parts, "share "+c)
+		part := "share " + c
+		if sc := kubeClassNamed(caps, c); sc != nil {
+			part += " " + kubeMultiNodeGlyph(sc) + " multi-node"
+		}
+		parts = append(parts, part)
 	}
 	if c := kubeEffectiveClass(st, kubeDiskClassPath); c != "" {
 		parts = append(parts, "disks "+c)
@@ -223,20 +221,15 @@ func kubeStorageSummary(st *fleetgrpc.KubeClusterStatus) string {
 	return strings.Join(parts, " · ")
 }
 
-// kubeShareModeBadge is the share mode the last preflight resolved.
-func kubeShareModeBadge(st *fleetgrpc.KubeClusterStatus) string {
+// kubeShareClassBadge is the Shared storage row's mark: whether the class
+// it shows holds a fleet's share across nodes.
+func kubeShareClassBadge(st *fleetgrpc.KubeClusterStatus) string {
 	caps := st.GetCapabilities()
-	switch {
-	case caps.GetShareRefused() != "":
+	if caps.GetShareRefused() != "" {
 		return kubeErrStyle.Render(kubeGlyphFailed + " fleet shares refused")
-	case caps.GetShareMode() == "multi-node":
-		return kubeOKStyle.Render(kubeGlyphReady + " multi-node mode")
-	case caps.GetShareMode() == "copy":
-		return kubeWarnStyle.Render(kubeGlyphLimited + " copy tier")
-	case caps.GetShareMode() == "single-node" && kubeOneNode(st) != "":
-		return kubeWarnStyle.Render(kubeGlyphLimited + " single-node mode")
-	case caps.GetShareMode() == "single-node":
-		return dimStyle.Render("single-node mode")
+	}
+	if sc := kubeClassNamed(caps, kubeEffectiveClass(st, kubeSharedClassPath)); sc != nil {
+		return kubeMultiNodeBadge(sc)
 	}
 	return ""
 }
@@ -250,22 +243,6 @@ func kubeOneNode(st *fleetgrpc.KubeClusterStatus) string {
 		}
 	}
 	return ""
-}
-
-// kubeFleetCap is the fleet-size cap line ("" without one).
-func kubeFleetCap(caps *fleetgrpc.KubeCapabilities) string {
-	n := caps.GetSingleNodeFleetCap()
-	if n <= 0 {
-		return ""
-	}
-	line := fmt.Sprintf("cap: %d instances per fleet", n)
-	if n == 1 {
-		line = "cap: 1 instance per fleet"
-	}
-	if r := caps.GetSingleNodeFleetCapReason(); r != "" {
-		line += " (" + r + ")"
-	}
-	return line
 }
 
 // kubeCheckLines are a check's lines: its mark and detail (each detail line
@@ -295,16 +272,9 @@ func (e *kubeEditor) storageFieldLines(st *fleetgrpc.KubeClusterStatus, f kubeFi
 	var out []string
 	switch f.path {
 	case kubeSharedClassPath:
-		out = append(out, kubeCheckLines(kubeCheck(st, "shared_storage"), false)...)
-		if w := kubeOneNode(st); w != "" {
-			out = append(out, kubeWarningLine(w))
-		}
-		if line := kubeFleetCap(caps); line != "" {
-			out = append(out, "  "+dimStyle.Render(line))
-		}
-		if sc := kubeClassNamed(caps, kubeEffectiveClass(st, f.path)); sc != nil && sc.GetShareHint() != "" &&
-			sc.GetMultiNodeTest().GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS {
-			out = append(out, "  "+dimStyle.Render("expected: "+sc.GetShareHint()))
+		// The row's mark says it; only a check that failed has more.
+		if c := kubeCheck(st, "shared_storage"); c.GetResult() == fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL {
+			out = append(out, kubeCheckLines(c, false)...)
 		}
 		if c := e.consent; c != nil && c.field != nil && c.field.path == f.path {
 			out = append(out, c.line())
@@ -355,26 +325,29 @@ func (e *kubeEditor) storageTailLines(st *fleetgrpc.KubeClusterStatus) []string 
 	return out
 }
 
-// kubeMultiNodeBadge is a class's multi-node test result in brief.
+// kubeMultiNodeBadge is whether a class holds a fleet's share across nodes:
+// ✓ it passed the multi-node test, ✕ it failed it or cannot (one node's
+// disk, block disks only), ? not known yet.
 func kubeMultiNodeBadge(sc *fleetgrpc.KubeStorageClass) string {
-	t := sc.GetMultiNodeTest()
-	switch t.GetResult() {
-	case fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS:
-		return kubeOKStyle.Render(kubeGlyphPass + " multi-node")
-	case fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN:
-		return kubeWarnStyle.Render(kubeGlyphLimited+" multi-node: ") + dimStyle.Render(kubeCut(t.GetDetail(), 70))
-	case fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL:
-		return kubeErrStyle.Render(kubeGlyphFailed+" multi-node: ") + dimStyle.Render(kubeCut(t.GetDetail(), 70))
-	case fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_SKIPPED:
-		if sc.GetLargeMinimum() != "" {
-			return dimStyle.Render(kubeGlyphSkipped + " not tested: each volume is at least " + sc.GetLargeMinimum() + " ([ test storage ] asks first)")
-		}
-		return dimStyle.Render(kubeGlyphSkipped + " " + strings.TrimPrefix(t.GetDetail(), "not tested: "))
+	g := kubeMultiNodeGlyph(sc)
+	switch g {
+	case kubeGlyphPass:
+		return kubeOKStyle.Render(g + " multi-node")
+	case kubeGlyphFailed:
+		return kubeErrStyle.Render(g + " multi-node")
 	}
-	if sc.GetShareHint() != "" {
-		return dimStyle.Render("expected: " + kubeCut(sc.GetShareHint(), 70))
+	return dimStyle.Render(g + " multi-node")
+}
+
+// kubeMultiNodeGlyph is kubeMultiNodeBadge's mark alone.
+func kubeMultiNodeGlyph(sc *fleetgrpc.KubeStorageClass) string {
+	switch {
+	case sc.GetMultiNodeTest().GetResult() == fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS:
+		return kubeGlyphPass
+	case sc.GetMultiNodeTest().GetResult() == fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, sc.GetNodeLocal(), sc.GetBlock():
+		return kubeGlyphFailed
 	}
-	return ""
+	return "?"
 }
 
 // kubeCut shortens s to n runes.

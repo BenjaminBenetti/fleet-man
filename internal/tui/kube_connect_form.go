@@ -486,7 +486,7 @@ func (p *kubePicker) fieldDetails(c *fleetgrpc.KubeContext, field string) []stri
 		if hint := p.storageClass(c).GetDiskHint(); hint != "" {
 			out = append(out, kubeWarnStyle.Render(kubeGlyphWarn+" "+hint))
 		}
-		out = append(out, dimStyle.Render("instance disks; fleet shares take a class that passes the multi-node test (run once connected), else this one"))
+		out = append(out, dimStyle.Render("instance disks"))
 	case kubeFormNamespace:
 		out = append(out, dimStyle.Render("created when it does not exist, labelled app.kubernetes.io/managed-by=fleet"))
 	}

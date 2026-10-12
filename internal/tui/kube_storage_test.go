@@ -41,11 +41,10 @@ func storageStatus() *fleetgrpc.KubeClusterStatus {
 	return st
 }
 
-// The Storage section: both pickers say what Auto resolved to, the share
-// mode with the one-node warning and the fleet-size cap, the hint for no
-// class passing, the attach limits, each class's multi-node result (a large
-// one waiting for consent, an SMB one failed), the fleets' shares and the
-// moves under way, and [ test storage ].
+// The Storage section: both pickers say what Auto resolved to, the shared
+// class with only whether it spans nodes, the attach limits, each class's
+// multi-node mark (a large one not tested yet, an SMB one failed), the
+// fleets' shares and the moves under way, and [ test storage ].
 func TestEditorStorageSection(t *testing.T) {
 	st := storageStatus()
 	m, sp := kubeTestModel(t, st)
@@ -57,20 +56,15 @@ func TestEditorStorageSection(t *testing.T) {
 	m.height = 200
 	out := flatText(e.view(m, sp))
 	for _, want := range []string{
-		"Shared storage: [ auto → standard-rwo ] ▲ single-node mode",
-		"no class passed the multi-node test · failed: azurefile",
-		"hint: enable the Filestore CSI driver",
-		"⚠ Each fleet's instances run together on one node (cap 6)",
-		"cap: 6 instances per fleet (node memory; attach limit 127)",
+		"Shared storage: [ auto → standard-rwo ] ✕ multi-node",
 		"Instance disks: [ auto → standard-rwo ]",
 		"✓ auto → standard-rwo (RWO, WFFC, expandable, network)",
 		"[ test storage ]",
 		"attach limits 127 volumes per node (pd.csi.storage.gke.io) fleet-size cap (single-node mode): 6 instances per fleet",
 		"share pods two pods on one node mount one volume",
 		"class filestore",
-		"not tested: each volume is at least 1Ti ([ test storage ] asks first)",
+		"? multi-node",
 		"class azurefile",
-		"✕ multi-node: file owners do not behave across the pods",
 		"share of alpha: 1.0 GiB of 10.0 GiB (10%) · grows when 90% full",
 		"share of beta: 9.5 GiB of 10.0 GiB (95%) ⚠ 95% full; its StorageClass cannot grow it",
 		"beta's share moves standard-rwo → filestore waiting: waits for 1 running instance on the cluster to stop",
@@ -79,15 +73,25 @@ func TestEditorStorageSection(t *testing.T) {
 			t.Errorf("the Storage section lacks %q:\n%s", want, out)
 		}
 	}
+	// Nothing more under the shared class than its mark: no mode, cap or
+	// hint lines before the next field.
+	if i, j := strings.Index(out, "Shared storage:"), strings.Index(out, "Share size:"); i >= 0 && j > i {
+		row := out[i:j]
+		for _, gone := range []string{"single-node mode", "no class passed the multi-node test", "cap", "expected:"} {
+			if strings.Contains(row, gone) {
+				t.Errorf("the Shared storage row still says %q: %s", gone, row)
+			}
+		}
+	}
 	// Shared storage comes first, the instance disks after.
 	if i, j := strings.Index(out, "Shared storage:"), strings.Index(out, "Instance disks:"); i < 0 || j < i {
 		t.Errorf("Shared storage should come before Instance disks:\n%s", out)
 	}
 
-	// The expected outcome shows for the class the pickers stand for.
+	// The mark is the class the picker shows.
 	st.Cluster.SharedStorageClass, st.Cluster.StorageClass = "azurefile", "azurefile"
 	out = flatText(e.view(m, sp))
-	for _, want := range []string{"expected: SMB Azure Files keeps no owners", "⚠ a network file share for instance disks"} {
+	for _, want := range []string{"Shared storage: [ azurefile ] ✕ multi-node", "⚠ a network file share for instance disks"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("lacks %q:\n%s", want, out)
 		}
@@ -216,19 +220,22 @@ func TestEditorLoadsTheSharesUsage(t *testing.T) {
 	}
 }
 
-// Every class line gives its multi-node result.
+// Every class says only whether it spans nodes: ✓ passed, ✕ failed or
+// cannot (one node's disk, block disks only), ? not known yet.
 func TestKubeMultiNodeBadge(t *testing.T) {
+	pass := &fleetgrpc.KubeCheck{Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS}
 	for _, tc := range []struct {
 		sc   *fleetgrpc.KubeStorageClass
 		want string
 	}{
-		{&fleetgrpc.KubeStorageClass{MultiNodeTest: &fleetgrpc.KubeCheck{Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS}}, "✓ multi-node"},
-		{&fleetgrpc.KubeStorageClass{MultiNodeTest: &fleetgrpc.KubeCheck{Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, Detail: "the test could not tell"}}, "▲ multi-node: the test could not tell"},
-		{&fleetgrpc.KubeStorageClass{MultiNodeTest: &fleetgrpc.KubeCheck{Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_SKIPPED, Detail: "not tested: its volumes are on one node's disk"}}, "– its volumes are on one node's disk"},
-		{&fleetgrpc.KubeStorageClass{ShareHint: "CephFS: typically passes the multi-node test"}, "expected: CephFS: typically passes"},
-		{&fleetgrpc.KubeStorageClass{}, ""},
+		{&fleetgrpc.KubeStorageClass{MultiNodeTest: pass}, "✓ multi-node"},
+		{&fleetgrpc.KubeStorageClass{MultiNodeTest: &fleetgrpc.KubeCheck{Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, Detail: "file owners do not behave"}}, "✕ multi-node"},
+		{&fleetgrpc.KubeStorageClass{NodeLocal: true, MultiNodeTest: &fleetgrpc.KubeCheck{Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_SKIPPED, Detail: "not tested: its volumes are on one node's disk"}}, "✕ multi-node"},
+		{&fleetgrpc.KubeStorageClass{Block: true}, "✕ multi-node"},
+		{&fleetgrpc.KubeStorageClass{MultiNodeTest: &fleetgrpc.KubeCheck{Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, Detail: "the test could not tell"}}, "? multi-node"},
+		{&fleetgrpc.KubeStorageClass{ShareHint: "CephFS: typically passes the multi-node test"}, "? multi-node"},
 	} {
-		if got := flatText(kubeMultiNodeBadge(tc.sc)); !strings.Contains(got, tc.want) || (tc.want == "") != (got == "") {
+		if got := flatText(kubeMultiNodeBadge(tc.sc)); got != tc.want {
 			t.Errorf("badge %q, want %q", got, tc.want)
 		}
 	}

@@ -680,7 +680,7 @@ func (e *kubeEditor) fieldValue(m *model, st *fleetgrpc.KubeClusterStatus, f kub
 		}
 		value = "[ " + shown + " ]"
 		if f.path == kubeSharedClassPath {
-			if badge := kubeShareModeBadge(st); badge != "" {
+			if badge := kubeShareClassBadge(st); badge != "" {
 				value += "  " + badge
 			}
 		}

@@ -299,7 +299,7 @@ func TestPickerFormSetsTheBasicConfig(t *testing.T) {
 		t.Fatalf("at %+v, want Storage", p.current())
 	}
 	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "Storage: [ auto → gp3 ] network · expandable") ||
-		!strings.Contains(out, "fleet shares take a class that passes the multi-node test (run once connected), else this one") {
+		!strings.Contains(out, "Storage: [ auto → gp3 ] network · expandable instance disks") {
 		t.Errorf("Storage's lines:\n%s", out)
 	}
 	pumpKube(t, m, press(m, sp, "l"))

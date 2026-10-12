@@ -81,7 +81,7 @@ var kubeGroups = []kubeGroup{
 	{key: "capabilities", title: "Capabilities", open: true},
 	{key: "storage", title: "Storage", fields: []kubeField{
 		{path: "shared_storage_class", label: "Shared storage", kind: kubeKindClass, classes: kubeClassStorage, def: "auto",
-			note: "the fleets' shares; a new class moves each fleet's share once it is stopped"},
+			note: "the fleets' shares"},
 		{path: "share_size", label: "Share size", kind: kubeKindText, def: "10Gi"},
 		{path: "share_retention", label: "Share on destroy", kind: kubeKindChoice, options: []string{"", "retain"}, def: "delete"},
 		{path: "storage_class", label: "Instance disks", kind: kubeKindClass, classes: kubeClassStorage, def: "auto"},
