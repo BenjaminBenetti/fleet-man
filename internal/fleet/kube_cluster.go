@@ -73,9 +73,10 @@ type KubeCluster struct {
 	// SharedStorageClass for each fleet's share; empty = auto.
 	SharedStorageClass string `json:"shared_storage_class,omitempty"`
 	// ShareSize of each fleet's share; empty = DefaultKubeShareSize.
-	ShareSize       string              `json:"share_size,omitempty"`
-	ShareRetention  KubeShareRetention  `json:"share_retention,omitempty"`
-	CredentialScope KubeCredentialScope `json:"credential_scope,omitempty"`
+	ShareSize      string             `json:"share_size,omitempty"`
+	ShareRetention KubeShareRetention `json:"share_retention,omitempty"`
+	// Agent logins are per location (the daemon host, and each cluster);
+	// a record saved with the removed credential_scope key loads as that.
 
 	// --- caches ---
 

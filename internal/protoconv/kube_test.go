@@ -140,7 +140,7 @@ func TestKubeClusterNeverCarriesTheGatewayCredential(t *testing.T) {
 // which makes each one "v:KubeCluster.<path>", so a swap reads its
 // neighbour's value.
 func TestKubeClusterWirePlacement(t *testing.T) {
-	pinArity[fleet.KubeCluster](t, 49)
+	pinArity[fleet.KubeCluster](t, 48)
 	pinArity[fleet.KubeResources](t, 3)
 	pinArity[fleet.KubeToleration](t, 5)
 	pinArity[fleet.KubeCacheSizes](t, 3)
@@ -176,7 +176,6 @@ func TestKubeClusterWirePlacement(t *testing.T) {
 		"SharedStorageClass":             pk.GetSharedStorageClass(),
 		"ShareSize":                      pk.GetShareSize(),
 		"ShareRetention":                 pk.GetShareRetention(),
-		"CredentialScope":                pk.GetCredentialScope(),
 		"CacheStorageClass":              pk.GetCacheStorageClass(),
 		"CacheSizes.Buildkit":            pk.GetCacheSizes().GetBuildkit(),
 		"CacheSizes.DebCache":            pk.GetCacheSizes().GetDebcache(),

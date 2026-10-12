@@ -22,12 +22,10 @@ const (
 	// included.
 	Mirror
 	// Credential: an agent login file. It syncs live within a location (the
-	// daemon host, or one cluster) and stays per location across locations
-	// (credential_scope=location), because rotating refresh tokens cannot be
-	// refreshed safely from two locations at once; a cluster with
-	// credential_scope=fleet (experimental) shares the daemon host's. A
-	// delete carrying the current revision is a logout and propagates as a
-	// tombstone; a stale delete is rejected.
+	// daemon host, or one cluster) and stays per location across locations,
+	// because rotating refresh tokens cannot be refreshed safely from two
+	// locations at once. A delete carrying the current revision is a logout
+	// and propagates as a tombstone; a stale delete is rejected.
 	Credential
 	// JSON3: a JSON settings file merged three ways, hook arrays as sets; an
 	// empty object ('{}', the seed a new instance writes) never wins over

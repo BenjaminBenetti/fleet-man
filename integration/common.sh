@@ -1181,8 +1181,9 @@ file_mode() {
 #                                the unit that ports its feature adds it
 #   devcontainer-only: <reason>  checks a Docker mechanism clusters lack, so
 #                                the kubernetes run skips it; <reason> says
-#                                what replaces it. These must reach 0 before
-#                                the kubernetes backend merges.
+#                                what replaces it. None may remain: the
+#                                parity check (run.sh
+#                                FLEET_ITEST_REQUIRE_K8S_PARITY=1) fails it.
 # An unmarked test that creates instances is not ported to kubernetes yet.
 # run.sh fails a test with a malformed marker without running it.
 
@@ -1247,4 +1248,21 @@ itest_k8s_class() {
   else
     echo pending
   fi
+}
+
+# itest_parity_gaps <test-file>... — one line per test that keeps the
+# kubernetes backend short of parity: "<name>: devcontainer-only: <reason>"
+# for an exemption, "<name>: not ported (no k8s, devcontainer-only or
+# no-docker marker)" for a test that is neither. Prints nothing at parity
+# (every test runs on kubernetes or is host-only), which the merge gate
+# requires (run.sh FLEET_ITEST_REQUIRE_K8S_PARITY=1).
+itest_parity_gaps() {
+  local f name
+  for f in "$@"; do
+    name=$(basename "${f}" .sh)
+    case "$(itest_k8s_class "${f}")" in
+      devcontainer-only) printf '%s: devcontainer-only: %s\n' "${name}" "$(itest_exemption "${f}")" ;;
+      pending) printf '%s: not ported (no k8s, devcontainer-only or no-docker marker)\n' "${name}" ;;
+    esac
+  done
 }

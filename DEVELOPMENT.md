@@ -191,7 +191,7 @@ docker run --rm --privileged --init --name "fleet-nightly-$RANDOM" \
 
 What a job takes: `kind-multinode` three 4 GB nodes, `kind-nfs` two,
 `scale 100` a 12 GB node (`scale 300` about 28 GB), the others one 6-8 GB
-minikube, `selinux-k3s` a 6 GB virtual machine (it needs `/dev/kvm` and,
+minikube (`bench` and `netem` measure: run them on a quiet machine), `selinux-k3s` a 6 GB virtual machine (it needs `/dev/kvm` and,
 in the QA container, `sudo apt-get install -y qemu-system-x86 qemu-utils
 cloud-image-utils` first; mount a folder on disk at `FLEET_NIGHTLY_CACHE`
 for the ~600 MB image and at `FLEET_NIGHTLY_VM_DIR` for the VM's disk).

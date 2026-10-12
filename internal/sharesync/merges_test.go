@@ -278,21 +278,6 @@ func TestATornLoginWaits(t *testing.T) {
 	r.wantFile("tool", "auth.json", map[string]string{"a2": next})
 }
 
-// TestSharedLoginsFollowTheirLocation checks a side sharing another
-// location's logins (a cluster with credential_scope=fleet shares the
-// daemon host's) syncs them live with that location, and a cluster
-// keeping its own never sees them.
-func TestSharedLoginsFollowTheirLocation(t *testing.T) {
-	r := mergeRig(t, 0, host, SideInfo{ID: "f1", Location: "kf", Logins: "host"}, b1)
-	r.write("f1", "tool", ".credentials.json", claudeLogin("shared"))
-	r.write("b1", "tool", ".credentials.json", claudeLogin("own"))
-	r.sync()
-	r.wantFile("tool", ".credentials.json", map[string]string{"host": claudeLogin("shared"), "f1": claudeLogin("shared"), "b1": claudeLogin("own")})
-	os.Remove(r.path("host", "tool", ".credentials.json"))
-	r.sync()
-	r.wantFile("tool", ".credentials.json", map[string]string{"host": "<missing>", "f1": "<missing>", "b1": claudeLogin("own")})
-}
-
 // claudeJSON is a ~/.claude.json with content.
 const claudeJSON = "{\n  \"numStartups\": 12,\n  \"userID\": \"u1\",\n  \"projects\": {\n    \"/workspaces/a\": {\n      \"allowedTools\": []\n    }\n  }\n}"
 

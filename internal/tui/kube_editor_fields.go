@@ -82,8 +82,6 @@ var kubeGroups = []kubeGroup{
 			note: "the fleets' shares; a new class moves each fleet's share once it is stopped"},
 		{path: "share_size", label: "Share size", kind: kubeKindText, def: "10Gi"},
 		{path: "share_retention", label: "Share on destroy", kind: kubeKindChoice, options: []string{"", "retain"}, def: "delete"},
-		{path: "credential_scope", label: "Agent logins", kind: kubeKindChoice, options: []string{"", "fleet"}, def: "location",
-			note: "fleet: experimental, can sign every location out"},
 		{path: "storage_class", label: "Instance disks", kind: kubeKindClass, classes: kubeClassStorage, def: "auto"},
 		{path: "disk_size", label: "Disk size", kind: kubeKindText, def: "50Gi", note: "each, automation too"},
 		{path: "auto_expand_disk", label: "Auto-expand disks", kind: kubeKindTri, def: "on", note: "+50% at 90% full"},

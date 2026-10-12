@@ -179,7 +179,7 @@ poisoned, so treating an instance as a docker container fails loudly;
 | --- | --- |
 | `# itest: no-docker` | host-side only (no instance); `FLEET_ITEST_NO_DOCKER=1` runs just these |
 | `# itest: k8s` | runs on `FLEET_ITEST_BACKEND=kubernetes`; the unit that ports a feature adds it to that feature's tests |
-| `# itest: devcontainer-only: <reason>` | checks a Docker mechanism clusters lack, so the kubernetes run skips it; the reason says what replaces it. These must reach 0 before the kubernetes backend merges |
+| `# itest: devcontainer-only: <reason>` | checks a Docker mechanism clusters lack, so the kubernetes run skips it; the reason says what replaces it. None may remain: the merge gate's parity check fails it |
 
 An unmarked test that creates instances is not ported to kubernetes yet; the
 kubernetes run leaves it out. run.sh fails a test whose markers are malformed
@@ -187,6 +187,10 @@ kubernetes run leaves it out. run.sh fails a test whose markers are malformed
 `devcontainer-only`) without running it. Every run's summary ends with the
 k8s parity of the selected tests (marked `k8s`, devcontainer-only, not ported
 yet, host-only) and lists each exemption with its reason.
+`FLEET_ITEST_REQUIRE_K8S_PARITY=1` (set by every integration-k8s shard) makes
+any devcontainer-only or unported test in the selection fail the run before
+a test starts, naming each: a new test that makes instances is marked `k8s`
+or, when it never makes one, `no-docker`.
 
 Any line that starts with `# itest:` counts, heredocs included, so a test that
 writes such a line for another file builds it with `printf`.
@@ -306,6 +310,7 @@ the itest logs, failed tests' `FLEET_ITEST_ARTIFACTS` and cluster dumps in
 | `runtime-docker.sh` | minikube `--container-runtime=docker` (the shards' minikube runs containerd) | 010-061, 800-807 |
 | `rbac-limited.sh` | minikube; the connection a ServiceAccount token whose Role, in its namespace, grants only what the preflight requires, and nothing cluster-wide | 010-061, 800 |
 | `netem.sh` | minikube behind tc netem (150ms round trip; then with ~1% loss) | 851: audio jitter beside bulk transfers, page loads through fleet vs kubectl port-forward, poll times |
+| `bench.sh` | minikube, its link put behind tc netem (150ms round trip) for part of 855 | 855: forward throughput on the pooled port-forward and on the pod agent's stream (`--half-close`), audio jitter beside each, exec, copy, attach and browser-proxy page times, beside a Docker instance; 856: create latency (first, second, clone) against Docker's and what an open TUI's pollers cost per instance. Recorded, not judged: the merge checklist and the optional extensions read them |
 | `scale.sh <n>` | minikube, one node of `n`+60 pods | 850: fleetd's scale budgets and the reconnect storm at `n` (100; 300 on a larger runner) |
 | `poll-cost.sh` | none (macOS in the workflow) | a poll pass over 20 bound files in a 5000-entry host folder under 100ms (`BenchmarkPollOfBoundFiles`): sides without inotify poll every 2s |
 | `go-deep.sh` | none | sharesync properties at 200 seeds, every fuzz target for a minute |
@@ -320,8 +325,10 @@ through fleet within 2x of kubectl port-forward on the same link.
 ## CI
 
 `.github/workflows/integration-k8s.yml` runs the kubernetes subset sharded on
-a minikube in each runner, beside the backend conformance suite and the
-cluster-gated Go tests (non-required until the Kubernetes backend merges).
+a minikube in each runner, with the parity check on, beside the backend
+conformance suite and the cluster-gated Go tests; its aggregate
+`integration-k8s` check (every shard, conformance and live group green) is
+the one branch protection requires.
 
 Two PR checks run this suite end-to-end on every PR to `main`:
 

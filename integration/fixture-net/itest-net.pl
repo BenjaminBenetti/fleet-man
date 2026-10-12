@@ -19,6 +19,9 @@
 #           read side open that long, a bridge that closes soon after the
 #           client's EOF (containerd's port-forward: ~1s) loses the reply
 #   source  sends <file>, then closes
+#   count   reads frames (a 4-byte big-endian length, then that many
+#           bytes) up to an empty one, then replies "bytes=<n>": an upload
+#           with no half-close (a throughput run over a bridge that drops it)
 #   echo    echoes every byte until EOF, then closes
 #
 # bind-address defaults to 0.0.0.0. Each connection is served in a child.
@@ -28,8 +31,8 @@ use IO::Socket::INET;
 use Digest::SHA qw(sha1_base64);
 
 my ($mode, $port, $bind, $file) = @ARGV;
-die "usage: itest-net.pl <http|sink|latesink|source|echo> <port> [bind] [file]\n"
-  unless $mode && $port && $mode =~ /^(http|sink|latesink|source|echo)$/;
+die "usage: itest-net.pl <http|sink|latesink|source|count|echo> <port> [bind] [file]\n"
+  unless $mode && $port && $mode =~ /^(http|sink|latesink|source|count|echo)$/;
 $bind ||= '0.0.0.0';
 die "source needs a file\n" if $mode eq 'source' && !($file && -r $file);
 
@@ -52,6 +55,7 @@ while (1) {
     elsif ($mode eq 'sink')     { serve_sink($conn, 0) }
     elsif ($mode eq 'latesink') { serve_sink($conn, 3) }
     elsif ($mode eq 'source')   { serve_source($conn) }
+    elsif ($mode eq 'count')    { serve_count($conn) }
     else                        { serve_echo($conn) }
     close $conn;
     exit 0;
@@ -75,6 +79,32 @@ sub serve_source {
   my $buf;
   while (my $r = sysread($fh, $buf, 65536)) { syswrite_all($conn, $buf) or last; }
   close $fh;
+}
+
+sub serve_count {
+  my ($conn) = @_;
+  my $n = 0;
+  while (1) {
+    my $head = read_exact($conn, 4);
+    return unless defined $head;
+    my $len = unpack('N', $head);
+    last if $len == 0;
+    return unless defined read_exact($conn, $len);
+    $n += $len;
+  }
+  syswrite_all($conn, "bytes=$n\n");
+}
+
+# read_exact <conn> <n> — exactly n bytes, or undef at an early EOF.
+sub read_exact {
+  my ($conn, $want) = @_;
+  my ($data, $buf) = ('', '');
+  while (length($data) < $want) {
+    my $r = sysread($conn, $buf, $want - length($data));
+    return undef unless $r;
+    $data .= $buf;
+  }
+  return $data;
 }
 
 sub serve_echo {

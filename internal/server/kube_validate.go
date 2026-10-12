@@ -95,7 +95,6 @@ func validateKubeCluster(c *fleet.KubeCluster) error {
 		"clone_method":       c.CloneMethod.Valid(),
 		"clone_consistency":  c.CloneConsistency.Valid(),
 		"share_retention":    c.ShareRetention.Valid(),
-		"credential_scope":   c.CredentialScope.Valid(),
 		"debug_capabilities": c.DebugCapabilities.Valid(),
 		"host_gateway":       c.HostGateway.Valid(),
 	} {

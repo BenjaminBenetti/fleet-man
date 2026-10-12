@@ -119,7 +119,7 @@ func everyClusterField() *fleetgrpc.KubeCluster {
 		Namespace: "fleet", ExtraPath: []string{"/opt/sdk/bin", "/usr/local/aws/bin"}, PluginEnv: []string{"AWS_PROFILE", "AWS_REGION=eu-west-1"},
 		StorageClass: "standard", DiskSize: "80Gi", AutoExpandDisk: ptrTo(false), SnapshotClass: "csi-snap", CloneMethod: "snapshot",
 		CloneConsistency: "stop-source", BackupWorkspaceOnStop: true, NodeLocalAck: true, SharedStorageClass: "nfs", ShareSize: "20Gi",
-		ShareRetention: "retain", CredentialScope: "fleet", CacheStorageClass: "fast",
+		ShareRetention: "retain", CacheStorageClass: "fast",
 		CacheSizes: &fleetgrpc.KubeCacheSizes{Buildkit: "30Gi", Debcache: "15Gi", Imagecache: "25Gi"},
 		ServiceImages: &fleetgrpc.KubeServiceImages{Buildkit: "moby/buildkit:v0.34.0", BuildkitRootless: "moby/buildkit:v0.34.0-rootless",
 			Debcache: "sameersbn/apt-cacher-ng:3.7", Imagecache: "registry:3", Dind: "docker:29-dind"},

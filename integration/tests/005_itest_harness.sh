@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: no-docker
-# Description: the itest harness itself: marker parsing, the state.json container-id reader, FLEET_ITEST_BACKEND dispatch and run.sh's kubernetes selection and parity summary.
+# Description: the itest harness itself: marker parsing, the state.json container-id reader, FLEET_ITEST_BACKEND dispatch and run.sh's kubernetes selection, parity summary and merge-gate parity check (FLEET_ITEST_REQUIRE_K8S_PARITY).
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -56,6 +56,16 @@ check_markers pending "" "needs a reason" "devcontainer-only:   "
 check_markers pending "" "unknown marker" k8
 check_markers pending "" "unknown marker" "devcontainer-only : spaced"
 check_markers k8s "why" "contradict" k8s "devcontainer-only: why"
+
+info "parity gaps: an exemption or an unported test, nothing for k8s or host-only"
+gap_k8s=$(marker_file gap_k8s k8s)
+gap_host=$(marker_file gap_host no-docker)
+gap_exempt=$(marker_file gap_exempt "devcontainer-only: a host socket")
+gap_pending=$(marker_file gap_pending)
+assert_equals "" "$(itest_parity_gaps "${gap_k8s}" "${gap_host}")" "k8s and host-only tests are at parity"
+gaps=$(itest_parity_gaps "${gap_k8s}" "${gap_exempt}" "${gap_host}" "${gap_pending}")
+assert_equals "gap_exempt: devcontainer-only: a host socket
+gap_pending: not ported (no k8s, devcontainer-only or no-docker marker)" "${gaps}" "each gap, in order"
 
 # ===========================================
 # state.json reader: fleet-scoped and bare refs, empty and k8s ids.
@@ -230,7 +240,7 @@ nested_run() {
   shift
   rm -rf "${work}/ran" "${work}/summary.md"
   mkdir -p "${work}/ran"
-  out=$(cd "${h}" && env -u FLEET_ITEST_RANGE -u FLEET_ITEST_SKIP -u FLEET_ITEST_CLUSTER \
+  out=$(cd "${h}" && env -u FLEET_ITEST_RANGE -u FLEET_ITEST_SKIP -u FLEET_ITEST_CLUSTER -u FLEET_ITEST_REQUIRE_K8S_PARITY \
     HOME="${work}/nested-home" TEST_SCRATCH_DIR="${work}/nested-scratch" \
     TUI_SESSION="fleet-itest-harness-$$" RAN_DIR="${work}/ran" PATH="${fake_path}" FLEET_BIN="${FLEET_BIN}" \
     GITHUB_STEP_SUMMARY="${work}/summary.md" FLEET_ITEST_NO_DOCKER=1 "${pod_var}=${work}/fleet-pod" \
@@ -260,6 +270,20 @@ assert_contains "${out}" "ran:[001_k8s 002_exempt 003_host]" "every well-formed 
 assert_contains "${out}" "FAIL 004_bad (malformed itest marker" "a malformed marker fails on devcontainer too"
 assert_contains "${out}" "Backend devcontainer; k8s parity of 4 test(s)" "parity line on devcontainer"
 assert_contains "${out}" "rc=1" "devcontainer run exit code"
+
+info "the merge gate's parity check fails a selection with an exemption before any test"
+out=$(nested_run kubernetes FLEET_ITEST_REQUIRE_K8S_PARITY=1)
+assert_contains "${out}" "k8s parity required (FLEET_ITEST_REQUIRE_K8S_PARITY): 1 devcontainer-only, 0 not ported yet" "the gate's verdict"
+assert_contains "${out}" "002_exempt: devcontainer-only: needs a host socket" "the gate names the exemption"
+assert_contains "${out}" "rc=1" "the gate fails the run"
+assert_contains "${out}" "ran:[]" "no test runs past the gate"
+out=$(nested_run devcontainer FLEET_ITEST_REQUIRE_K8S_PARITY=1)
+assert_contains "${out}" "rc=1" "the gate holds on devcontainer too"
+assert_contains "${out}" "ran:[]" "no devcontainer test runs past the gate"
+out=$(nested_run kubernetes FLEET_ITEST_REQUIRE_K8S_PARITY=1 FLEET_ITEST_RANGE=1-2)
+assert_contains "${out}" "k8s parity required: 1 marked k8s, 0 host-only, none exempt or unported" "a selection at parity"
+assert_contains "${out}" "ran:[001_k8s]" "a selection at parity runs"
+assert_contains "${out}" "rc=0" "a selection at parity passes"
 
 info "run.sh stops before any test when the cluster does not answer"
 out=$(nested_run kubernetes FAKE_KUBE_DOWN=1)

@@ -154,6 +154,37 @@ nightly_minikube_delete() {
   minikube delete -p "$1" >/dev/null 2>&1 || true
 }
 
+# nightly_wan <profile> <delay> — tc netem on both ends of the veth between
+# this host and minikube <profile>'s node, as hooks for the WAN itests
+# (FLEET_ITEST_WAN_ON / FLEET_ITEST_WAN_OFF): sets NIGHTLY_WAN_VETH and
+# NIGHTLY_WAN_OFF (the command that clears the link); `nightly_wan_on [loss]`
+# prints the command that shapes it, <delay> each way and the loss given.
+# Needs tc, sudo and the kernel's sch_netem; the job's EXIT trap clears it
+# (sudo tc qdisc del dev "${NIGHTLY_WAN_VETH}" root).
+nightly_wan() {
+  local profile="$1" index
+  NIGHTLY_WAN_PROFILE="${profile}"
+  NIGHTLY_WAN_DELAY="$2"
+  index=$(docker exec "${profile}" cat /sys/class/net/eth0/iflink)
+  NIGHTLY_WAN_VETH=$(ip -o link | awk -F': ' -v i="${index}" '$1 == i { print $2 }' | cut -d@ -f1)
+  [ -n "${NIGHTLY_WAN_VETH}" ] || { nightly_say "no veth on this host has index ${index} (the node's peer)"; exit 2; }
+  NIGHTLY_WAN_OFF="docker exec ${profile} tc qdisc del dev eth0 root 2>/dev/null; sudo tc qdisc del dev ${NIGHTLY_WAN_VETH} root 2>/dev/null; true"
+}
+nightly_wan_on() {
+  echo "docker exec ${NIGHTLY_WAN_PROFILE} tc qdisc replace dev eth0 root netem delay ${NIGHTLY_WAN_DELAY}${1:+ loss $1} && sudo tc qdisc replace dev ${NIGHTLY_WAN_VETH} root netem delay ${NIGHTLY_WAN_DELAY}${1:+ loss $1}"
+}
+
+# nightly_wan_rtt [loss] — the ping time (ms) to the node with the link shaped
+# so; the link is left clear.
+nightly_wan_rtt() {
+  local node_ip rtt
+  node_ip=$(kubectl --context "${NIGHTLY_WAN_PROFILE}" get node "${NIGHTLY_WAN_PROFILE}" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+  sh -c "$(nightly_wan_on "${1:-}")" || { nightly_say "tc netem failed (is sch_netem available?)"; exit 2; }
+  rtt=$(ping -c 5 -q "${node_ip}" | awk -F/ '/^rtt/ { print $5 }')
+  sh -c "${NIGHTLY_WAN_OFF}"
+  echo "${rtt}"
+}
+
 # nightly_end — the job's verdict: 0 unless a step failed.
 nightly_end() {
   nightly_note ""

@@ -18,15 +18,30 @@ var headerDeadline = HeaderDeadline
 // more in flight than the agent session's default.
 const BulkWindow = 4 << 20
 
+const (
+	// AgentWriteTimeout is how long the agent session waits for a frame to
+	// go out, or for a keepalive ping's answer, before it takes the peer for
+	// dead (yamux ConnectionWriteTimeout).
+	AgentWriteTimeout = 10 * time.Second
+	// BulkWriteTimeout is the same for the bulk session. A full BulkWindow
+	// queued on a lossy link (~120 KB/s at a 150ms round trip with 1% loss)
+	// takes far longer than 10s to drain, and a ping waits behind it: with
+	// the agent session's timeout a large copy tore the bulk session down
+	// ("connection to the pod agent lost"). As the gateway's registry
+	// connection (tunnel.RegistryKeepAliveTimeout).
+	BulkWriteTimeout = 60 * time.Second
+)
+
 // SessionConfig is the yamux config both ends of a role's session use.
 func SessionConfig(role Role) *yamux.Config {
 	c := yamux.DefaultConfig()
 	c.KeepAliveInterval = KeepAliveInterval
-	c.ConnectionWriteTimeout = 10 * time.Second
+	c.ConnectionWriteTimeout = AgentWriteTimeout
 	c.StreamOpenTimeout = 30 * time.Second
 	c.LogOutput = io.Discard
 	if role == RoleBulk {
 		c.MaxStreamWindowSize = BulkWindow
+		c.ConnectionWriteTimeout = BulkWriteTimeout
 	}
 	return c
 }

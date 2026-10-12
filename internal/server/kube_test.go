@@ -52,7 +52,6 @@ func everyKubeField(extraPath string) *fleetgrpc.KubeCluster {
 		SharedStorageClass:    "nfs",
 		ShareSize:             "20Gi",
 		ShareRetention:        "retain",
-		CredentialScope:       "fleet",
 		CacheStorageClass:     "fast",
 		CacheSizes:            &fleetgrpc.KubeCacheSizes{Buildkit: "30Gi", Debcache: "15Gi", Imagecache: "25Gi"},
 		ServiceImages: &fleetgrpc.KubeServiceImages{

@@ -101,11 +101,10 @@ message KubeCluster {
   string share_size = 19;
   // share_retention on fleet destroy: "" or "delete", or "retain".
   string share_retention = 20;
-  // credential_scope of agent logins: "" or "location" (one login per
-  // location), or "fleet" (shared across locations; experimental: the agents
-  // rotate their refresh tokens, so two locations refreshing at once can
-  // sign every location out).
-  string credential_scope = 21;
+  // Agent logins are always per location (the daemon host, and each
+  // cluster): one login serves every instance of the fleet there.
+  reserved 21; // was credential_scope ("fleet" shared the host's logins; removed)
+  reserved "credential_scope";
 
   // ---- caches ----
 
