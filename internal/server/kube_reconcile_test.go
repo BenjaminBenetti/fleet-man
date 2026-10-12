@@ -510,11 +510,15 @@ func TestReconcilerPass(t *testing.T) {
 	if ts := fp.TombstonesOf(r.id); len(ts) != 1 || ts[0].Key != "tttttttt" {
 		t.Fatalf("tombstones after the first pass: %+v", ts)
 	}
-	if n := r.svc.kubeRecovery.pendingTeardowns(r.id); n != 1 {
-		t.Fatalf("pending teardowns %d", n)
-	}
-	if st := r.svc.kube.status(r.id); st.GetCapabilities().GetPendingTeardowns() != 1 {
-		t.Fatalf("status pending_teardowns %d", st.GetCapabilities().GetPendingTeardowns())
+	// The pass counts what is still owed once its deletions are done, so
+	// the count can trail what the cluster already shows.
+	deadline = time.Now().Add(10 * time.Second)
+	for r.svc.kubeRecovery.pendingTeardowns(r.id) != 1 || r.svc.kube.status(r.id).GetCapabilities().GetPendingTeardowns() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("pending teardowns %d, status pending_teardowns %d", r.svc.kubeRecovery.pendingTeardowns(r.id),
+				r.svc.kube.status(r.id).GetCapabilities().GetPendingTeardowns())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	// The next pass finds nothing of the key left.
