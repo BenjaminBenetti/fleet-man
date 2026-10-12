@@ -196,6 +196,29 @@ func TestUnreadableFolderIsNotADelete(t *testing.T) {
 	}
 }
 
+// TestAFolderRefusingThePathsBelowIsWarnedOfOnce checks a folder sync cannot
+// read is warned of once, by its own name, whether a scan reaches it whole
+// or through a path below it (a rescan of one file there).
+func TestAFolderRefusingThePathsBelowIsWarnedOfOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every folder")
+	}
+	r := newRig(t, "host", "c1")
+	r.write("host", "user", "d/f", "keep me")
+	r.sync()
+	r.sides["c1"].stop()
+	tree := r.sides["c1"].tree
+	d := r.path("c1", "user", "d")
+	os.Chmod(d, 0)
+	defer os.Chmod(d, 0o755)
+	tree.Scan(context.Background(), "user", []string{"d/f"})
+	tree.Scan(context.Background(), "user", nil)
+	logs := r.logs.String()
+	if n := strings.Count(logs, "cannot scan"); n != 1 || !strings.Contains(logs, "path=d ") {
+		t.Errorf("%d warnings for the unreadable folder, want 1 naming d:\n%s", n, logs)
+	}
+}
+
 // TestUnreadableFileIsWarnedOfOnce checks a file sync cannot read (a root-
 // owned 0600 file a docker instance left in a custom mount) is warned of
 // once, left to the periodic rescan rather than read again and again, and
@@ -350,5 +373,38 @@ func TestRootFolderMovedMidScanIsNotADelete(t *testing.T) {
 	rep, _, err := r.sides["c1"].tree.Scan(context.Background(), "user", nil)
 	if !errors.Is(err, ErrRootMoved) || len(rep.Changes) != 0 {
 		t.Fatalf("a scan whose folder moved mid-walk: %d changes, %v; want none, ErrRootMoved", len(rep.Changes), err)
+	}
+}
+
+// TestAnOlderScanKeepsAnUnreadableFolderWarnedOf checks a scan that walked a
+// folder while it could still be read, and ends after a later scan found it
+// unreadable, does not take the warning back: the next scan does not warn
+// of it again.
+func TestAnOlderScanKeepsAnUnreadableFolderWarnedOf(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every folder")
+	}
+	r := newRig(t, "host", "c1")
+	r.write("host", "user", "d/f", "keep me")
+	r.sync()
+	r.sides["c1"].stop()
+	tree := r.sides["c1"].tree
+	d := r.path("c1", "user", "d")
+	defer os.Chmod(d, 0o755)
+	var later atomic.Bool
+	onScanStep(t, r.path("c1", "user", "."), func(step string) {
+		if step == "walked" && later.CompareAndSwap(false, true) {
+			// d unreadable now, and a later scan runs to its end first.
+			os.Chmod(d, 0)
+			tree.Scan(context.Background(), "user", nil)
+		}
+	})
+	tree.Scan(context.Background(), "user", nil)
+	tree.Scan(context.Background(), "user", nil)
+	if !later.Load() {
+		t.Fatal("the later scan never ran")
+	}
+	if n := strings.Count(r.logs.String(), "cannot scan"); n != 1 {
+		t.Errorf("%d warnings for the unreadable folder, want 1", n)
 	}
 }

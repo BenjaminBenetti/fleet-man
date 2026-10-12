@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -63,6 +64,10 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 		// .claude) is not a delete of everything in it to send everywhere.
 		return Report{}, nil, err
 	}
+	tr.mu.Lock()
+	tr.scans++
+	scan := tr.scans
+	tr.mu.Unlock()
 	stepScan(tr.Dir, "walk")
 	areas := tr.reach(cover(paths))
 	observed := map[string]fs.FileInfo{}
@@ -192,14 +197,19 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 	if err := tr.stillThere(); err != nil {
 		return Report{}, nil, err
 	}
+	refused := map[string]bool{}
 	for name, err := range failed {
-		if !tr.failing[name] {
-			t.log.Warn("sharesync: cannot scan", "root", root, "path", name, "err", err)
-			tr.failing[name] = true
+		at := tr.refusedAt(name, err)
+		refused[at] = true
+		if _, warned := tr.failing[at]; !warned {
+			t.log.Warn("sharesync: cannot scan", "root", root, "path", at, "err", err)
 		}
+		tr.failing[at] = max(tr.failing[at], scan)
 	}
-	for name := range tr.failing {
-		if _, still := failed[name]; !still && inAny(name, areas) {
+	for name, by := range tr.failing {
+		// A scan that started before the one that last found the path
+		// unreadable saw an older folder: it cannot say it is readable now.
+		if !refused[name] && inAny(name, areas) && by < scan {
 			delete(tr.failing, name)
 		}
 	}
@@ -255,6 +265,28 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 		t.log.Debug("sharesync: tree reports", "root", root, "path", c.Path, "base", c.Base, "kind", c.Entry.Kind, "size", c.Entry.Size)
 	}
 	return Report{Root: root, Epoch: tr.epoch, Changes: changes}, again, nil
+}
+
+// refusedAt is the path a scan of name was refused at: the folder above it
+// that could not be opened (one sync cannot read stops every path below it,
+// and is warned of once however a scan reaches it), else name.
+func (tr *treeRoot) refusedAt(name string, err error) string {
+	var pe *fs.PathError
+	if !errors.As(err, &pe) {
+		return name
+	}
+	at := filepath.ToSlash(pe.Path)
+	if filepath.IsAbs(pe.Path) {
+		rel, rerr := filepath.Rel(tr.Dir, pe.Path)
+		if rerr != nil {
+			return name
+		}
+		at = filepath.ToSlash(rel)
+	}
+	if at != "." && strings.HasPrefix(name, at+"/") {
+		return at
+	}
+	return name
 }
 
 // examine returns the state of a changed path: errUnsettled when it must be

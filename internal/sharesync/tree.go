@@ -116,8 +116,11 @@ type treeRoot struct {
 	epoch   string
 	records map[string]*record
 	journal *journal
-	// failing are the paths scans cannot read, warned of once.
-	failing map[string]bool
+	// failing are the paths scans cannot read, warned of once, each with
+	// the scan that last found it so (scans counts them): only a scan that
+	// started after that one may find the path readable again.
+	failing map[string]uint64
+	scans   uint64
 	// settling are the merging files seen modified too recently, as first
 	// seen (MergeSettle).
 	settling map[string]settleMark
@@ -220,7 +223,7 @@ func (t *Tree) openRoot(spec TreeRoot) (*treeRoot, error) {
 		sroot.Close()
 		return nil, fmt.Errorf("sharesync: root %s: %w", spec.Name, err)
 	}
-	tr := &treeRoot{TreeRoot: spec, tree: t, policy: t.table, fs: sroot, opened: opened, records: map[string]*record{}, failing: map[string]bool{}, settling: map[string]settleMark{}}
+	tr := &treeRoot{TreeRoot: spec, tree: t, policy: t.table, fs: sroot, opened: opened, records: map[string]*record{}, failing: map[string]uint64{}, settling: map[string]settleMark{}}
 	j, raw, err := openJournal(filepath.Join(t.opts.StateDir, stateFile(spec.Name)))
 	if err != nil {
 		sroot.Close()
