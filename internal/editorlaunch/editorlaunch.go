@@ -353,23 +353,35 @@ type Dialer func(ctx context.Context) (*fleetclient.Conn, error)
 // whose hash the remote part is. Nothing is dialled for an alias that does
 // not parse.
 func ResolveAlias(ctx context.Context, alias string, local func(context.Context) (fleetgrpc.FleetServiceClient, func(), error)) (sshalias.Target, Dialer, error) {
+	target, dial, _, err := ResolveAliasRemote(ctx, alias, local)
+	return target, dial, err
+}
+
+// ResolveAliasRemote is ResolveAlias that also says which armada remote the
+// alias leads to: its gateway or ssh:// URL, "" for the local daemon or one
+// reached by a FLEET_SERVER address (no armada remote is either).
+func ResolveAliasRemote(ctx context.Context, alias string, local func(context.Context) (fleetgrpc.FleetServiceClient, func(), error)) (sshalias.Target, Dialer, string, error) {
 	target, err := sshalias.Parse(alias)
 	if err != nil {
-		return sshalias.Target{}, nil, err
+		return sshalias.Target{}, nil, "", err
 	}
 	if target.Remote == "" {
-		return target, fleetclient.DialLocal, nil
+		return target, fleetclient.DialLocal, "", nil
 	}
 	svc, done, err := local(ctx)
 	if err != nil {
-		return sshalias.Target{}, nil, fmt.Errorf("reach the local fleet daemon: %w", err)
+		return sshalias.Target{}, nil, "", fmt.Errorf("reach the local fleet daemon: %w", err)
 	}
 	defer done()
 	r, err := findRemote(ctx, svc, target.Remote)
 	if err != nil {
-		return sshalias.Target{}, nil, err
+		return sshalias.Target{}, nil, "", err
 	}
-	return target, func(ctx context.Context) (*fleetclient.Conn, error) { return fleetclient.DialRemote(ctx, r) }, nil
+	url := ""
+	if r.Kind == fleetclient.RemoteGateway || r.Kind == fleetclient.RemoteSSH {
+		url = r.Address
+	}
+	return target, func(ctx context.Context) (*fleetclient.Conn, error) { return fleetclient.DialRemote(ctx, r) }, url, nil
 }
 
 // findRemote is the remote daemon whose hash remote is.

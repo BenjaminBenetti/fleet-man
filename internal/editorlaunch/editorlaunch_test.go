@@ -286,6 +286,14 @@ func TestResolveAlias(t *testing.T) {
 		if _, dial, err := ResolveAlias(ctx, "alpha.repo."+tc.remote+".fleet", d.local()); err != nil || dial == nil {
 			t.Errorf("ResolveAlias with %s: %v", tc.remote, err)
 		}
+		// The remote's URL, which its armada entry (agent forwarding) is
+		// found by.
+		if _, _, url, err := ResolveAliasRemote(ctx, "alpha.repo."+tc.remote+".fleet", d.local()); err != nil || url != tc.want.Address {
+			t.Errorf("ResolveAliasRemote with %s: url %q, %v; want %q", tc.remote, url, err, tc.want.Address)
+		}
+	}
+	if _, _, url, _ := ResolveAliasRemote(ctx, "alpha.repo.fleet", never); url != "" {
+		t.Errorf("the local daemon's alias names remote %q", url)
 	}
 	// The armada wins over a record with the same hash.
 	d.armada = []*fleetgrpc.ArmadaRemote{{Url: gw, Token: "armada-tok"}}
