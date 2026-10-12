@@ -278,6 +278,41 @@ FLEET_ITEST_BACKEND=kubernetes FLEET_ITEST_CLUSTER=minikube ./integration/run.sh
 Inside a fleet instance, run the suite in a QA container instead; see
 DEVELOPMENT.md "Integration tests" and, for a private cluster, "Dev loop".
 
+`FLEET_ITEST_ARTIFACTS=<dir>` keeps what a failed test leaves before its
+teardown wipes it, in `<dir>/<test>/`: its daemon's `fleet.log` and
+`state.json`, and the backend's state (`_be_dump`: the host's containers and
+fleet's container logs, or the test namespace's objects, events, pods and pod
+logs, the nodes and the storage).
+
+## Nightly jobs
+
+`integration/nightly/*.sh` are what `.github/workflows/nightly-k8s.yml` runs
+(DEVELOPMENT.md "Nightly jobs" has the local recipe). Each makes its own
+throwaway cluster, runs the itests one minikube node cannot (most of them pass
+saying they did not run elsewhere), and leaves `summary.md`, `budgets.tsv`,
+the itest logs, failed tests' `FLEET_ITEST_ARTIFACTS` and cluster dumps in
+`$FLEET_NIGHTLY_OUT/<job>/`:
+
+| Job | Cluster | Tests |
+| --- | --- | --- |
+| `kind-multinode.sh` | kind, three nodes (`clusters/kind-shared-path.sh`) | 817-822 (share placement, co-location, Immediate refusal, a drain with a TUI watching, rebuilds), 852 (the deep test's two-pod probe, the one-node warning and cap) |
+| `kind-nfs.sh` | kind, two nodes, csi-driver-nfs and an NFS server on a tmpfs | 817-827 onto `nfs-csi` (823: multi-node mode), 826 onto `fleet-shared-path` in multi-node mode; the NFS-safe teardown order |
+| `selinux-k3s.sh` | k3s `--selinux` on an enforcing AlmaLinux 9 VM (KVM) | 817, 824, 853 (one MCS level per fleet, siblings sharing files, the relabel time) |
+| `calico.sh` | minikube, calico at a 1450-byte MTU | 714-718 (DinD at that MTU, the deb and image caches), 808-815 (811: the metadata block calico enforces) |
+| `csi-hostpath.sh` | minikube, volumesnapshots + csi-hostpath | 700, 812, 391, 780 on `csi-hostpath-sc` (snapshot clones); the conformance suite on `standard` and `csi-hostpath-sc`; `TestLiveSeedCache` |
+| `attach-limit.sh` | minikube, csi-hostpath at 3 volumes per node | 825-826 |
+| `expand.sh` | minikube, OpenEBS LVM LocalPV on a loop-file volume group (`clusters/lvm-localpv.sh`): volumes that hold only their size and grow | 854: a share that fills, pauses the sync and grows with auto-expand on; a cache volume growing |
+| `netem.sh` | minikube behind tc netem (150ms round trip; then with ~1% loss) | 851: audio jitter beside bulk transfers, page loads through fleet vs kubectl port-forward, poll times |
+| `scale.sh <n>` | minikube, one node of `n`+60 pods | 850: fleetd's scale budgets and the reconnect storm at `n` (100; 300 on a larger runner) |
+| `go-deep.sh` | none | sharesync properties at 200 seeds, every fuzz target for a minute |
+
+The budgets the 85x tests hold (each env-overridable there) come from the
+plan's scale and WAN budgets: fleetd under 600 MB, under 4 open files and at
+most 2 API server long-running requests per pod, every agent back within 90s
+of a restart; PCM jitter p99 under 60ms beside a 48MB copy and a 50MB synced
+file on a lossless 150ms link (recorded, not judged, with loss), and a page
+through fleet within 2x of kubectl port-forward on the same link.
+
 ## CI
 
 `.github/workflows/integration-k8s.yml` runs the kubernetes subset sharded on
