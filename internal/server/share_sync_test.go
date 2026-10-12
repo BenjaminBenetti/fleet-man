@@ -56,6 +56,9 @@ type fakeSpokes struct {
 	// onRetire, when set, runs in each retire (a destroy's retireFleet,
 	// between closing the fleet's sync and saving its marks).
 	onRetire func()
+	// runsEnded, when set, waits for the manager's spoke runs of a key to
+	// end (newSyncRig): down's pod is gone only once they have.
+	runsEnded func(key string)
 }
 
 func newFakeSpokes(t *testing.T) *fakeSpokes {
@@ -197,11 +200,16 @@ func (f *fakeSpokes) up(key string) {
 
 func (f *fakeSpokes) down(key string) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	delete(f.running, key)
-	if ch := f.stops[key]; ch != nil {
+	ch := f.stops[key]
+	if ch != nil {
 		close(ch)
 		delete(f.stops, key)
+	}
+	ended := f.runsEnded
+	f.mu.Unlock()
+	if ch != nil && ended != nil {
+		ended(key)
 	}
 }
 
@@ -241,6 +249,7 @@ func newSyncRig(t *testing.T) *syncRig {
 	r := &syncRig{t: t, svc: svc, spokes: newFakeSpokes(t), fleet: "f", cancel: cancel}
 	r.m = svc.shareSync
 	r.m.spokes = r.spokes
+	r.spokes.runsEnded = r.waitRunsEnded
 	r.m.records = func() []fleet.KubeCluster { return []fleet.KubeCluster{{ID: syncCluster, DisplayName: "minikube"}} }
 	r.m.usable = func(context.Context, string) bool { return true }
 	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{r.fleet: {Name: r.fleet}}}); err != nil {
@@ -341,6 +350,32 @@ func (r *syncRig) hostLayout() {
 	}
 	for _, f := range []string{"files/.claude.json", "files/claude-settings.local.json"} {
 		syncWrite(r.t, r.host(f), "")
+	}
+}
+
+// waitRunsEnded waits for every spoke run of the manager that serves key to
+// end, as a real pod's connection does once the pod is gone: a test that
+// stops a pod and goes on never meets its old spoke still attached.
+func (r *syncRig) waitRunsEnded(key string) {
+	r.t.Helper()
+	r.m.recMu.Lock()
+	var runs []*spokeRun
+	r.m.mu.Lock()
+	for _, fs := range r.m.fleets {
+		for _, run := range fs.spokes {
+			if run.key == key {
+				runs = append(runs, run)
+			}
+		}
+	}
+	r.m.mu.Unlock()
+	r.m.recMu.Unlock()
+	for _, run := range runs {
+		select {
+		case <-run.done:
+		case <-time.After(10 * time.Second):
+			r.t.Errorf("the spoke of %s outlived its pod", key)
+		}
 	}
 }
 
@@ -542,6 +577,9 @@ func TestShareSyncDestroyFlushesThenRetiresTheShare(t *testing.T) {
 				t.Errorf("the destroy's flush left the share's last change behind")
 			}
 			r.spokes.down("aaaaaaaa")
+			// The rig's state keeps the fleet, so a reconcile may open its
+			// sync again later: the one that was open is what must close.
+			open := r.m.fleetOf(r.fleet)
 			warnings := r.m.retireFleet(r.fleet, ff)
 			want := fmt.Sprintf("%s/f keep=%v", syncCluster, tc.keep)
 			if got := r.spokes.retired; len(got) != 1 || got[0] != want {
@@ -550,7 +588,7 @@ func TestShareSyncDestroyFlushesThenRetiresTheShare(t *testing.T) {
 			if tc.keep != (len(warnings) == 1 && strings.Contains(warnings[0], "labelled an orphan")) {
 				t.Errorf("warnings %q", warnings)
 			}
-			if r.m.fleetOf(r.fleet) != nil {
+			if open == nil || r.m.fleetOf(r.fleet) == open {
 				t.Error("the fleet's sync is still open")
 			}
 		})
