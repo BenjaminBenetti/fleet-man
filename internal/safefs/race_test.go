@@ -3,14 +3,20 @@
 package safefs
 
 import (
+	"bufio"
+	"context"
 	"encoding/binary"
+	"fmt"
 	"io/fs"
 	"math/rand/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -269,22 +275,149 @@ func writeTo(f *os.File, err error) error {
 }
 
 // TestSymlinkSwapRace runs random programs under attack on each walk: the
-// fixed-seed share of what FuzzSymlinkSwap explores in CI.
+// fixed-seed share of what FuzzSymlinkSwap explores in CI. The programs run
+// in a child test process (runRaceChild).
 func TestSymlinkSwapRace(t *testing.T) {
+	if os.Getenv(raceChildEnv) == "" {
+		runRaceChild(t)
+		return
+	}
 	programs := 1500
 	if testing.Short() {
 		programs = 100
 	}
 	eachWalk(t, func(t *testing.T, portable bool) {
 		rng := rand.New(rand.NewPCG(1, 2))
-		for range programs {
+		for n := range programs {
 			program := make([]byte, 8+3*24)
 			for i := range program {
 				program[i] = byte(rng.Uint32())
 			}
 			runRaceProgram(t, program, portable)
+			if (n+1)%raceBeat == 0 {
+				t.Logf("%d programs", n+1)
+			}
 		}
 	})
+}
+
+// raceChildEnv, set, makes TestSymlinkSwapRace run its programs itself: it is
+// the child runRaceChild starts.
+const raceChildEnv = "SAFEFS_RACE_CHILD"
+
+// raceBeat is how many programs the child runs between progress lines, and
+// raceStall how long the parent waits for one: far beyond a slow filesystem's
+// pace (a program takes milliseconds), so a child that misses it is stuck.
+const (
+	raceBeat  = 10
+	raceStall = 2 * time.Minute
+)
+
+// runRaceChild runs TestSymlinkSwapRace's programs in a child test process
+// and fails t with the child's output when it fails or stops making progress.
+// The attack drives the kernel harder than anything else in the suite (some
+// hundreds of renames per program). A thread left stuck in a system call
+// keeps its process from exiting, which neither the test binary's own timeout
+// nor go test's kill can end, so in this process a stall would wedge the
+// whole go test run without a word. A child that stalls is sent SIGQUIT,
+// whose goroutine dump names the call each goroutine is in, and is left
+// behind with its temp dir.
+func runRaceChild(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"-test.run=^TestSymlinkSwapRace$", "-test.v"}
+	if testing.Short() {
+		args = append(args, "-test.short")
+	}
+	if deadline, ok := t.Deadline(); ok {
+		// The child's own timeout dumps its goroutines before this one's.
+		if left := time.Until(deadline) - 30*time.Second; left > 0 {
+			args = append(args, "-test.timeout="+left.String())
+		}
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.Env = append(os.Environ(), raceChildEnv+"=1")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	defer close(done)
+	lines := make(chan string)
+	go func() {
+		defer close(lines)
+		scan := bufio.NewScanner(out)
+		for scan.Scan() {
+			select {
+			case lines <- scan.Text():
+			case <-done:
+				return
+			}
+		}
+	}()
+	var output []string
+	report := func() string { return strings.Join(output, "\n") }
+	stall := time.NewTimer(raceStall)
+	defer stall.Stop()
+	for {
+		select {
+		case line, ok := <-lines:
+			if ok {
+				output = append(output, line)
+				stall.Reset(raceStall)
+				continue
+			}
+			exited := make(chan error, 1)
+			go func() { exited <- cmd.Wait() }()
+			select {
+			case err := <-exited:
+				if err != nil {
+					t.Fatalf("the race child failed (%v):\n%s", err, report())
+				}
+			case <-time.After(raceStall):
+				t.Fatalf("the race child closed its output and did not exit:\n%s", report())
+			}
+			return
+		case <-stall.C:
+			stalled := psState(cmd.Process.Pid)
+			_ = cmd.Process.Signal(syscall.SIGQUIT)
+			for dump := time.After(15 * time.Second); ; {
+				select {
+				case line, ok := <-lines:
+					if ok {
+						output = append(output, line)
+						continue
+					}
+				case <-dump:
+				}
+				break
+			}
+			after := psState(cmd.Process.Pid)
+			_ = cmd.Process.Kill()
+			// Not waited for here: a process stuck in a system call is never
+			// reaped.
+			go func() { _ = cmd.Wait() }()
+			t.Fatalf("the race child made no progress for %v and was sent SIGQUIT\nstalled:\n%s\nafter the dump:\n%s\n%s", raceStall, stalled, after, report())
+		}
+	}
+}
+
+// psState is what ps says of pid (its state, such as uninterruptible or
+// exiting, and what it waits on), for a stall report.
+func psState(pid int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "-o", "pid,stat,wchan,etime,command", "-p", strconv.Itoa(pid)).CombinedOutput()
+	if s := strings.TrimSpace(string(out)); s != "" {
+		return s
+	}
+	return fmt.Sprintf("ps: %v", err)
 }
 
 // FuzzSymlinkSwap explores programs under attack. The macOS and Linux
