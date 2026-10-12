@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: Launching the TUI registers the fleet MCP server in ~/.claude.json.
+#
+# Host-only: the entry goes into this machine's ~/.claude.json and points at
+# the local daemon's MCP listener, which binds before the daemon starts on
+# any cluster connection; no instance is made.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
