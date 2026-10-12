@@ -68,8 +68,88 @@ func TestHostRequirements(t *testing.T) {
 	}
 }
 
-// A LimitRange default below memory_limit gets an explicit limit, which is
-// never below the request.
+// The dev container's limits: memory_limit (8Gi unset, "0" none) unless -m
+// sets one, clamped to a LimitRange maximum the request fits under and never
+// below the request; a CPU limit only from --cpus, --cpu-quota or
+// resources.cpu_limit, never below the request; on GKE Autopilot limits
+// equal requests, whatever the settings.
+func TestInstanceLimits(t *testing.T) {
+	cluster := func(memory, cpu string) func(*Input) {
+		return func(in *Input) { in.Cluster.MemoryLimit, in.Cluster.Resources.CPULimit = memory, cpu }
+	}
+	limitRange := func(memory, cpu, def, ceiling string) func(*Input) {
+		return func(in *Input) {
+			cluster(memory, cpu)(in)
+			in.Facts.LimitRangeMemoryLimit, in.Facts.LimitRangeMemoryMax = def, ceiling
+		}
+	}
+	autopilot := func(memory, cpu string) func(*Input) {
+		return func(in *Input) {
+			cluster(memory, cpu)(in)
+			in.Facts.Autopilot = true
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		set      func(*Input)
+		mem, cpu string // the limits, "" for none
+		req      string // the memory request when it is not 2Gi
+		warn     string // a warning the translation gives
+	}{
+		{name: "default", mem: "8Gi"},
+		{name: "memory_limit", set: cluster("12Gi", ""), mem: "12Gi"},
+		{name: "memory_limit off", set: cluster("0", "")},
+		{name: "memory_limit below the request", set: cluster("1Gi", ""), mem: "2Gi"},
+		{name: "-m", args: []string{"-m", "16g"}, mem: "16Gi"},
+		{name: "-m with memory_limit off", args: []string{"-m", "4g"}, set: cluster("0", ""), mem: "4Gi"},
+		{name: "cpu_limit", set: cluster("", "2"), mem: "8Gi", cpu: "2"},
+		{name: "cpu_limit off", set: cluster("", "0"), mem: "8Gi"},
+		{name: "cpu_limit below the request", set: cluster("", "250m"), mem: "8Gi", cpu: "500m"},
+		{name: "--cpus", args: []string{"--cpus", "1.5"}, set: cluster("", "4"), mem: "8Gi", cpu: "1500m"},
+		{name: "--cpu-quota", args: []string{"--cpu-quota", "300000"}, set: cluster("", "1"), mem: "8Gi", cpu: "3"},
+		{name: "LimitRange default below", set: limitRange("", "", "1Gi", ""), mem: "8Gi"},
+		{name: "LimitRange default, memory_limit off", set: limitRange("0", "", "4Gi", "")},
+		{name: "LimitRange default below the request, memory_limit off", set: limitRange("0", "", "1Gi", ""), mem: "2Gi",
+			warn: "LimitRange: default memory limit 1Gi is below the 2Gi request → fleet sets 2Gi (memory_limit is off on prod-eu)"},
+		{name: "LimitRange maximum below", set: limitRange("", "", "4Gi", "4Gi"), mem: "4Gi",
+			warn: "LimitRange: maximum memory 4Gi → memory limit clamped from 8Gi (memory_limit on prod-eu)"},
+		{name: "LimitRange maximum above", set: limitRange("", "", "", "16Gi"), mem: "8Gi"},
+		// Admission refuses these: the request, or the devcontainer's own
+		// -m, is above the maximum.
+		{name: "LimitRange maximum below the request", set: limitRange("", "", "", "1Gi"), mem: "2Gi"},
+		{name: "LimitRange maximum below -m", args: []string{"-m", "6g"}, set: limitRange("", "", "", "4Gi"), mem: "6Gi"},
+		{name: "Autopilot", set: autopilot("", ""), mem: "4Gi", cpu: "500m", req: "4Gi",
+			warn: "GKE Autopilot: limits equal requests (500m CPU, 4Gi memory)"},
+		{name: "Autopilot ignores the limit settings", set: autopilot("12Gi", "2"), mem: "4Gi", cpu: "500m", req: "4Gi",
+			warn: "GKE Autopilot: limits equal requests (500m CPU, 4Gi memory)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := baseInput(tc.args, nil, nil)
+			if tc.set != nil {
+				tc.set(&in)
+			}
+			res, err := Translate(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := res.Pod.Resources
+			if got.Limits["memory"] != tc.mem || got.Limits["cpu"] != tc.cpu {
+				t.Errorf("limits %v, want memory %q cpu %q", got.Limits, tc.mem, tc.cpu)
+			}
+			if req := orDefault(tc.req, "2Gi"); got.Requests["memory"] != req {
+				t.Errorf("memory request %s, want %s", got.Requests["memory"], req)
+			}
+			warnings := strings.Join(res.Pod.Warnings, "\n")
+			if (tc.warn == "") != (warnings == "") || !strings.Contains(warnings, tc.warn) {
+				t.Errorf("warnings %q, want %q", warnings, tc.warn)
+			}
+		})
+	}
+}
+
+// The memory limit is never below the request, --memory-reservation's too,
+// whatever a LimitRange's default.
 func TestLimitRangeLimitCoversTheRequest(t *testing.T) {
 	in := baseInput([]string{"--memory-reservation", "12g"}, nil, nil)
 	in.Facts.LimitRangeMemoryLimit = "4Gi"

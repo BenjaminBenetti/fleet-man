@@ -137,7 +137,7 @@ func TestKubeKeysAreDocumented(t *testing.T) {
 			case "group":
 				e.row = len(kubeTopFields) + 1
 			default:
-				editorRowOf(t, e, path)
+				editorRowOf(t, m, e, path)
 			}
 			return func(k tea.KeyMsg) tea.Cmd { return sp.Update(m, k) }, func() string {
 				return fmt.Sprint(e.row, e.button, e.editing != nil, e.open, e.ns != nil, len(e.saving), sp.kubeDialog == kubeDialog(e), e.fieldErr)
@@ -234,7 +234,7 @@ func TestKubeKeysInKeybindingsAndFooters(t *testing.T) {
 	}
 	m.kubeClusters.Clusters = []*fleetgrpc.KubeClusterStatus{st}
 	e := newKubeEditor("mk-1")
-	editorRowOf(t, e, "clone_method")
+	editorRowOf(t, m, e, "clone_method")
 	// y / n answer a consent to test a large StorageClass.
 	e.consent = &kubeConsent{classes: []string{"filestore"}, minimum: "1Ti"}
 	footerHas("editor", e.footer(m, st), kubeEditorKeys)

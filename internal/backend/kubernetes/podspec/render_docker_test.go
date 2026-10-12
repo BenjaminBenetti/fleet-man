@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 )
@@ -72,9 +73,26 @@ func TestCompanionContainersNameTheDevContainersResources(t *testing.T) {
 		t.Errorf("share init memory limit %v; want %v", sh.Resources.Limits.Memory(), shareInitMemory.String())
 	}
 
-	open := mustRender(t, []string{"--mount", dockerSockBind}, withShare)
+	// The connection's memory limit (8Gi unset) is the dev container's
+	// without -m: the sidecar takes it, the init container its small one.
+	byDefault := mustRender(t, []string{"--mount", dockerSockBind}, withShare)
+	if d := devOf(byDefault); len(d.Resources.Limits) != 1 || d.Resources.Limits.Memory().String() != "8Gi" {
+		t.Fatalf("dev container limits %v with no -m; want memory_limit's 8Gi", d.Resources.Limits)
+	}
+	got = inits(byDefault)
+	if sc := got[DockerSidecar]; len(sc.Resources.Limits) != 1 || sc.Resources.Limits.Memory().String() != "8Gi" {
+		t.Errorf("sidecar limits %v; want the dev container's 8Gi", sc.Resources.Limits)
+	}
+	if sh := got[ShareInit]; len(sh.Resources.Limits) != 1 || sh.Resources.Limits.Memory().Cmp(shareInitMemory) != 0 {
+		t.Errorf("share init limits %v; want %v", sh.Resources.Limits, shareInitMemory.String())
+	}
+
+	open := mustRender(t, []string{"--mount", dockerSockBind}, func(in *Input, r *RenderInput) {
+		withShare(in, r)
+		in.Cluster.MemoryLimit = fleet.KubeNoLimit
+	})
 	if d := devOf(open); len(d.Resources.Limits) != 0 {
-		t.Fatalf("dev container limits %v with no -m", d.Resources.Limits)
+		t.Fatalf("dev container limits %v with no -m and memory_limit off", d.Resources.Limits)
 	}
 	for name, c := range inits(open) {
 		if len(c.Resources.Limits) != 0 || len(c.Resources.Requests) != 2 {

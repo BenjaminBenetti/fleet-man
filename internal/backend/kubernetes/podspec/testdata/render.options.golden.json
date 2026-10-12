@@ -460,12 +460,7 @@
       "/seed/spec/containers/0/resources/requests/memory": "1Gi"
     }
   },
-  "memory/limitrange": {
-    "changes": {
-      "/pod/spec/containers/0/resources/limits/memory": "8Gi",
-      "/seed/spec/containers/0/resources/limits/memory": "8Gi"
-    }
-  },
+  "memory/limitrange": {},
   "memory/limitrange-high": {},
   "memory/limitrange-with-limit": {
     "changes": {
@@ -500,6 +495,7 @@
       "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
       "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
       "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
       "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
@@ -544,6 +540,7 @@
       "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
       "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
       "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
       "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
@@ -601,6 +598,7 @@
       "/pod/spec/initContainers/0/image": "docker:29.9.0-dind@sha256:0b6d18a4a222e71c88be6034926b4f6cde2fc33c2218643d03ccfddc65995470",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-docker",
+      "/pod/spec/initContainers/0/resources/limits/memory": "8Gi",
       "/pod/spec/initContainers/0/resources/requests/cpu": "50m",
       "/pod/spec/initContainers/0/resources/requests/memory": "128Mi",
       "/pod/spec/initContainers/0/restartPolicy": "Always",
@@ -661,6 +659,7 @@
       "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
       "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
       "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
       "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
@@ -728,6 +727,7 @@
       "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
       "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
       "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
       "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
@@ -776,6 +776,7 @@
       "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
       "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
       "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
       "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
@@ -1081,6 +1082,7 @@
       "/pod/spec/initContainers/0/image": "docker:29.9.0-dind@sha256:0b6d18a4a222e71c88be6034926b4f6cde2fc33c2218643d03ccfddc65995470",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-docker",
+      "/pod/spec/initContainers/0/resources/limits/memory": "8Gi",
       "/pod/spec/initContainers/0/resources/requests/cpu": "50m",
       "/pod/spec/initContainers/0/resources/requests/memory": "128Mi",
       "/pod/spec/initContainers/0/restartPolicy": "Always",
@@ -1140,6 +1142,7 @@
       "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
       "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
       "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
       "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
@@ -1192,6 +1195,7 @@
       "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
       "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
       "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
       "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
@@ -1236,6 +1240,7 @@
       "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
       "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
       "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
       "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",

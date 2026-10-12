@@ -45,9 +45,6 @@
       "kubernetes.io/arch": "amd64",
       "kubernetes.io/os": "linux"
     },
-    "warnings": [
-      "LimitRange: default memory limit 1Gi → fleet sets 8Gi explicitly (memory_limit on prod-eu)"
-    ],
     "options": [
       {
         "option": "attach",

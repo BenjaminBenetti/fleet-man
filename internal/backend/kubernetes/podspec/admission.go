@@ -107,9 +107,9 @@ func (d *Denial) Refusal() *Refusal {
 	case DeniedPolicy:
 		reason = fmt.Sprintf("%s was refused by an admission policy: %s. The cluster's policy decides; ask its owner, or take what it names out of the devcontainer", d.Object, detail)
 	case DeniedQuota:
-		reason = fmt.Sprintf("%s does not fit the namespace's ResourceQuota: %s. Stop or destroy instances there, lower the connection's resources, or raise the quota", d.Object, detail)
+		reason = fmt.Sprintf("%s does not fit the namespace's ResourceQuota: %s. %s", d.Object, detail, quotaFix(d.Message))
 	case DeniedLimitRange:
-		reason = fmt.Sprintf("%s is outside the namespace's LimitRange: %s. Lower memory_limit or the devcontainer's -m/--cpus to fit, or raise the LimitRange", d.Object, detail)
+		reason = fmt.Sprintf("%s is outside the namespace's LimitRange: %s. Lower memory_limit, the connection's resources or the devcontainer's -m/--cpus to fit, or raise the LimitRange", d.Object, detail)
 	case DeniedServiceAccount:
 		reason = fmt.Sprintf("%s: %s. Set the connection's service_account to one the namespace has", d.Object, detail)
 	case DeniedNamespace:
@@ -125,6 +125,26 @@ func (d *Denial) Refusal() *Refusal {
 }
 
 func (d *Denial) Error() string { return d.Refusal().Error() }
+
+// quotaFix is what to change for a ResourceQuota's refusal. A quota on
+// limits.cpu or limits.memory refuses a container that sets no such limit
+// ("failed quota: q: must specify limits.cpu for: dev; limits.memory for:
+// dev"), which resources.cpu_limit and memory_limit (when it is off) set;
+// any other refusal is a quota without room.
+func quotaFix(msg string) string {
+	_, missing, ok := strings.Cut(msg, "must specify ")
+	var set []string
+	if ok && strings.Contains(missing, "limits.cpu for:") {
+		set = append(set, "resources.cpu_limit")
+	}
+	if ok && strings.Contains(missing, "limits.memory for:") {
+		set = append(set, "memory_limit (it is 0, off)")
+	}
+	if len(set) == 0 {
+		return "Stop or destroy instances there, lower the connection's resources, or raise the quota"
+	}
+	return "Set the connection's " + strings.Join(set, " and ") + ": a quota on limits admits only containers that set them"
+}
 
 // Decide is Denied for a classified denial: a policy denial follows the
 // connection's debug-capabilities policy for pod (rerender: render without

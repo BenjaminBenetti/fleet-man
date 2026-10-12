@@ -55,7 +55,14 @@ type kubeField struct {
 	classes kubeClassSource // kubeKindClass: the list it offers
 	def     string          // what unset means, shown dim
 	note    string          // a hint shown beside the value
+	// shown says whether the row is shown for the last test's findings;
+	// nil is always. A hidden field is still settable (fleet cluster set).
+	shown func(*fleetgrpc.KubeCapabilities) bool
 }
+
+// kubeOnAutopilot shows a GKE Autopilot setting where the last test found
+// Autopilot.
+func kubeOnAutopilot(caps *fleetgrpc.KubeCapabilities) bool { return caps.GetAutopilot() }
 
 // kubeGroup is a titled, foldable set of fields.
 type kubeGroup struct {
@@ -115,8 +122,12 @@ var kubeGroups = []kubeGroup{
 	{key: "resources", title: "Resources & quotas", fields: []kubeField{
 		{path: "resources.cpu_request", label: "CPU request", kind: kubeKindText, def: "500m"},
 		{path: "resources.memory_request", label: "Memory request", kind: kubeKindText, def: "2Gi"},
-		{path: "resources.autopilot_memory", label: "Autopilot memory", kind: kubeKindText, def: "4Gi"},
-		{path: "memory_limit", label: "Memory limit", kind: kubeKindText, def: "8Gi", note: "set when a LimitRange injects less"},
+		{path: "resources.cpu_limit", label: "CPU limit", kind: kubeKindText, def: "none",
+			note: "throttles even on an idle node; for a limits.cpu quota"},
+		{path: "memory_limit", label: "Memory limit", kind: kubeKindText, def: "8Gi",
+			note: "each instance, at least its request; 0 = off"},
+		{path: "resources.autopilot_memory", label: "Autopilot memory", kind: kubeKindText, def: "4Gi",
+			note: "the memory request; limits equal requests", shown: kubeOnAutopilot},
 		{path: "max_instances", label: "Max instances", kind: kubeKindInt, def: "no limit"},
 		{path: "max_total_disk", label: "Max total disk", kind: kubeKindText, def: "no limit"},
 		{path: "automation_fire_interval", label: "Trigger interval", kind: kubeKindText, def: "30s", note: "per trigger; 0 = off"},

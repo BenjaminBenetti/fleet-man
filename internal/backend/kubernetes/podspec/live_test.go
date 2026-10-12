@@ -195,12 +195,25 @@ func TestLiveAdmission(t *testing.T) {
 		t.Errorf("no-new-privileges beside SYS_ADMIN: allowPrivilegeEscalation %s", jsonString(ape))
 	}
 
-	// A quota without room, and a LimitRange maximum under the limit fleet
-	// sets when the LimitRange's default would be lower.
+	// A quota without room. A LimitRange maximum under fleet's memory limit
+	// clamps it, as the preflight found the maximum; one it did not find,
+	// or one the memory request is above, refuses the pod.
 	_, err = admit("fixture", quota, fleet.KubeCluster{}, nil)
 	wantCode("quota", err, CodeQuota, "requests.memory")
+	clamped, err := admit("fixture", limited, fleet.KubeCluster{}, func(in *Input, _ *RenderInput) {
+		in.Facts.LimitRangeMemoryLimit, in.Facts.LimitRangeMemoryMax = "4Gi", "4Gi"
+	})
+	if err != nil {
+		t.Errorf("a memory limit clamped to the LimitRange maximum: %v", err)
+	} else if got := devOf(clamped.Objects).Resources.Limits[corev1.ResourceMemory]; got.String() != "4Gi" {
+		t.Errorf("the clamped memory limit is %s, want 4Gi", got.String())
+	}
 	_, err = admit("fixture", limited, fleet.KubeCluster{}, func(in *Input, _ *RenderInput) { in.Facts.LimitRangeMemoryLimit = "4Gi" })
-	wantCode("limit range", err, CodeAdmissionDenied, "LimitRange", "maximum memory usage per Container is 4Gi")
+	wantCode("limit range not found", err, CodeAdmissionDenied, "LimitRange", "maximum memory usage per Container is 4Gi")
+	_, err = admit("fixture", limited, fleet.KubeCluster{Resources: fleet.KubeResources{MemoryRequest: "6Gi"}}, func(in *Input, _ *RenderInput) {
+		in.Facts.LimitRangeMemoryLimit, in.Facts.LimitRangeMemoryMax = "4Gi", "4Gi"
+	})
+	wantCode("request above the limit range", err, CodeAdmissionDenied, "LimitRange", "maximum memory usage per Container is 4Gi")
 
 	// A ResourceQuota on cpu and memory requests with room to spare, and no
 	// LimitRange to fill in what a container leaves out: every container of
@@ -224,6 +237,29 @@ func TestLiveAdmission(t *testing.T) {
 		}
 		if fx == "fixture-dood" && a.Result.Pod.DooD == nil {
 			t.Errorf("%s: no docker engine", fx)
+		}
+	}
+
+	// A ResourceQuota on cpu and memory limits: the memory limit is set by
+	// default, the CPU limit only with resources.cpu_limit, which every
+	// container then names (the sidecar takes the dev container's). Without
+	// it the refusal names the setting.
+	limits := c.namespace(t, "quota-limits", nil)
+	if _, err := c.api.CoreV1().ResourceQuotas(limits).Create(ctx, &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: "limits"},
+		Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{
+			corev1.ResourceLimitsCPU: resource.MustParse("100"), corev1.ResourceLimitsMemory: resource.MustParse("1Ti"),
+		}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = admit("fixture", limits, fleet.KubeCluster{}, nil)
+	wantCode("no cpu limit under a quota on limits", err, CodeQuota, "limits.cpu", "resources.cpu_limit")
+	_, err = admit("fixture", limits, fleet.KubeCluster{MemoryLimit: fleet.KubeNoLimit}, nil)
+	wantCode("no limits under a quota on limits", err, CodeQuota, "limits.memory", "resources.cpu_limit and memory_limit")
+	for _, fx := range []string{"fixture", "fixture-dood"} {
+		if _, err := admit(fx, limits, fleet.KubeCluster{Resources: fleet.KubeResources{CPULimit: "2"}}, nil); err != nil {
+			t.Errorf("%s with a cpu limit under a quota on limits: %v", fx, err)
 		}
 	}
 

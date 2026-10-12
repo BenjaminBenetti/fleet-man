@@ -639,7 +639,7 @@ func TestInstanceIdentity(t *testing.T) {
 
 func TestClusterFacts(t *testing.T) {
 	caps := &fleetgrpc.KubeCapabilities{
-		Version: "v1.37.0", LimitRangeMemoryLimit: "4Gi", RuntimeClasses: []string{"sysbox"},
+		Version: "v1.37.0", LimitRangeMemoryLimit: "4Gi", LimitRangeMemoryMax: "6Gi", Autopilot: true, RuntimeClasses: []string{"sysbox"},
 		Nodes: []*fleetgrpc.KubeNode{{Arch: "arm64", AllocatableCpu: "4", AllocatableMemory: "16Gi"}},
 		StorageClasses: []*fleetgrpc.KubeStorageClass{
 			{Name: "standard", IsDefault: true, Block: true},
@@ -647,7 +647,7 @@ func TestClusterFacts(t *testing.T) {
 		},
 	}
 	f := clusterFacts(Facts{Local: localcluster.Cluster{Kind: localcluster.Minikube, Name: "mk"}, Capabilities: caps}, "")
-	if !f.Local || f.LimitRangeMemoryLimit != "4Gi" || len(f.RuntimeClasses) != 1 || len(f.Nodes) != 1 || f.Nodes[0].Arch != "arm64" || f.Nodes[0].AllocatableMemory != "16Gi" {
+	if !f.Local || f.LimitRangeMemoryLimit != "4Gi" || f.LimitRangeMemoryMax != "6Gi" || !f.Autopilot || len(f.RuntimeClasses) != 1 || len(f.Nodes) != 1 || f.Nodes[0].Arch != "arm64" || f.Nodes[0].AllocatableMemory != "16Gi" {
 		t.Errorf("facts %+v", f)
 	}
 	if f.ServerVersion != "v1.37.0" || f.DiskFileShare != "" {

@@ -94,7 +94,7 @@ func TestKubeClusterJSONRoundTrip(t *testing.T) {
 		ServiceImages:               KubeServiceImages{Buildkit: "b", BuildkitRootless: "br", DebCache: "d", ImageCache: "i", DinD: "dd"},
 		AllowSharedBuildkit:         &off,
 		DeleteCacheVolumesOnDestroy: true, DinDAddressPool: "10.10.0.0/16", BlockMetadata: &off,
-		Resources:       KubeResources{CPURequest: "1", MemoryRequest: "4Gi", AutopilotMemory: "6Gi"},
+		Resources:       KubeResources{CPURequest: "1", MemoryRequest: "4Gi", AutopilotMemory: "6Gi", CPULimit: "2"},
 		MemoryLimit:     "16Gi",
 		NodeSelector:    map[string]string{"pool": "fleet"},
 		Tolerations:     []KubeToleration{{Key: "dedicated", Operator: "Equal", Value: "fleet", Effect: "NoSchedule", TolerationSeconds: &seconds}},
@@ -147,6 +147,27 @@ func TestKubeClusterAutomationLimits(t *testing.T) {
 		}
 		if got := k.AutomationRunLimit(); got != tc.wantMax {
 			t.Errorf("AutomationRunLimit(%v) = %d, want %d", tc.max, got, tc.wantMax)
+		}
+	}
+}
+
+// Instance pods get the 8Gi memory limit unless it is set or turned off
+// ("0"), and no CPU limit unless one is set.
+func TestKubeClusterInstanceLimits(t *testing.T) {
+	for _, tc := range []struct {
+		memory, cpu      string
+		wantMem, wantCPU string
+	}{
+		{"", "", DefaultKubeMemoryLimit, ""},
+		{"12Gi", "2", "12Gi", "2"},
+		{KubeNoLimit, KubeNoLimit, "", ""},
+	} {
+		k := &KubeCluster{MemoryLimit: tc.memory, Resources: KubeResources{CPULimit: tc.cpu}}
+		if got := k.InstanceMemoryLimit(); got != tc.wantMem {
+			t.Errorf("InstanceMemoryLimit(%q) = %q, want %q", tc.memory, got, tc.wantMem)
+		}
+		if got := k.InstanceCPULimit(); got != tc.wantCPU {
+			t.Errorf("InstanceCPULimit(%q) = %q, want %q", tc.cpu, got, tc.wantCPU)
 		}
 	}
 }

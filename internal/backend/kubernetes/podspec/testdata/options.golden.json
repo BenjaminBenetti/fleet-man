@@ -1411,13 +1411,7 @@
   },
   "memory/limitrange": {
     "args": null,
-    "outcomes": {},
-    "changes": {
-      "/resources/limits/memory": "8Gi"
-    },
-    "warnings": [
-      "LimitRange: default memory limit 1Gi → fleet sets 8Gi explicitly (memory_limit on prod-eu)"
-    ]
+    "outcomes": {}
   },
   "memory/limitrange-high": {
     "args": null,

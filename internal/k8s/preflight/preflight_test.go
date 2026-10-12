@@ -495,11 +495,12 @@ func TestFullLimitsAndQuota(t *testing.T) {
 	c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath"), lr, quota)
 	res := Full(context.Background(), target(c, fleet.KubeCluster{}), nil)
 	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, "")
-	if ch := check(t, res, CheckLimits); ch.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN || ch.GetDetail() != "LimitRange default memory 1Gi → explicit 8Gi limit" {
+	// fleet sets its 8Gi memory limit itself: the default never applies.
+	if ch := check(t, res, CheckLimits); ch.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS || ch.GetDetail() != "LimitRanges leave fleet's limits alone" {
 		t.Errorf("limits = %v", ch)
 	}
-	if res.Capabilities.GetLimitRangeMemoryLimit() != "1Gi" {
-		t.Errorf("limit range memory = %q", res.Capabilities.GetLimitRangeMemoryLimit())
+	if res.Capabilities.GetLimitRangeMemoryLimit() != "1Gi" || res.Capabilities.GetLimitRangeMemoryMax() != "" {
+		t.Errorf("limit range memory = %q, max %q", res.Capabilities.GetLimitRangeMemoryLimit(), res.Capabilities.GetLimitRangeMemoryMax())
 	}
 	if ch := check(t, res, CheckQuota); ch.GetDetail() != "room for 3 more instances" {
 		t.Errorf("quota = %v", ch)
@@ -508,14 +509,129 @@ func TestFullLimitsAndQuota(t *testing.T) {
 		t.Errorf("quota headroom = %v", res.Capabilities.GetQuota())
 	}
 
-	// A maximum below fleet's limit and a full quota degrade the connection.
+	// With memory_limit off, the LimitRange's default is the limit.
+	res = Full(context.Background(), target(c, fleet.KubeCluster{MemoryLimit: "0"}), nil)
+	if ch := check(t, res, CheckLimits); ch.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS || ch.GetDetail() != "memory_limit off → the LimitRange's default memory limit 1Gi applies" {
+		t.Errorf("limits with memory_limit off = %v", ch)
+	}
+
+	// A maximum below fleet's limit clamps it, with a warning (the canary
+	// asks for the clamped limit); a full quota degrades the connection.
 	lr.Spec.Limits[0].Max = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")}
 	quota.Status.Used[corev1.ResourceRequestsMemory] = resource.MustParse("9Gi")
 	c = newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath"), lr, quota)
+	var canaryLimits []string
+	var mu sync.Mutex
+	c.deny = func(pod *corev1.Pod) string {
+		mu.Lock()
+		defer mu.Unlock()
+		canaryLimits = append(canaryLimits, pod.Spec.Containers[0].Resources.Limits.Memory().String())
+		return ""
+	}
 	res = Full(context.Background(), target(c, fleet.KubeCluster{}), nil)
-	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, "memory limit above the LimitRange maximum · quota full")
-	if f := check(t, res, CheckLimits).GetFix(); f != "set the memory limit to at most 4Gi" {
+	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, "quota full")
+	if strings.Contains(res.Message, "LimitRange") {
+		t.Errorf("a clamped memory limit limits the connection: %q", res.Message)
+	}
+	if ch := check(t, res, CheckLimits); ch.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN ||
+		ch.GetDetail() != "LimitRange maximum memory 4Gi → memory limit clamped from 8Gi" || ch.GetFix() != "set memory_limit to at most 4Gi" {
+		t.Errorf("limits = %v", ch)
+	}
+	if res.Capabilities.GetLimitRangeMemoryMax() != "4Gi" {
+		t.Errorf("limit range max = %q", res.Capabilities.GetLimitRangeMemoryMax())
+	}
+	if len(canaryLimits) == 0 || canaryLimits[0] != "4Gi" {
+		t.Errorf("the canaries' memory limits %v, want the clamped 4Gi", canaryLimits)
+	}
+
+	// A maximum below the memory request fits no instance.
+	lr.Spec.Limits[0].Max = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
+	c = newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath"), lr)
+	res = Full(context.Background(), target(c, fleet.KubeCluster{}), nil)
+	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, "memory request above the LimitRange maximum")
+	if f := check(t, res, CheckLimits).GetFix(); f != "set the memory request to at most 1Gi, or raise the LimitRange" {
 		t.Errorf("limits fix = %q", f)
+	}
+}
+
+// A ResourceQuota on limits refuses a pod that sets none ("failed quota:
+// must specify limits.cpu"), as the quota plugin does after pod security
+// and the policy webhooks: the namespace admits fleet's pods once the
+// connection sets the limit, so the connection is LIMITED, never
+// MISCONFIGURED, and the quota check names the setting. With
+// resources.cpu_limit set, the quota counts it.
+func TestFullQuotaOnLimitsNamesTheSetting(t *testing.T) {
+	quota := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "q", Namespace: testNS}, Status: corev1.ResourceQuotaStatus{
+		Hard: corev1.ResourceList{corev1.ResourceLimitsCPU: resource.MustParse("8"), corev1.ResourceLimitsMemory: resource.MustParse("64Gi")},
+		Used: corev1.ResourceList{corev1.ResourceLimitsCPU: resource.MustParse("2"), corev1.ResourceLimitsMemory: resource.MustParse("16Gi")},
+	}}
+	c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath"), quota)
+	c.deny = func(pod *corev1.Pod) string {
+		var missing []string
+		ctr := pod.Spec.Containers[0]
+		if _, ok := ctr.Resources.Limits[corev1.ResourceCPU]; !ok {
+			missing = append(missing, "limits.cpu for: "+ctr.Name)
+		}
+		if _, ok := ctr.Resources.Limits[corev1.ResourceMemory]; !ok {
+			missing = append(missing, "limits.memory for: "+ctr.Name)
+		}
+		if len(missing) == 0 {
+			return ""
+		}
+		return "failed quota: q: must specify " + strings.Join(missing, "; ")
+	}
+	for _, tc := range []struct {
+		name   string
+		rec    fleet.KubeCluster
+		state  fleetgrpc.KubeClusterState
+		detail string
+		fix    string
+	}{
+		{"no cpu limit", fleet.KubeCluster{}, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED,
+			"a ResourceQuota on limits.cpu refuses instance pods, which set no such limit", "set the connection's resources.cpu_limit"},
+		{"no limits", fleet.KubeCluster{MemoryLimit: "0"}, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED,
+			"a ResourceQuota on limits.cpu and limits.memory refuses instance pods, which set no such limit",
+			"set the connection's resources.cpu_limit and memory_limit (it is 0, off)"},
+		// 6 CPUs and 48Gi left: three instances of 2 CPUs and 8Gi.
+		{"cpu limit", fleet.KubeCluster{Resources: fleet.KubeResources{CPULimit: "2"}}, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY,
+			"room for 3 more instances", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := Full(context.Background(), target(c, tc.rec), nil)
+			wantState(t, res, tc.state, "")
+			if tc.state == fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED && res.Message != "quota needs limits" {
+				t.Errorf("state message %q", res.Message)
+			}
+			if ch := check(t, res, CheckAdmissionUnprivileged); ch.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS {
+				t.Errorf("unprivileged = %v", ch)
+			}
+			if ch := check(t, res, CheckQuota); ch.GetDetail() != tc.detail || ch.GetFix() != tc.fix {
+				t.Errorf("quota = %v", ch)
+			}
+		})
+	}
+}
+
+// GKE Autopilot is found from its nodes: every one a Compute Engine instance
+// named gk3-; a Standard cluster's gke- nodes are not.
+func TestFullFindsGKEAutopilot(t *testing.T) {
+	for _, tc := range []struct {
+		nodes []runtime.Object
+		want  bool
+	}{
+		{[]runtime.Object{cloudNode("gk3-dev-pool-1-a1b2c3d4-x8m2"), cloudNode("gk3-dev-pool-2-e5f6a7b8-k9q1")}, true},
+		{[]runtime.Object{cloudNode("gke-dev-default-pool-a1b2c3d4-x8m2")}, false},
+		{[]runtime.Object{cloudNode("gk3-dev-pool-1-a1b2c3d4-x8m2"), cloudNode("gke-dev-default-pool-a1b2c3d4-x8m2")}, false},
+		{[]runtime.Object{minikubeNode()}, false},
+	} {
+		c := newCluster(t, append(tc.nodes, storageClass("standard-rwo", "pd.csi.storage.gke.io", isDefault))...)
+		res := Full(context.Background(), target(c, fleet.KubeCluster{}), nil)
+		if got := res.Capabilities.GetAutopilot(); got != tc.want {
+			t.Errorf("%d nodes, the first %s: autopilot = %v", len(tc.nodes), tc.nodes[0].(*corev1.Node).Name, got)
+		}
+		if detail := check(t, res, CheckNodes).GetDetail(); strings.Contains(detail, "GKE Autopilot") != tc.want {
+			t.Errorf("nodes detail %q", detail)
+		}
 	}
 }
 

@@ -82,13 +82,21 @@ func validateKubeCluster(c *fleet.KubeCluster) error {
 		}
 	}
 	for field, q := range map[string]string{
-		"disk_size": c.DiskSize, "share_size": c.ShareSize, "memory_limit": c.MemoryLimit, "max_total_disk": c.MaxTotalDisk,
+		"disk_size": c.DiskSize, "share_size": c.ShareSize, "max_total_disk": c.MaxTotalDisk,
 		"resources.cpu_request": c.Resources.CPURequest, "resources.memory_request": c.Resources.MemoryRequest,
 		"resources.autopilot_memory": c.Resources.AutopilotMemory,
 		"cache_sizes.buildkit":       c.CacheSizes.Buildkit, "cache_sizes.debcache": c.CacheSizes.DebCache, "cache_sizes.imagecache": c.CacheSizes.ImageCache,
 	} {
 		if err := checkQuantity(field, q); err != nil {
 			return err
+		}
+	}
+	for field, q := range map[string]string{"memory_limit": c.MemoryLimit, "resources.cpu_limit": c.Resources.CPULimit} {
+		if q == fleet.KubeNoLimit {
+			continue
+		}
+		if err := checkQuantity(field, q); err != nil {
+			return invalidf("%s (or %s for no limit)", status.Convert(err).Message(), fleet.KubeNoLimit)
 		}
 	}
 	for field, ok := range map[string]bool{

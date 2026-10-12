@@ -62,7 +62,7 @@ func everyKubeField(extraPath string) *fleetgrpc.KubeCluster {
 		DeleteCacheVolumesOnDestroy: true,
 		DindAddressPool:             "10.200.0.0/16",
 		BlockMetadata:               ptr(false),
-		Resources:                   &fleetgrpc.KubeResources{CpuRequest: "1", MemoryRequest: "3Gi", AutopilotMemory: "6Gi"},
+		Resources:                   &fleetgrpc.KubeResources{CpuRequest: "1", MemoryRequest: "3Gi", AutopilotMemory: "6Gi", CpuLimit: "2"},
 		MemoryLimit:                 "12Gi",
 		NodeSelector:                map[string]string{"pool": "fleet"},
 		Tolerations: []*fleetgrpc.KubeToleration{
@@ -171,7 +171,9 @@ func TestAddKubeClusterValidation(t *testing.T) {
 		{"unknown context", &fleetgrpc.KubeCluster{Context: "nope"}, codes.NotFound, `no context "nope"`},
 		{"bad namespace", &fleetgrpc.KubeCluster{Context: "minikube", Namespace: "Not_A_NS"}, codes.InvalidArgument, "namespace"},
 		{"bad quantity", &fleetgrpc.KubeCluster{Context: "minikube", DiskSize: "fifty"}, codes.InvalidArgument, "disk_size"},
-		{"zero quantity", &fleetgrpc.KubeCluster{Context: "minikube", MemoryLimit: "0"}, codes.InvalidArgument, "memory_limit"},
+		{"zero quantity", &fleetgrpc.KubeCluster{Context: "minikube", DiskSize: "0"}, codes.InvalidArgument, "disk_size must be more than zero"},
+		{"zero limit spelled otherwise", &fleetgrpc.KubeCluster{Context: "minikube", MemoryLimit: "0Gi"}, codes.InvalidArgument, "memory_limit must be more than zero (or 0 for no limit)"},
+		{"bad cpu limit", &fleetgrpc.KubeCluster{Context: "minikube", Resources: &fleetgrpc.KubeResources{CpuLimit: "two"}}, codes.InvalidArgument, "resources.cpu_limit"},
 		{"bad enum", &fleetgrpc.KubeCluster{Context: "minikube", CloneMethod: "teleport"}, codes.InvalidArgument, "clone_method"},
 		{"bad image mode", &fleetgrpc.KubeCluster{Context: "minikube", Image: &fleetgrpc.KubeImageSettings{Mode: "node_load"}}, codes.InvalidArgument, "unknown image delivery mode"},
 		{"secret plugin env value", &fleetgrpc.KubeCluster{Context: "minikube", PluginEnv: []string{"AWS_SECRET_ACCESS_KEY=hunter2"}}, codes.InvalidArgument, "plugin_env"},
@@ -199,6 +201,15 @@ func TestAddKubeClusterValidation(t *testing.T) {
 	}
 	if reg, _ := state.LoadKubeClusters(); len(reg.Clusters) != 0 {
 		t.Fatalf("refused adds saved %+v", reg.Clusters)
+	}
+}
+
+// "0" turns the memory limit, or the CPU limit, off.
+func TestAddKubeClusterLimitsOff(t *testing.T) {
+	f := newKubeFixture(t)
+	st := f.add(&fleetgrpc.KubeCluster{Context: "minikube", MemoryLimit: "0", Resources: &fleetgrpc.KubeResources{CpuLimit: "0"}})
+	if c := st.GetCluster(); c.GetMemoryLimit() != "0" || c.GetResources().GetCpuLimit() != "0" {
+		t.Errorf("limits = %q, %q; want both 0", c.GetMemoryLimit(), c.GetResources().GetCpuLimit())
 	}
 }
 

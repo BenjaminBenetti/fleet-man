@@ -505,7 +505,9 @@ func serviceContainer(m fleetMeta, svc fleet.SharedService, s cacheSpec, rec *fl
 		c.Resources = corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("256Mi")},
 		}
-		if q, err := resource.ParseQuantity(orDefault(rec.MemoryLimit, fleet.DefaultKubeMemoryLimit)); err == nil {
+		// The connection's memory limit, as an instance's: none when it is
+		// off ("0", which as a limit the API would refuse below the request).
+		if q, err := resource.ParseQuantity(rec.InstanceMemoryLimit()); err == nil {
 			c.Resources.Limits = corev1.ResourceList{corev1.ResourceMemory: q}
 		}
 		if rootful {

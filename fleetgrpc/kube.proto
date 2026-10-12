@@ -132,8 +132,8 @@ message KubeCluster {
 
   // resources requested by each instance pod.
   KubeResources resources = 29;
-  // memory_limit set explicitly when a LimitRange would inject a lower one.
-  // Empty = 8Gi.
+  // memory_limit is each instance pod's memory limit, raised to its memory
+  // request. Empty = 8Gi, "0" = none.
   string memory_limit = 30;
   // node_selector and tolerations place instance pods (e.g. on a dedicated
   // node pool for privileged pods).
@@ -202,7 +202,7 @@ message KubeCluster {
   int64 revision = 49;
 }
 
-// KubeResources is what each instance pod requests.
+// KubeResources is what each instance pod requests, and its CPU limit.
 message KubeResources {
   // Empty = 500m.
   string cpu_request = 1;
@@ -211,6 +211,9 @@ message KubeResources {
   // autopilot_memory is the memory request on GKE Autopilot, where limits
   // equal requests. Empty = 4Gi.
   string autopilot_memory = 3;
+  // cpu_limit is each instance pod's CPU limit, raised to its CPU request.
+  // Empty or "0" = none: a CPU limit throttles even on an idle node.
+  string cpu_limit = 4;
 }
 
 // KubeToleration mirrors a core/v1 Toleration.
@@ -420,7 +423,8 @@ message KubeCapabilities {
   repeated string runtime_classes = 17;
 
   // limit_range_memory_limit is the default memory limit a LimitRange
-  // injects (empty when none does).
+  // injects (empty when none does); instance pods get it only with
+  // memory_limit off.
   string limit_range_memory_limit = 18;
   repeated KubeQuotaHeadroom quota = 19;
 
@@ -468,6 +472,12 @@ message KubeCapabilities {
   // classes are set by name (the multi-node test still validates one).
   bool storage_classes_unreadable = 36;
   string single_node_fleet_cap_reason = 37;
+  // autopilot: the nodes are GKE Autopilot's, where limits equal requests.
+  bool autopilot = 38;
+  // limit_range_memory_max is the lowest maximum memory a LimitRange allows
+  // a container or pod (empty when none sets one): instance memory limits
+  // are clamped to it.
+  string limit_range_memory_max = 39;
 }
 
 // KubeAdmission is the result of the dry-run canaries.

@@ -378,6 +378,25 @@ func TestBuildkitServesMutualTLS(t *testing.T) {
 	}
 }
 
+// The Buildkit server takes the connection's memory limit (8Gi unset), and
+// none when memory_limit is off ("0", which as a limit the API refuses below
+// the server's request).
+func TestBuildkitMemoryLimit(t *testing.T) {
+	for limit, want := range map[string]string{"": "8Gi", "16Gi": "16Gi", fleet.KubeNoLimit: ""} {
+		dep, err := cacheDeployment(testMeta, fleet.ServiceBuildkit, testAnchor, deploymentInput{Rec: &fleet.KubeCluster{MemoryLimit: limit}, TLSHash: "abcd"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		if q, ok := dep.Spec.Template.Spec.Containers[0].Resources.Limits[corev1.ResourceMemory]; ok {
+			got = q.String()
+		}
+		if got != want {
+			t.Errorf("memory_limit %q: the server's memory limit is %q, want %q", limit, got, want)
+		}
+	}
+}
+
 func TestCacheSizes(t *testing.T) {
 	for _, tt := range []struct {
 		rec  fleet.KubeCacheSizes

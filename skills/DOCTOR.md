@@ -598,10 +598,10 @@ kubectl --context <ctx> -n <ns> describe pod <sts>-0   # <sts> is in the contain
 | `kubernetes:unauthorized` | the login expired or its plugin failed: see 17.1 |
 | `kubernetes:misconfigured` | the setting it names; or the API server's certificate did not verify (the kubeconfig's CA or server) |
 | `kubernetes:admission_denied` | a namespace whose admission allows the pod, or change the devcontainer |
-| `kubernetes:quota` | room in the namespace's ResourceQuota, or the connection's `max_instances` / `max_total_disk` |
+| `kubernetes:quota` | room in the namespace's ResourceQuota, or the connection's `max_instances` / `max_total_disk`. A quota on `limits.cpu` admits only pods with a CPU limit: set `resources.cpu_limit` (on `limits.memory`, `memory_limit` must not be `0`) |
 | `kubernetes:unschedulable` | a node that fits the pod, or smaller `resources.cpu_request` / `resources.memory_request` |
 | `kubernetes:image_pull` | see 17.6 |
-| `kubernetes:oomkilled` | raise `memory_limit`, then start the instance again |
+| `kubernetes:oomkilled` | raise `memory_limit` (8Gi unset; the devcontainer's `-m` wins), then rebuild the instance: a start keeps its old limit |
 | `kubernetes:crash_loop` | `fleet logs` shows why it exits; start it again once fixed |
 | `kubernetes:timeout` | the cluster was slow: raise the wait's `FLEET_KUBE_*_TIMEOUT` where fleetd starts |
 | `kubernetes:interrupted`, `kubernetes:rebuild_failed` | `fleet rebuild <fleet>/<instance>` (or `R`) retries it |

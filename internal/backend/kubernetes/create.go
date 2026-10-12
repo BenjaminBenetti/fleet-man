@@ -1127,7 +1127,9 @@ func clusterFacts(f Facts, class string) podspec.ClusterFacts {
 	caps := f.Capabilities
 	out := podspec.ClusterFacts{
 		Local:                 caps.GetLocalCluster() || f.Local.Local(),
+		Autopilot:             caps.GetAutopilot(),
 		LimitRangeMemoryLimit: caps.GetLimitRangeMemoryLimit(),
+		LimitRangeMemoryMax:   caps.GetLimitRangeMemoryMax(),
 		RuntimeClasses:        caps.GetRuntimeClasses(),
 		ServerVersion:         caps.GetVersion(),
 	}

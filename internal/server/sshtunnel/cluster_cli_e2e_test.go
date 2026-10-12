@@ -32,7 +32,7 @@ func TestClusterCLIOverArmadaSSH(t *testing.T) {
 		"service_images.buildkit=moby/buildkit:v0.34.0", "service_images.buildkit_rootless=moby/buildkit:v0.34.0-rootless",
 		"service_images.debcache=sameersbn/apt-cacher-ng:3.7", "service_images.imagecache=registry:3", "service_images.dind=docker:29-dind",
 		"allow_shared_buildkit=false", "delete_cache_volumes_on_destroy=true", "dind_address_pool=10.200.0.0/16", "block_metadata=false",
-		"resources.cpu_request=1", "resources.memory_request=3Gi", "resources.autopilot_memory=6Gi", "memory_limit=12Gi",
+		"resources.cpu_request=1", "resources.memory_request=3Gi", "resources.autopilot_memory=6Gi", "resources.cpu_limit=2", "memory_limit=12Gi",
 		"node_selector=pool=fleet", "tolerations=dedicated=fleet:NoExecute:60", "allow_privileged=true", "debug_capabilities=require",
 		"runtime_class=sysbox-runc", "service_account=fleet-pods", "pod_overrides_yaml=priorityClassName: fleet\n", "protect_from_drain=true",
 		"host_gateway=off", "max_instances=20", "max_total_disk=1Ti", "automation_fire_interval=45s", "automation_max_per_agent=2",
