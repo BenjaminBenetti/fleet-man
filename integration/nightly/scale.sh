@@ -11,6 +11,11 @@ nightly_begin "scale-${n}"
 nightly_require minikube kubectl docker devcontainer tmux
 profile="fleet-scale-${n}"
 memory="${FLEET_NIGHTLY_SCALE_MEMORY:-$(( 4096 + 80 * n ))m}"
+# The node and fleetd beside it: a runner too small fails at once.
+case "${memory}" in
+  *m) nightly_memory_check "$(( ${memory%m} / 1024 + 2 ))" ;;
+  *g) nightly_memory_check "$(( ${memory%g} + 2 ))" ;;
+esac
 nightly_minikube "${profile}" --memory="${memory}" --cpus="${FLEET_NIGHTLY_SCALE_CPUS:-$(nproc)}" \
   --extra-config=kubelet.max-pods="$(( n + 60 ))"
 trap 'nightly_minikube_delete "${profile}"' EXIT
