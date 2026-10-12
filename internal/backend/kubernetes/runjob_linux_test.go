@@ -430,3 +430,47 @@ func TestApplyJob(t *testing.T) {
 		t.Fatal("a nameless Job applied")
 	}
 }
+
+// A Job's pod that waits before it runs (an image its node lost) is heard
+// by Waiting each time RunJob looks, so the image can be delivered again;
+// once the pod runs, the Job runs as any other.
+func TestRunJobHearsAPodThatWaits(t *testing.T) {
+	h := newJobHarness(t)
+	h.podFor = func(job *batchv1.Job) *corev1.Pod {
+		pod := jobPodOf(job, corev1.PodPending)
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: podspec.JobContainer, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+			Reason: "ErrImageNeverPull", Message: `Container image "fleet.invalid/d/x:1" is not present with pull policy of Never`}}}}
+		return pod
+	}
+	h.addJob("j-waits", nil)
+	var mu sync.Mutex
+	heard := 0
+	waiting := func(ctx context.Context, pod *corev1.Pod) {
+		st := containerStatus(pod, podspec.JobContainer)
+		if st == nil || st.State.Waiting == nil || st.State.Waiting.Reason != "ErrImageNeverPull" {
+			return
+		}
+		mu.Lock()
+		heard++
+		first := heard == 1
+		mu.Unlock()
+		if first {
+			// The image is back: the kubelet starts the container.
+			pod = pod.DeepCopy()
+			pod.Status.Phase = corev1.PodRunning
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: podspec.JobContainer, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+			if _, err := h.cs.CoreV1().Pods(jobNS).UpdateStatus(ctx, pod, metav1.UpdateOptions{}); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	res, err := h.pool.RunJob(context.Background(), JobRun{Cluster: testCluster, Job: "j-waits", Spec: rollbackSpec(2), Interval: 5 * time.Millisecond, Deadlines: fastDeadlines(), Waiting: waiting})
+	if err != nil || !res.OK {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if heard == 0 {
+		t.Fatal("Waiting never heard the pod that waited on its image")
+	}
+}

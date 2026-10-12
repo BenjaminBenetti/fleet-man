@@ -72,6 +72,10 @@ type JobRun struct {
 	// does not run yet: its error ends the wait (a disk the provisioner
 	// refused, which no deadline need be waited out for).
 	Pending func(context.Context) error
+	// Waiting, when set, hears the Job's pod each time RunJob looks at it
+	// before it runs (a tool Job waiting on an image its node lost has it
+	// delivered again).
+	Waiting func(context.Context, *corev1.Pod)
 	// Scheduling, when set, hears each new reason the scheduler gives for
 	// keeping the Job's pod unscheduled ("Unschedulable: ...").
 	Scheduling func(ctx context.Context, reason string)
@@ -373,6 +377,9 @@ func (p *Pool) waitJobPod(ctx context.Context, cs kclient.Interface, ns string, 
 		}
 		if err := w.observe(p.opts.Now(), pod, pvc); err != nil {
 			return nil, explainMount(ctx, cs, pod, err)
+		}
+		if r.Waiting != nil && pod != nil {
+			r.Waiting(ctx, pod)
 		}
 		if r.Scheduling != nil && pod != nil {
 			reason := ""

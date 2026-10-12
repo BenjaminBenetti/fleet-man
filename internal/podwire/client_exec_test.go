@@ -2,6 +2,7 @@ package podwire
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -136,5 +137,32 @@ func TestExecDetachSignal(t *testing.T) {
 	_ = out.WriteJSON(FrameExit, ExitStatus{Code: 0})
 	if code, err := e.Wait(); code != 0 || err != nil {
 		t.Fatalf("wait: %d %v", code, err)
+	}
+}
+
+// TestExecCloseEndsOnATransportThatTakesNothing: Close of a command whose
+// transport stopped taking frames (its ABORT cannot be written) still ends
+// the command once abortWait is up: Wait returns, the status lost.
+func TestExecCloseEndsOnATransportThatTakesNothing(t *testing.T) {
+	defer func(d time.Duration) { abortWait = d }(abortWait)
+	abortWait = 100 * time.Millisecond
+	conn, _ := fakeDirect(t, FrameOpen, OpenReply{PID: 7}, true)
+	e, err := OpenExec(context.Background(), conn, ExecHeader{Request: execas.Request{Class: execas.ClassExec, Argv: []string{"sh"}}}, ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = e.Close() }()
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.Wait()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrConnectionLost) {
+			t.Fatalf("Wait after a Close nothing took: %v, want the status lost", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait still blocks after a Close whose transport takes nothing")
 	}
 }

@@ -87,12 +87,16 @@ func (p *Pool) UndoRebuild(ctx context.Context, j Journal, progress func(string)
 		}
 		return nil
 	}
+	// A rebuild of an instance whose StatefulSet was gone (deleted outside
+	// fleet) made the StatefulSet itself: undone, the instance is left as it
+	// was found, its disk with no StatefulSet.
+	lost := anchor.Created
 	if j.ResetStarted {
-		if j.Rollback == nil || len(j.Rollback.Job) == 0 || len(j.Rollback.StatefulSet) == 0 {
+		if j.Rollback == nil || len(j.Rollback.Job) == 0 || (len(j.Rollback.StatefulSet) == 0 && !lost) {
 			return undo, fmt.Errorf("the rebuild was past its reset, and its journal holds no rollback: generation %d's root cannot be put back", j.Gen-1)
 		}
 		say("stopping the instance")
-		if err := p.Scale(ctx, j.Cluster, anchor.Name, 0); err != nil {
+		if err := p.Scale(ctx, j.Cluster, anchor.Name, 0); err != nil && !(lost && gone(err)) {
 			return undo, err
 		}
 		if err := p.waitPodGone(ctx, s, names.Pod(anchor.Name)); err != nil {
@@ -112,9 +116,11 @@ func (p *Pool) UndoRebuild(ctx context.Context, j Journal, progress func(string)
 		if err := restoreRecord(); err != nil {
 			return undo, err
 		}
-		say(fmt.Sprintf("re-applying generation %d's StatefulSet", j.Gen-1))
-		if err := s.applyStatefulSet(ctx, j.Rollback.StatefulSet, j.PrevReplicas); err != nil {
-			return undo, err
+		if !lost {
+			say(fmt.Sprintf("re-applying generation %d's StatefulSet", j.Gen-1))
+			if err := s.applyStatefulSet(ctx, j.Rollback.StatefulSet, j.PrevReplicas); err != nil {
+				return undo, err
+			}
 		}
 		// The rollback Job is the reconciler's own, not the journal's:
 		// read it back so it goes with the rest.

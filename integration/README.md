@@ -25,7 +25,8 @@ integration/
 │                               # block (Links + Apps), used by the launch tests
 ├── fixture-net/                # itest-net.pl (in-instance HTTP/WebSocket/TCP servers),
 │                               # socat, and a Fleet Launch block pointing at them
-├── fixture-hostsock/           # binds the host's SSH_AUTH_SOCK and gpg-agent sockets
+├── fixture-hostsock/           # binds the host's SSH_AUTH_SOCK and gpg-agent sockets,
+│                               # a socket directory and a socket at /dev/log
 ├── fixture-hostgw/             # --add-host=host.docker.internal:host-gateway
 ├── fixture-vscode/             # customizations.vscode, postAttachCommand, forwardPorts,
 │                               # portsAttributes

@@ -420,12 +420,14 @@ func TestTakeoverHandsTheSocketsOver(t *testing.T) {
 }
 
 // TestProbeDepsAreTheInPodSockets: the exec class's probe cache follows the
-// sockets this agent binds (fleet.rc's answer depends on them).
+// sockets this agent binds that a shell's startup may test (fleet.rc's mcp.sock,
+// a user's rc the agent socket), but for fleet.sock, which every TUI attach
+// and detach binds and unbinds (execas tests fleet.rc's own against the deps).
 func TestProbeDepsAreTheInPodSockets(t *testing.T) {
 	for _, tag := range podwire.SockTags {
-		want := filepath.Join(DefaultControlDir, podwire.SockName(tag))
-		if !slices.Contains(execas.DefaultProbeDeps, want) {
-			t.Errorf("execas.DefaultProbeDeps %q lacks %s", execas.DefaultProbeDeps, want)
+		dep := filepath.Join(DefaultControlDir, podwire.SockName(tag))
+		if want := tag != podwire.TagSockControl; slices.Contains(execas.DefaultProbeDeps, dep) != want {
+			t.Errorf("execas.DefaultProbeDeps %q: %s in it is %v, want %v", execas.DefaultProbeDeps, dep, !want, want)
 		}
 	}
 }

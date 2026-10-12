@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 )
 
 // ForwardHeader opens a TagForward stream: one TCP connection to Port on the
@@ -34,7 +35,9 @@ var ErrForwardRefused = errors.New("the pod refused the connection")
 // returns the connection once the agent has made it: a port nothing listens
 // on fails here (ErrForwardRefused, with the agent's words). The conn's
 // CloseWrite is a half-close (the pod's peer reads EOF and can still answer);
-// Close ends it. ctx bounds the open, not the connection.
+// Close ends it: the agent is told (StreamAbort) to close the pod side too,
+// so a peer that keeps sending holds neither the agent's stream nor its
+// slot. ctx bounds the open, not the connection.
 func (c *Client) Forward(ctx context.Context, port int) (net.Conn, error) {
 	h := ForwardHeader{Port: port}
 	if err := h.Validate(); err != nil {
@@ -65,5 +68,28 @@ func (c *Client) Forward(ctx context.Context, port int) (net.Conn, error) {
 	}
 	// The frame reader holds nothing back: what follows the OPEN frame is
 	// read from the stream itself.
-	return t, nil
+	return &forwardConn{yamuxTransport: t, c: c}, nil
+}
+
+// forwardConn is a forward's connection: its Close tells the agent to end
+// the stream as well.
+type forwardConn struct {
+	*yamuxTransport
+	c       *Client
+	aborted sync.Once
+}
+
+func (f *forwardConn) Close() error {
+	f.aborted.Do(func() {
+		id := f.StreamID()
+		// Not in the caller's way: the control stream may be slow to take
+		// it (the abort is a courtesy; the stream's close timeout ends it
+		// otherwise).
+		go func() {
+			if f.c.Err() == nil {
+				_ = f.c.ctlW.WriteJSON(FrameData, ControlMessage{Type: MsgAbortStream, Abort: &StreamAbort{Stream: id}})
+			}
+		}()
+	})
+	return f.yamuxTransport.Close()
 }

@@ -236,7 +236,8 @@ func (m *kubeShareMoves) move(ctx context.Context, fs fleetShare) {
 	}
 	e.running = false
 	switch {
-	case err == nil:
+	case err == nil, errors.Is(err, kubernetes.ErrShareRetired):
+		// Moved, or ended by the fleet's destroy (its share goes with it).
 		delete(m.entries, fs)
 	case errors.Is(err, kubernetes.ErrShareInUse):
 		// An instance started meanwhile: the move waits for the next stop.

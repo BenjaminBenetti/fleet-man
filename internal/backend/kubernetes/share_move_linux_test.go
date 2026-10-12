@@ -132,6 +132,12 @@ func newMoveRig(t *testing.T, oldMode topology.Mode) *moveRig {
 		Share: &ShareRecord{Mode: string(oldMode), Claim: r.claim, Roots: []podshare.SpokeRoot{{Name: ".claude"}, {Name: ".codex"}}}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := state.Update(func(st *state.State) error {
+		st.Fleets["alpha"] = &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{{Name: "web", Backend: fleet.BackendKubernetes, KubeCluster: testCluster, KubeKey: rbKey, Status: fleet.StatusStopped}}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return r
 }
 
@@ -510,5 +516,99 @@ func TestMoveShareWaitsForTheOldShareToGo(t *testing.T) {
 	}
 	if r.pvc(r.copyClaim) != nil {
 		t.Fatal("the move's copy is left")
+	}
+}
+
+// A fleet's destroy ends a move of its share this daemon runs before it
+// retires the share, before the move's point of no return or after it (its
+// new share made, waiting to be filled): the move ends, and the share, the
+// new one too, and the move's copy are gone, none left an orphan.
+func TestRetireShareEndsAMoveFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// stuck is the copy Job (1: the copy, 2: the new share) whose pod
+		// never runs, so the move waits on it.
+		stuck int
+	}{
+		{"before its point of no return", 1},
+		{"past its point of no return", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			r := newMoveRig(t, topology.SingleNode)
+			stuck := shareCopyJob("alpha", r.h8, tc.stuck)
+			r.mu.Lock()
+			r.podFor = func(job *batchv1.Job) *corev1.Pod {
+				if job.Name == stuck {
+					return jobPodOf(job, corev1.PodPending)
+				}
+				return jobPodOf(job, corev1.PodRunning)
+			}
+			r.mu.Unlock()
+			done := make(chan error, 1)
+			go func() { done <- r.pool.MoveShare(ctx, testCluster, "alpha", nil) }()
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if _, err := r.cs.BatchV1().Jobs(jobNS).Get(ctx, stuck, metav1.GetOptions{}); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("the move never reached copy Job %d", tc.stuck)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			if tc.stuck == 2 {
+				if share := r.pvc(r.claim); share == nil || share.UID == "share-uid-1" {
+					t.Fatalf("past its point of no return the move has no new share: %+v", share)
+				}
+			}
+			rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			if got, err := r.pool.RetireShare(rctx, testCluster, "alpha", false); err != nil || got != r.claim {
+				t.Fatalf("RetireShare = %q, %v", got, err)
+			}
+			select {
+			case err := <-done:
+				// The server drops a move that ends so, never calling it a
+				// failure to try again.
+				if !errors.Is(err, ErrShareRetired) {
+					t.Fatalf("the move the destroy ended: %v, want ErrShareRetired", err)
+				}
+			default:
+				t.Fatal("RetireShare returned before the move it ended")
+			}
+			deadline = time.Now().Add(10 * time.Second)
+			for r.pvc(r.claim) != nil || r.pvc(r.copyClaim) != nil {
+				if time.Now().After(deadline) {
+					t.Fatalf("left after the destroy: share %v, copy %v", r.pvc(r.claim) != nil, r.pvc(r.copyClaim) != nil)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			shareMoves.mu.Lock()
+			holds := len(shareMoves.holds)
+			shareMoves.mu.Unlock()
+			if holds != 0 {
+				t.Fatalf("%d holds left", holds)
+			}
+		})
+	}
+}
+
+// A move makes no claim for a fleet state.json no longer holds (destroyed
+// meanwhile): it ends with the share as it was and no copy.
+func TestMoveShareMakesNothingForAFleetGone(t *testing.T) {
+	ctx := context.Background()
+	r := newMoveRig(t, topology.SingleNode)
+	if err := state.Update(func(st *state.State) error {
+		delete(st.Fleets, "alpha")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.pool.MoveShare(ctx, testCluster, "alpha", nil); !errors.Is(err, ErrShareRetired) {
+		t.Fatalf("a move of a fleet that is gone: %v", err)
+	}
+	if share := r.pvc(r.claim); share == nil || share.UID != "share-uid-1" || r.pvc(r.copyClaim) != nil {
+		t.Fatal("a move of a fleet that is gone touched the share or made a copy")
 	}
 }

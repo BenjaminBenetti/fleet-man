@@ -19,7 +19,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/localcluster"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
@@ -56,6 +58,91 @@ func TestLiveRebuild(t *testing.T) {
 	t.Run("stopped", func(t *testing.T) { lb.rebuild(t, lv, "rbstop", image, true) })
 	t.Run("rollback", func(t *testing.T) { lb.rebuildRollback(t, lv, image) })
 	t.Run("retry", func(t *testing.T) { lb.retryFailedCreate(t, lv, image) })
+	t.Run("stopped, image gone from the node", func(t *testing.T) { lb.rebuildStoppedImageGone(t, lv, image) })
+	t.Run("statefulset deleted", func(t *testing.T) { lb.rebuildLostStatefulSet(t, lv, image) })
+}
+
+// rebuildLostStatefulSet: an instance whose StatefulSet someone deleted
+// (kubectl delete sts; its pod goes, its disk stays) is rebuilt over its
+// disk: a StatefulSet of the next generation, the workspace kept.
+func (lb *liveBackend) rebuildLostStatefulSet(t *testing.T, lv *live, image string) {
+	r := lb.rebuildRig(t, lv, "rblost", map[string]any{"image": image})
+	r.create()
+	folder := "/workspaces/" + filepath.Base(r.inst.WorkspaceDir)
+	r.sh("echo kept > " + folder + "/UNCOMMITTED.txt")
+	old := r.inst.ContainerID
+	background := metav1.DeletePropagationBackground
+	if err := lv.cs.AppsV1().StatefulSets(lv.ns).Delete(r.ctx, r.sts, metav1.DeleteOptions{PropagationPolicy: &background}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		_, err := lv.cs.CoreV1().Pods(lv.ns).Get(r.ctx, names.Pod(r.sts), metav1.GetOptions{})
+		if gone(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the deleted StatefulSet's pod is still there: %v", err)
+		}
+		time.Sleep(time.Second)
+	}
+	res, err := r.rebuild()
+	if err != nil {
+		t.Fatalf("the rebuild of an instance whose StatefulSet was deleted: %v", err)
+	}
+	if want := ContainerID(lv.rec.ID, lv.ns, r.sts, 2); res.ContainerID != want || res.ContainerID == old {
+		t.Fatalf("rebuilt ContainerID %s, want %s", res.ContainerID, want)
+	}
+	if !slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "deleted outside fleet") }) {
+		t.Errorf("no warning that the StatefulSet was gone: %q", res.Warnings)
+	}
+	if got := r.b().Status(res.ContainerID); got != backend.LiveStatusRunning {
+		t.Errorf("the rebuilt generation's status %v, want running", got)
+	}
+	if got := r.sh("cat " + folder + "/UNCOMMITTED.txt"); got != "kept" {
+		t.Errorf("the workspace file after the rebuild: %q", got)
+	}
+	if _, err := os.Stat(JournalPath(r.inst.KubeKey)); !os.IsNotExist(err) {
+		t.Errorf("the rebuild's journal is still there: %v", err)
+	}
+}
+
+// rebuildStoppedImageGone: a stopped instance whose node-loaded image the
+// node lost (the kubelet's image GC) is rebuilt all the same: the export's
+// tool Job runs that image, which is delivered again, as a start does. A
+// minikube connection only (the node's image is removed with minikube).
+func (lb *liveBackend) rebuildStoppedImageGone(t *testing.T, lv *live, image string) {
+	local := lv.facts(t).Local
+	if local.Kind != localcluster.Minikube {
+		t.Skipf("needs a minikube connection to remove a node's image (this one is %q)", local.String())
+	}
+	r := lb.rebuildRig(t, lv, "rbgone", map[string]any{"build": map[string]any{"dockerfile": "Dockerfile"}})
+	dockerfile := func(gen string) string { return "FROM " + image + "\nRUN echo " + gen + " > /etc/fleet-live-gen\n" }
+	if err := os.WriteFile(filepath.Join(r.inst.WorkspaceDir, ".devcontainer", "Dockerfile"), []byte(dockerfile("gen1")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.create()
+	rec, err := LoadInstanceRecord(lv.rec.ID, r.inst.KubeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kubeimage.Strategy(rec.Strategy) != kubeimage.StrategyNodeLoad {
+		t.Skipf("the image was delivered by %s, not loaded onto the node", rec.Strategy)
+	}
+	folder := "/workspaces/" + filepath.Base(r.inst.WorkspaceDir)
+	r.sh("cat > " + folder + "/.devcontainer/Dockerfile <<'FLEET_EOF'\n" + dockerfile("gen2") + "FLEET_EOF")
+	if err := r.b().Stop(r.inst.ContainerID); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if out, err := exec.Command("minikube", "-p", local.Name, "image", "rm", rec.Image).CombinedOutput(); err != nil {
+		t.Fatalf("removing %s from the node: %v\n%s", rec.Image, err, out)
+	}
+	if _, err := r.rebuild(); err != nil {
+		t.Fatalf("the rebuild of a stopped instance whose image the node lost: %v", err)
+	}
+	if got := r.sh("cat /etc/fleet-live-gen"); got != "gen2" {
+		t.Errorf("the rebuilt instance's image says %q, want gen2 (the Dockerfile edited in the pod)", got)
+	}
 }
 
 // rebuildRig is one instance a rebuild test drives.

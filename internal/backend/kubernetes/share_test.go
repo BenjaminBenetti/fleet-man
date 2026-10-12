@@ -324,3 +324,63 @@ func TestShareModeOf(t *testing.T) {
 		t.Error("no preflight yet: not single-node")
 	}
 }
+
+// TestPrepareShareWaitsOutAShareBeingDeleted: a fleet made again while the
+// share its destroyed predecessor retired is still being deleted (the ended
+// pod of the seed that bound it holds it, pvc-protection) never takes that
+// share: the pod goes, the share with it, and the fleet gets a new one. One
+// still held once the wait is up fails, naming the PVC.
+func TestPrepareShareWaitsOutAShareBeingDeleted(t *testing.T) {
+	defer func(d time.Duration) { shareGoneWait = d }(shareGoneWait)
+	defer func(d time.Duration) { shareMoveInterval = d }(shareMoveInterval)
+	shareGoneWait, shareMoveInterval = 2*time.Second, 5*time.Millisecond
+	claim := ShareClaim("alpha", h8())
+	now := metav1.Now()
+	going := func() *corev1.PersistentVolumeClaim {
+		return &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: claim, Namespace: handleNS, UID: "old-share",
+			Labels: shareLabels(handleOwner, handleCluster, h8()), DeletionTimestamp: &now, Finalizers: []string{"kubernetes.io/pvc-protection"}}}
+	}
+	labels := names.Base(handleOwner, handleCluster)
+	seedPod := func(phase corev1.PodPhase) *corev1.Pod {
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "fi-alpha-old-seed-g1-x", Namespace: handleNS, Labels: labels},
+			Spec:   corev1.PodSpec{Volumes: []corev1.Volume{{Name: "claim-0", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim}}}}},
+			Status: corev1.PodStatus{Phase: phase}}
+	}
+	// pvc-protection: the share being deleted goes once no pod names it.
+	protect := func(cs *fake.Clientset) {
+		pvcs := corev1.SchemeGroupVersion.WithResource("persistentvolumeclaims")
+		cs.PrependReactor("get", "persistentvolumeclaims", func(a k8stesting.Action) (bool, kruntime.Object, error) {
+			if a.(k8stesting.GetAction).GetName() != claim {
+				return false, nil, nil
+			}
+			if _, err := cs.Tracker().Get(corev1.SchemeGroupVersion.WithResource("pods"), handleNS, "fi-alpha-old-seed-g1-x"); err == nil {
+				return false, nil, nil
+			}
+			if obj, err := cs.Tracker().Get(pvcs, handleNS, claim); err == nil && obj.(*corev1.PersistentVolumeClaim).DeletionTimestamp != nil {
+				_ = cs.Tracker().Delete(pvcs, handleNS, claim)
+			}
+			return false, nil, nil
+		})
+	}
+
+	cs := fake.NewClientset(going(), seedPod(corev1.PodSucceeded))
+	protect(cs)
+	c := shareCreation(cs, "web", shareCaps(wffc), fleet.KubeCluster{})
+	if err := c.prepareShare(context.Background()); err != nil {
+		t.Fatalf("prepareShare beside a share being deleted: %v", err)
+	}
+	c.share.done()
+	pvc, err := cs.CoreV1().PersistentVolumeClaims(handleNS).Get(context.Background(), claim, metav1.GetOptions{})
+	if err != nil || pvc.UID == "old-share" || pvc.DeletionTimestamp != nil {
+		t.Fatalf("the fleet's share is %+v (%v), want a new one", pvc, err)
+	}
+
+	// A running pod holds it: the wait runs out, and says why.
+	cs = fake.NewClientset(going(), seedPod(corev1.PodRunning))
+	protect(cs)
+	c = shareCreation(cs, "web", shareCaps(wffc), fleet.KubeCluster{})
+	err = c.prepareShare(context.Background())
+	if code, _ := kubeerr.Of(err); err == nil || !strings.Contains(err.Error(), claim) || !code.Is(kubeerr.Unavailable) {
+		t.Fatalf("a share a running pod holds: %v (%s), want it named, unavailable", err, code)
+	}
+}

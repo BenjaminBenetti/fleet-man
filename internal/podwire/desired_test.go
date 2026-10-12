@@ -200,7 +200,7 @@ func TestDesiredStateValidatesTheHostRelays(t *testing.T) {
 	if !ValidHostSocketTarget("/" + strings.Repeat("s", MaxSocketPath-1)) {
 		t.Error("a target of the longest length a socket address holds")
 	}
-	for p, want := range map[string]string{"/dev/log": "/dev", "/dev": "/dev", "/opt/fleet/bin/s": "/opt/fleet", "/devx/s": "", "/run/s": "", "/opt/fleetx": ""} {
+	for p, want := range map[string]string{"/dev/log": "", "/dev": "", "/sys/s": "/sys", "/proc": "/proc", "/opt/fleet/bin/s": "/opt/fleet", "/sysx/s": "", "/run/s": "", "/opt/fleetx": ""} {
 		if got := ReservedHostSocketDir(p); got != want {
 			t.Errorf("ReservedHostSocketDir(%q) = %q, want %q", p, got, want)
 		}

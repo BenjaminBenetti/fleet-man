@@ -104,6 +104,9 @@ const (
 	// the agent's DesiredAck once it applied one.
 	MsgDesired    = "desired"
 	MsgDesiredAck = "desired_ack"
+	// MsgAbortStream carries a StreamAbort (fleetd to the agent): a stream
+	// fleetd is done with whose agent end may still be sending.
+	MsgAbortStream = "abort_stream"
 )
 
 // ControlMessage is one message on the control stream, sent as a DATA frame.
@@ -115,6 +118,17 @@ type ControlMessage struct {
 	Log        *LogRecord    `json:"log,omitempty"`
 	Desired    *DesiredState `json:"desired,omitempty"`
 	DesiredAck *DesiredAck   `json:"desired_ack,omitempty"`
+	Abort      *StreamAbort  `json:"abort,omitempty"`
+}
+
+// StreamAbort names a TagForward stream fleetd closed for good, by its yamux
+// stream id: the agent ends it (its TCP connection closed, the stream's slot
+// freed) rather than relaying the pod's peer until yamux gives up on the
+// half-closed stream. Its FIN alone cannot say so: that is also a
+// half-close, after which the peer's answer is still wanted. An agent that
+// does not know the message ignores it.
+type StreamAbort struct {
+	Stream uint32 `json:"stream"`
 }
 
 // LogRecord is one of the agent's own warnings or errors, for fleet.log.

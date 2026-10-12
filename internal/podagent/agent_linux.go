@@ -49,6 +49,11 @@ type agent struct {
 	// (sharehint_linux.go).
 	hintMu sync.Mutex
 	hinter *shareHinter
+
+	// forwards are the TagForward streams being relayed, by yamux stream
+	// id: a StreamAbort from fleetd ends one (forward_linux.go).
+	fwdMu    sync.Mutex
+	forwards map[uint32]func()
 }
 
 // Serve is `pod-agent serve`: it serves one agent session over conn (the
@@ -255,6 +260,8 @@ func (a *agent) readControl(ctl *yamux.Stream, r *podwire.FrameReader) {
 			return
 		case m.Type == podwire.MsgDesired && m.Desired != nil:
 			a.applyDesired(*m.Desired)
+		case m.Type == podwire.MsgAbortStream && m.Abort != nil:
+			a.abortForward(m.Abort.Stream)
 		}
 	}
 }

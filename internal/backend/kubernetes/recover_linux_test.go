@@ -568,3 +568,38 @@ func TestWaitReady(t *testing.T) {
 		t.Fatalf("the caller's check: %v", err)
 	}
 }
+
+// A rebuild of an instance whose StatefulSet was deleted outside fleet made
+// the StatefulSet itself (its anchor Created): undone past its reset, the
+// rollback Job puts generation 2's root back and the StatefulSet the rebuild
+// made goes with its other objects, none re-applied, no replicas restored:
+// the instance is as the rebuild found it, its disk kept with no
+// StatefulSet. One undone before the rebuild made it has nothing to scale.
+func TestUndoRebuildOfALostStatefulSet(t *testing.T) {
+	for _, made := range []bool{true, false} {
+		h := newJobHarness(t)
+		j := h.interruptedRebuild("seed", true)
+		j.PrevReplicas, j.PrevStatus = nil, fleet.StatusStopped
+		j.Rollback.StatefulSet = nil
+		j.Objects[0] = JournalObject{Kind: KindStatefulSet, Name: rbSTS, UID: "u-sts", Gen: 3, Created: true, Anchor: true}
+		if !made {
+			if err := h.cs.Tracker().Delete(appsv1.SchemeGroupVersion.WithResource("statefulsets"), jobNS, rbSTS); err != nil {
+				t.Fatal(err)
+			}
+			j.Objects[0].UID = ""
+		}
+		undo, err := h.pool.UndoRebuild(context.Background(), j, nil)
+		if err != nil {
+			t.Fatalf("made %v: %v", made, err)
+		}
+		if !undo.RolledBack {
+			t.Fatalf("made %v: not rolled back", made)
+		}
+		if h.exists(KindStatefulSet, rbSTS) {
+			t.Errorf("made %v: the StatefulSet the rebuild made is left", made)
+		}
+		if !h.exists(KindPVC, rbSTS) || h.exists(KindSecret, rbSTS+"-spec-g3") {
+			t.Errorf("made %v: the disk went, or generation 3's objects stayed", made)
+		}
+	}
+}

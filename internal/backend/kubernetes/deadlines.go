@@ -34,6 +34,9 @@ const (
 	EnvSnapshotTimeout = "FLEET_KUBE_SNAPSHOT_TIMEOUT"
 	// EnvCopyTimeout bounds a clone's copier Job.
 	EnvCopyTimeout = "FLEET_KUBE_COPY_TIMEOUT"
+	// EnvSetUpTimeout bounds one run of the devcontainer's lifecycle hooks
+	// in a pod (devcontainer set-up).
+	EnvSetUpTimeout = "FLEET_KUBE_SETUP_TIMEOUT"
 )
 
 // The deadlines' defaults.
@@ -61,6 +64,11 @@ const (
 	// DefaultCopyTimeout bounds a copier: a 50 GiB disk copied twice at
 	// tens of MiB/s, with room.
 	DefaultCopyTimeout = 2 * time.Hour
+	// DefaultSetUpTimeout is a ceiling, not a typical run: lifecycle hooks
+	// that install a toolchain or build a project take minutes, and docker
+	// bounds them not at all; one that has run for an hour waits on
+	// something that never answers.
+	DefaultSetUpTimeout = time.Hour
 )
 
 // The error codes of a wait that ran out.
@@ -84,6 +92,7 @@ type Deadlines struct {
 	SharedState time.Duration
 	Snapshot    time.Duration
 	Copy        time.Duration
+	SetUp       time.Duration
 }
 
 var (
@@ -117,6 +126,7 @@ func LoadDeadlines(getenv func(string) string) (Deadlines, []string) {
 		SharedState:   DefaultSharedStateTimeout,
 		Snapshot:      DefaultSnapshotTimeout,
 		Copy:          DefaultCopyTimeout,
+		SetUp:         DefaultSetUpTimeout,
 	}
 	var bad []string
 	for _, o := range []struct {
@@ -132,6 +142,7 @@ func LoadDeadlines(getenv func(string) string) (Deadlines, []string) {
 		{EnvSharedStateTimeout, &d.SharedState},
 		{EnvSnapshotTimeout, &d.Snapshot},
 		{EnvCopyTimeout, &d.Copy},
+		{EnvSetUpTimeout, &d.SetUp},
 	} {
 		v := strings.TrimSpace(getenv(o.env))
 		if v == "" {

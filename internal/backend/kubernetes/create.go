@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -172,6 +173,9 @@ type creation struct {
 	// moveHolds hold off a move of the fleet's share until the job ends
 	// (shareMoveGate; releaseMoveHolds).
 	moveHolds []func()
+	// lostSTS: a rebuild found the instance's StatefulSet deleted outside
+	// fleet, and makes it anew over the kept disk (rebuild.go).
+	lostSTS bool
 }
 
 // what is the job, for its messages.
@@ -417,9 +421,10 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 		StatefulSet: c.id.sts, Gen: c.gen, SpecHash: podspec.SpecHash(&o.StatefulSet.Spec.Template.Spec),
 		Image: del.Ref, Strategy: string(del.Strategy), RemoteUser: capture.RemoteUser,
 		WorkspaceFolder: cfg.WorkspaceFolder, NonRoot: c.identity.NonRoot, Created: c.created,
-		Ports:       publishedPorts(adm.Result.Pod.Ports),
-		HostSockets: recordedHostSockets(adm.Result.Pod.HostSockets),
-		HostGateway: adm.Result.Pod.HostGateway, GatewaySkip: adm.Result.Pod.GatewaySkip,
+		Ports:          publishedPorts(adm.Result.Pod.Ports),
+		HostSockets:    recordedHostSockets(adm.Result.Pod.HostSockets),
+		HostSocketDirs: recordedHostSocketDirs(adm.Result.Pod.HostSocketDirs),
+		HostGateway:    adm.Result.Pod.HostGateway, GatewaySkip: adm.Result.Pod.GatewaySkip,
 		Share: c.share.record(&adm.Result.Pod),
 	}
 	rec.addImageDigest(del.Digest)
@@ -429,7 +434,7 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 	// A create makes the StatefulSet; a rebuild changes the one it has,
 	// and mirrors its steps on it.
 	rebuild := c.prevGen > 0
-	uid, err := c.applyJournaled(ctx, JournalObject{Kind: KindStatefulSet, Name: o.StatefulSet.Name, Gen: c.gen, Created: !rebuild, Anchor: rebuild}, o.StatefulSet)
+	uid, err := c.applyJournaled(ctx, JournalObject{Kind: KindStatefulSet, Name: o.StatefulSet.Name, Gen: c.gen, Created: !rebuild || c.lostSTS, Anchor: rebuild}, o.StatefulSet)
 	if err != nil {
 		return nil, err
 	}
@@ -615,6 +620,32 @@ func recordedHostSockets(socks []hostrelay.Socket) []hostrelay.Socket {
 			s.Source = real
 		}
 		out[i] = s
+	}
+	return out
+}
+
+// recordedHostSocketDirs is the socket directory binds as the instance record
+// keeps them, each source resolved now (hostrelay.ListSockets and Dial
+// refuse a link that appears on the way later), as recordedHostSockets.
+func recordedHostSocketDirs(dirs []hostrelay.SocketDir) []hostrelay.SocketDir {
+	out := cloneSocketDirs(dirs)
+	for i := range out {
+		if real, err := hostrelay.Resolve(out[i].Source); err == nil {
+			out[i].Source = real
+		}
+	}
+	return out
+}
+
+// cloneSocketDirs is a deep copy of dirs.
+func cloneSocketDirs(dirs []hostrelay.SocketDir) []hostrelay.SocketDir {
+	if len(dirs) == 0 {
+		return nil
+	}
+	out := make([]hostrelay.SocketDir, len(dirs))
+	for i, d := range dirs {
+		d.Shadowed = slices.Clone(d.Shadowed)
+		out[i] = d
 	}
 	return out
 }

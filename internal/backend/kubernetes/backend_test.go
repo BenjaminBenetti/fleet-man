@@ -270,6 +270,17 @@ func TestRecordedHostSocketsAreResolved(t *testing.T) {
 	if recordedHostSockets(nil) != nil {
 		t.Fatal("no sockets recorded as some")
 	}
+	dirs := recordedHostSocketDirs([]hostrelay.SocketDir{
+		{Target: "/tmp/.X11-unix", Source: filepath.Join(dir, "link"), Shadowed: []string{"X0"}},
+		{Target: "/run/x", Source: filepath.Join(dir, "gone")},
+	})
+	wantDirs := []hostrelay.SocketDir{{Target: "/tmp/.X11-unix", Source: real, Shadowed: []string{"X0"}}, {Target: "/run/x", Source: filepath.Join(dir, "gone")}}
+	if !reflect.DeepEqual(dirs, wantDirs) {
+		t.Fatalf("socket directories %+v, want %+v", dirs, wantDirs)
+	}
+	if recordedHostSocketDirs(nil) != nil {
+		t.Fatal("no socket directories recorded as some")
+	}
 }
 
 func TestInstanceRecord(t *testing.T) {

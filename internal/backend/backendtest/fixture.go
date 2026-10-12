@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 )
 
 // FixtureImage is the base image of the conformance fixture: the itest
@@ -50,7 +53,23 @@ type Fixture struct {
 	// asks for): on a cluster, the pod whose user processes a consistent
 	// clone can freeze.
 	Privileged bool
+	// BlockingLoginShell makes the remote user's interactive shells block
+	// (BlockingShellWait) until UnblockLoginShell exists: the devcontainer
+	// CLI's userEnvProbe (`bash -lic`) never answers, as with an rc file that
+	// waits for input.
+	BlockingLoginShell bool
 }
+
+// BlockingShellWait is how long a BlockingLoginShell fixture's interactive
+// shell blocks, and UnblockLoginShell the file that ends it at once.
+const (
+	BlockingShellWait = 15 * time.Minute
+	UnblockLoginShell = "/tmp/fleet-conformance-unblock"
+)
+
+// blockingBashrc is the line a BlockingLoginShell fixture appends to the
+// remote user's ~/.bashrc, which `bash -lic` reads (through ~/.profile).
+var blockingBashrc = fmt.Sprintf(`case $- in *i*) [ -e %s ] || sleep %d;; esac`, UnblockLoginShell, int(BlockingShellWait/time.Second))
 
 func (f Fixture) postCreate() string {
 	if f.PostCreate != "" {
@@ -94,9 +113,13 @@ func (f Fixture) Write(dir string) error {
 	if err != nil {
 		return err
 	}
+	dockerfile := fixtureDockerfile
+	if f.BlockingLoginShell {
+		dockerfile += fmt.Sprintf("RUN echo %s >> /home/vscode/.bashrc\n", shellquote.Single(blockingBashrc))
+	}
 	files := map[string]string{
 		".devcontainer/devcontainer.json": string(config) + "\n",
-		".devcontainer/Dockerfile":        fixtureDockerfile,
+		".devcontainer/Dockerfile":        dockerfile,
 		SeedFile:                          SeedContent,
 	}
 	for name, content := range files {

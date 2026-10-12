@@ -137,3 +137,98 @@ func TestForwardCarriesManyConnections(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// TestForwardCloseEndsAPeerThatKeepsSending: fleetd's Close of a forward
+// whose pod peer keeps sending (a server-sent event stream) ends the agent's
+// side at once (StreamAbort): the agent's FIN comes within seconds, so the
+// stream's slot is free (not after the 30s drain, with the agent's side left
+// to yamux's close timeout minutes later), and the peer sees its connection
+// close. A half-close keeps it open.
+func TestForwardCloseEndsAPeerThatKeepsSending(t *testing.T) {
+	d := newTestDirs(t)
+	s := startAgent(t, d.options())
+	peerDone := make(chan struct{}, 4)
+	port := loopbackServer(t, func(c net.Conn) {
+		defer func() { peerDone <- struct{}{} }()
+		for {
+			if _, err := c.Write([]byte("data: tick\n\n")); err != nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	active := s.c.Active
+
+	half, err := s.c.Forward(context.Background(), port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = half.(interface{ CloseWrite() error }).CloseWrite()
+	buf := make([]byte, 64)
+	_ = half.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := io.ReadAtLeast(half, buf, 1); err != nil {
+		t.Fatalf("a half-closed forward stopped carrying the peer's events: %v", err)
+	}
+
+	conn, err := s.c.Forward(context.Background(), port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := io.ReadAtLeast(conn, buf, 1); err != nil {
+		t.Fatal(err)
+	}
+	if n := active(); n != 2 {
+		t.Fatalf("%d forward streams, want 2", n)
+	}
+	_ = conn.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for active() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the closed forward still holds its stream: %d open", active())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	select {
+	case <-peerDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the pod's peer was not disconnected")
+	}
+	_ = half.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := io.ReadAtLeast(half, buf, 1); err != nil {
+		t.Fatalf("the other forward was ended too: %v", err)
+	}
+	_ = half.Close()
+}
+
+// TestForwardAbortRightAfterItsOpen: a StreamAbort fleetd sends as soon as
+// the OPEN reply reaches it (a connection closed at once) still ends the
+// agent's side and the pod's peer: the agent tracks the stream before it
+// replies, so the abort cannot come before the agent knows the stream.
+func TestForwardAbortRightAfterItsOpen(t *testing.T) {
+	// Cleared once the agent is gone (cleanups run last first).
+	t.Cleanup(func() { forwardOpened = nil })
+	forwardOpened = func() { time.Sleep(300 * time.Millisecond) }
+	d := newTestDirs(t)
+	s := startAgent(t, d.options())
+	peerDone := make(chan struct{}, 1)
+	port := loopbackServer(t, func(c net.Conn) {
+		defer func() { peerDone <- struct{}{} }()
+		for {
+			if _, err := c.Write([]byte("data: tick\n\n")); err != nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	conn, err := s.c.Forward(context.Background(), port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	select {
+	case <-peerDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a forward closed right after its open still relays the pod's peer: its StreamAbort was lost")
+	}
+}

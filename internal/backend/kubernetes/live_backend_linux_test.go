@@ -5,6 +5,7 @@ package kubernetes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -84,6 +85,9 @@ func TestLiveBackendLifecycle(t *testing.T) {
 	})
 	t.Run("failed create", func(t *testing.T) {
 		lb.failedCreate(t, open, image)
+	})
+	t.Run("set-up deadline", func(t *testing.T) {
+		lb.setUpDeadline(t, open, image)
 	})
 	// The integration fixtures the P2 exit criteria name: a Dockerfile with
 	// build args, a context above .devcontainer and a local feature; and the
@@ -594,6 +598,38 @@ func (lb *liveBackend) failedCreate(t *testing.T, lv *live, image string) {
 		t.Errorf("the failed create's journal is still there: %v", err)
 	}
 	// The destroy of the FAILED record, which has no ContainerID.
+	if err := b.DownByKey(); err != nil {
+		t.Fatalf("down by key: %v", err)
+	}
+	lb.waitNothingLeft(t, lv, inst.KubeKey)
+}
+
+// setUpDeadline: a create whose postCreateCommand never ends fails at the
+// set-up deadline (FLEET_KUBE_SETUP_TIMEOUT), kubernetes:timeout naming the
+// hook still running in the pod, scaled down like any failed create.
+func (lb *liveBackend) setUpDeadline(t *testing.T, lv *live, image string) {
+	t.Setenv(EnvSetUpTimeout, "40s")
+	deadlinesOnce = sync.Once{}
+	t.Cleanup(func() { deadlinesOnce = sync.Once{} })
+	inst, sts := lb.instance(t, lv, "stuck", func(ws string) {
+		writeLiveWorkspace(t, ws, map[string]any{"image": image, "postCreateCommand": "echo fleet-live-stuck-hook; sleep 3600"})
+	})
+	b := newHandle(inst, lb.pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	_, err := b.UpContext(backend.WithJobLog(ctx, &lineLog{t: t}), backend.UpRequest{WorkspaceDir: inst.WorkspaceDir})
+	var de *DeadlineError
+	if !errors.As(err, &de) || de.Env != EnvSetUpTimeout {
+		t.Fatalf("a create whose hook never ends: %v, want the set-up deadline", err)
+	}
+	if !strings.Contains(err.Error(), "still running in the pod:") || !strings.Contains(err.Error(), "fleet-live-stuck-hook; sleep 3600") {
+		t.Errorf("the failure does not name the hook still running: %v", err)
+	}
+	t.Logf("failed as expected: %v", err)
+	set, err := lv.cs.AppsV1().StatefulSets(lv.ns).Get(ctx, sts, metav1.GetOptions{})
+	if err != nil || set.Spec.Replicas == nil || *set.Spec.Replicas != 0 {
+		t.Fatalf("the failed instance's StatefulSet: %v, %v", set, err)
+	}
 	if err := b.DownByKey(); err != nil {
 		t.Fatalf("down by key: %v", err)
 	}
