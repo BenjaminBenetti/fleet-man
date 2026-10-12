@@ -214,8 +214,9 @@ func TestKeyLocks(t *testing.T) {
 	got := make(chan bool)
 	go func() {
 		u := k.lock("a")
-		got <- true
+		// Unlocked before it says so: the count below must see it gone.
 		u()
+		got <- true
 	}()
 	select {
 	case <-got:

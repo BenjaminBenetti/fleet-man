@@ -81,7 +81,11 @@ _be_kubectl() { kubectl --context "${FLEET_ITEST_CLUSTER}" --request-timeout=30s
 # target, and wait until fleetd judges it usable (ready or limited), so a
 # TUI's Deploy row offers it.
 _be_setup() {
-  if ! _be_kubectl get namespace "${FLEET_ITEST_NAMESPACE}" >/dev/null 2>&1; then
+  local ns_out
+  # An identity limited to its namespace may not read namespaces at all: its
+  # namespace is the one it was given (integration/nightly/rbac-limited.sh).
+  if ! ns_out=$(_be_kubectl get namespace "${FLEET_ITEST_NAMESPACE}" 2>&1) \
+    && ! printf '%s' "${ns_out}" | grep -qi forbidden; then
     _be_kubectl create namespace "${FLEET_ITEST_NAMESPACE}" >/dev/null 2>&1 \
       || _be_kubectl get namespace "${FLEET_ITEST_NAMESPACE}" >/dev/null \
       || fail "could not create namespace ${FLEET_ITEST_NAMESPACE} on ${FLEET_ITEST_CLUSTER}"
@@ -187,6 +191,23 @@ _be_teardown() {
     sleep 0.2
   done
   pkill -9 -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
+}
+
+# _be_dump <dir> — what a failed test leaves for its artifact, before its
+# teardown: the test namespace's objects, events and pods (described, with
+# their logs), the nodes and the cluster's recent events.
+_be_dump() {
+  local dir="$1" ns="${FLEET_ITEST_NAMESPACE}" pod
+  _be_kubectl -n "${ns}" get all,pvc,secrets,configmaps,leases,networkpolicies,poddisruptionbudgets -o wide > "${dir}/objects.txt" 2>&1 || true
+  _be_kubectl -n "${ns}" get events --sort-by=.lastTimestamp > "${dir}/events.txt" 2>&1 || true
+  _be_kubectl -n "${ns}" describe pods > "${dir}/pods.txt" 2>&1 || true
+  for pod in $(_be_kubectl -n "${ns}" get pods -o 'jsonpath={.items[*].metadata.name}' 2>/dev/null); do
+    _be_kubectl -n "${ns}" logs "${pod}" --all-containers --prefix --tail=2000 > "${dir}/log-${pod}.txt" 2>&1 || true
+  done
+  _be_kubectl get nodes -o wide > "${dir}/nodes.txt" 2>&1 || true
+  _be_kubectl describe nodes >> "${dir}/nodes.txt" 2>&1 || true
+  _be_kubectl get pv,storageclass,volumeattachments -o wide > "${dir}/storage.txt" 2>&1 || true
+  _be_kubectl get events -A --sort-by=.lastTimestamp > "${dir}/events-all.txt" 2>&1 || true
 }
 
 # --- containers: the instance's StatefulSet and pod ---

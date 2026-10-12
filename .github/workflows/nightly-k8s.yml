@@ -1,0 +1,246 @@
+name: Nightly (Kubernetes)
+
+# What one minikube node in integration-k8s cannot show: several nodes
+# (placement, drains, a ReadWriteMany class across nodes), an SELinux-
+# enforcing node, an overlay network that enforces policies at a small MTU,
+# snapshot clones and the conformance suite on two classes, a node that
+# takes few volumes, volumes that fill and grow, the docker container
+# runtime (cri-dockerd), a connection with only the RBAC fleet asks for, a
+# WAN between fleetd and the cluster, fleetd at 100 and 300 pods with the
+# reconnect storm of a restart, a poll pass over bound files on macOS, and
+# the long property and fuzz runs. Each job runs one
+# integration/nightly/*.sh, as a local run in the QA container does
+# (DEVELOPMENT.md "Nightly jobs"); its output folder (summary, budgets.tsv,
+# failed tests' artifacts, cluster dumps) is the job's artifact.
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+  # GitHub fires schedules only from the default branch: until
+  # feat/kubernetes merges, its pushes run the nightly instead.
+  push:
+    branches: [feat/kubernetes]
+
+# One run at a time: a newer push replaces a queued run, never one in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # As integration-k8s.yml: the gha cache for the tmux bundle's buildx.
+      - name: Expose the Actions cache to buildx
+        uses: actions/github-script@v7
+        with:
+          script: |
+            for (const key of ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_CACHE_URL',
+                               'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2']) {
+              if (process.env[key]) core.exportVariable(key, process.env[key])
+            }
+
+      - name: Build fleet, the pod build and the tmux bundle
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 go build -o dist/fleet ./cmd/fleet
+          make fleet-pod POD_ARCHES=amd64 POD_BIN_DIR=dist
+          make pod-tmux POD_ARCHES=amd64 POD_BIN_DIR=dist \
+            TMUX_BUILD_FLAGS="--cache-from type=gha,scope=pod-tmux-amd64 --cache-to type=gha,mode=max,scope=pod-tmux-amd64,ignore-error=true"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleet-k8s-bin
+          path: |
+            dist/fleet
+            dist/fleet-pod-linux-amd64
+            dist/fleet-tmux-linux-amd64.tar.gz
+          if-no-files-found: error
+
+  cluster:
+    name: nightly ${{ matrix.job }}${{ matrix.args && format(' {0}', matrix.args) || '' }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { job: kind-multinode, timeout: 100 }
+          - { job: kind-nfs, timeout: 150 }
+          - { job: calico, timeout: 100 }
+          - { job: csi-hostpath, timeout: 150 }
+          - { job: attach-limit, timeout: 50 }
+          - { job: expand, timeout: 60 }
+          - { job: runtime-docker, timeout: 90 }
+          - { job: rbac-limited, timeout: 80 }
+          - { job: netem, timeout: 80 }
+          - { job: scale, args: "100", timeout: 90 }
+          - { job: selinux-k3s, timeout: 100 }
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: ./.github/actions/k8s-runner
+        with:
+          start-minikube: "false"
+          kind: "true"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install the devcontainer CLI and tmux
+        run: |
+          npm install -g @devcontainers/cli
+          sudo apt-get update
+          sudo apt-get install -y tmux
+
+      - name: KVM and qemu for the SELinux machine
+        if: matrix.job == 'selinux-k3s'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils
+
+      # The AlmaLinux image the SELinux machine boots (~600 MB, checked).
+      - uses: actions/cache@v4
+        if: matrix.job == 'selinux-k3s'
+        with:
+          path: ~/.cache/fleet-nightly
+          key: fleet-nightly-vm-alma9-20260810
+
+      - name: The kernel's netem
+        if: matrix.job == 'netem'
+        run: |
+          sudo modprobe sch_netem || {
+            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+            sudo modprobe sch_netem
+          }
+
+      - name: Run integration/nightly/${{ matrix.job }}.sh ${{ matrix.args }}
+        env:
+          FLEET_BIN: ${{ runner.temp }}/fleet-k8s-bin/fleet
+          FLEET_POD_BINARY_AMD64: ${{ runner.temp }}/fleet-k8s-bin/fleet-pod-linux-amd64
+          FLEET_POD_TMUX_AMD64: ${{ runner.temp }}/fleet-k8s-bin/fleet-tmux-linux-amd64.tar.gz
+          FLEET_NIGHTLY_OUT: ${{ runner.temp }}/nightly
+          JOB_ARGS: ${{ matrix.args }}
+        run: |
+          # shellcheck disable=SC2086
+          ./integration/nightly/${{ matrix.job }}.sh $JOB_ARGS
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-${{ matrix.job }}${{ matrix.args && format('-{0}', matrix.args) || '' }}
+          path: ${{ runner.temp }}/nightly
+          if-no-files-found: ignore
+
+  # 300 pods need more memory than a standard runner has: this job runs only
+  # where the repository names a larger one (the FLEET_NIGHTLY_LARGE_RUNNER
+  # variable, e.g. a 16-core 64 GB runner label).
+  scale-300:
+    name: nightly scale 300
+    needs: build
+    if: vars.FLEET_NIGHTLY_LARGE_RUNNER != ''
+    runs-on: ${{ vars.FLEET_NIGHTLY_LARGE_RUNNER }}
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/k8s-runner
+        with:
+          start-minikube: "false"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install the devcontainer CLI and tmux
+        run: |
+          npm install -g @devcontainers/cli
+          sudo apt-get update
+          sudo apt-get install -y tmux
+
+      - name: Run integration/nightly/scale.sh 300
+        env:
+          FLEET_BIN: ${{ runner.temp }}/fleet-k8s-bin/fleet
+          FLEET_POD_BINARY_AMD64: ${{ runner.temp }}/fleet-k8s-bin/fleet-pod-linux-amd64
+          FLEET_POD_TMUX_AMD64: ${{ runner.temp }}/fleet-k8s-bin/fleet-tmux-linux-amd64.tar.gz
+          FLEET_NIGHTLY_OUT: ${{ runner.temp }}/nightly
+        run: ./integration/nightly/scale.sh 300
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-scale-300
+          path: ${{ runner.temp }}/nightly
+          if-no-files-found: ignore
+
+  # What bound files cost a side without inotify, which polls: a pass over
+  # a big host folder within budget on macOS (no BSD runner exists).
+  poll-cost:
+    name: nightly poll cost (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run integration/nightly/poll-cost.sh
+        env:
+          FLEET_NIGHTLY_OUT: ${{ runner.temp }}/nightly
+        run: ./integration/nightly/poll-cost.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-poll-cost
+          path: ${{ runner.temp }}/nightly
+          if-no-files-found: ignore
+
+  # The sharesync property tests at 200 seeds and every fuzz target for a
+  # minute: no cluster.
+  go-deep:
+    name: nightly go-deep
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run integration/nightly/go-deep.sh
+        env:
+          FLEET_NIGHTLY_OUT: ${{ runner.temp }}/nightly
+        run: ./integration/nightly/go-deep.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-go-deep
+          path: |
+            ${{ runner.temp }}/nightly
+            internal/**/testdata/fuzz
+          if-no-files-found: ignore

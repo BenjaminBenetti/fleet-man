@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # itest: no-docker
 # itest: k8s
-# Description: a remote TUI over Armada SSH connects a cluster from the remote fleetd's kubeconfig and sets Allow privileged and Extra PATH exactly as a local TUI does; [L] Run login here is not offered; on a reachable cluster the remote connects it from its own ~/.kube/config
+# Description: a remote TUI over Armada SSH connects a cluster from the remote fleetd's kubeconfig and sets the Storage pickers (shared and instance-disk classes), Allow privileged and Extra PATH exactly as a local TUI does; [L] Run login here is not offered; on a reachable cluster the remote connects it from its own ~/.kube/config
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -183,10 +183,26 @@ tui_wait_for "☸ itest-dead" 5
   || fail "the remote connection must pin the context and the remote's file: $(rclusters 'print "$c[0]{context} @{$c[0]{kubeconfig_paths}}"')"
 [ "$(local_clusters)" = "" ] || [ "$(local_clusters)" = 0 ] || fail "the local fleetd must hold no connection"
 
-info "the remote editor sets Allow privileged and Extra PATH"
+info "the remote editor sets the Storage pickers, Allow privileged and Extra PATH"
 tui_cursor_to '☸ itest-dead'
 tui_send Enter
 tui_wait_for "Edit cluster ☸ itest-dead" 5
+# The Storage pickers: fleetd lists no class for a dead context, so each
+# takes a typed name, as a cluster that forbids listing them does.
+tui_cursor_to 'Shared storage:'
+tui_send Enter
+sleep 0.3
+tui_send_text "itest-shared"
+tui_send Enter
+tui_wait_for "Saved Shared storage" 15
+tui_cursor_to 'Instance disks:'
+tui_send Enter
+sleep 0.3
+tui_send_text "itest-disks"
+tui_send Enter
+tui_wait_for "Saved Instance disks" 15
+[ "$(rclusters 'print "$c[0]{shared_storage_class} $c[0]{storage_class}"')" = "itest-shared itest-disks" ] \
+  || fail "the storage classes picked over Armada SSH were not saved: $(rclusters 'print "$c[0]{shared_storage_class} $c[0]{storage_class}"')"
 tui_cursor_to 'Allow privileged:'
 tui_send Right
 tui_wait_for "Privileged pods allowed" 15
@@ -218,7 +234,7 @@ tui_wait_for "Disconnected ☸ itest-dead" 20
 # FLEET_QA_START_MINIKUBE=1).
 kube_ctx="${FLEET_ITEST_CLUSTER:-$(kubectl config current-context 2>/dev/null || true)}"
 if [ -z "${kube_ctx}" ] || ! kubectl --context "${kube_ctx}" --request-timeout=10s get --raw=/readyz >/dev/null 2>&1; then
-  pass "a remote TUI over Armada SSH connects, edits (Allow privileged, Extra PATH) and disconnects a cluster as a local one does (no reachable cluster: the remote's own kubeconfig half did not run)"
+  pass "a remote TUI over Armada SSH connects, edits (Storage pickers, Allow privileged, Extra PATH) and disconnects a cluster as a local one does (no reachable cluster: the remote's own kubeconfig half did not run)"
 fi
 
 kube_ns="fleet-it-203-$$"
@@ -260,4 +276,4 @@ tui_send Enter
 tui_wait_for "Disconnected ☸" 30
 [ "$(rclusters 'print scalar @c')" = 0 ] || fail "the remote connection must be gone"
 
-pass "a remote TUI over Armada SSH connects, edits (Allow privileged, Extra PATH) and disconnects a cluster as a local one does; ${kube_ctx} connected ready from the remote's own kubeconfig"
+pass "a remote TUI over Armada SSH connects, edits (Storage pickers, Allow privileged, Extra PATH) and disconnects a cluster as a local one does; ${kube_ctx} connected ready from the remote's own kubeconfig"

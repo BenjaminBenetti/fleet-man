@@ -10,6 +10,7 @@
 #             /         "fleet-itest-web <port>"
 #             /health   "healthy"
 #             /cookies  three Set-Cookie headers in one response
+#             /bytes/<n>  <n> bytes (at most 16 MiB): a page's assets
 #             /ws       WebSocket upgrade, then echoes one text frame as
 #                       "echo:<text>" and closes
 #   sink    reads to EOF, then replies "bytes=<n> sha256=<hex>" and closes:
@@ -128,6 +129,8 @@ sub serve_http {
       'Set-Cookie: fleet_c=3; Path=/; Max-Age=600',
     );
     $body = "three cookies\n";
+  } elsif ($path =~ m{^/bytes/(\d+)$} && $1 <= 16777216) {
+    $body = 'x' x $1;
   } else {
     $status = '404 Not Found';
     $body = "not found: $path\n";

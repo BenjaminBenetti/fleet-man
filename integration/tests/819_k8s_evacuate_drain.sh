@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: a fleet in single-node mode leaves a node the cluster empties: draining the node its share's holders run on moves the fleet as one (stopped there, started together on another node, the connection saying "node cordoned: fleet moving" meanwhile), an instance protected from drains (a PodDisruptionBudget the drain cannot pass) included, the files on its share and on each disk kept, a stopped sibling started afterwards beside them, and a move fleetd is killed in the middle of finished by the next fleetd, a mark that outlived its move removed without moving anything; a fleet whose share is on the node's own disk is left running there, the connection saying why it can't move. Needs two schedulable nodes and a StorageClass whose volumes any node mounts (FLEET_ITEST_MOVABLE_CLASS, default fleet-shared-path, as integration/clusters/kind-shared-path.sh makes); elsewhere it passes as not run.
+# Description: a fleet in single-node mode leaves a node the cluster empties: draining the node its share's holders run on moves the fleet as one (stopped there, started together on another node, the connection saying "node cordoned: fleet moving" meanwhile, a TUI watching throughout), an instance protected from drains (a PodDisruptionBudget the drain cannot pass) included, the files on its share and on each disk kept, a stopped sibling started afterwards beside them, and a move fleetd is killed in the middle of finished by the next fleetd, a mark that outlived its move removed without moving anything; a fleet whose share is on the node's own disk is left running there, the connection saying why it can't move. Needs two schedulable nodes and a StorageClass whose volumes any node mounts (FLEET_ITEST_MOVABLE_CLASS, default fleet-shared-path, as integration/clusters/kind-shared-path.sh makes); elsewhere it passes as not run.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -66,7 +66,7 @@ uncordon_all() {
   local n
   for n in ${cordoned[@]+"${cordoned[@]}"}; do itest_k8s_kubectl uncordon "${n}" >/dev/null 2>&1 || true; done
 }
-trap uncordon_all EXIT
+trap 'uncordon_all; tui_kill' EXIT
 
 info "a fleet whose share is on its node's own disk (the default class) stays put"
 # Auto would put disks and share on the movable class.
@@ -109,6 +109,10 @@ run_in "${beta}" 'echo on-beta-disk > ~/disk.txt'
 alpha_uid=$(uid_of "${alpha}")
 beta_uid=$(uid_of "${beta}")
 
+info "a TUI watches through the drain (a Watch subscriber that wants the instances' runtime)"
+tui_spawn
+tui_wait_for "alpha" 60 || fail "the TUI never listed alpha: $(tui_capture)"
+
 info "drain ${home}: the fleet moves off it together"
 cordoned+=("${home}")
 drain_out="${HOME}/drain.log"
@@ -127,6 +131,9 @@ info "$(grep -o 'kube evacuate: moved the fleet.*' "${log}" | tail -n 1 | tr -d 
 for ref in "${alpha}" "${beta}"; do
   assert_equals "running" "$(itest_container_status "$(itest_container_id "${ref}")")" "${ref} runs after the move"
 done
+
+tui_wait_for "beta" 30 || fail "the TUI lost the moved fleet: $(tui_capture)"
+tui_kill
 
 info "nothing was lost: the share, each disk, one inode"
 assert_equals "on-the-share" "$(run_in "${beta}" 'cat ~/.claude/moved.txt')" "the share came along"

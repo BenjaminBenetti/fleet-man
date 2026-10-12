@@ -108,6 +108,8 @@ type kubeRecovery struct {
 	// pending counts each connection's known garbage not yet gone.
 	pending map[string]int
 	looping bool
+	// running are the loop and the upkeep start runs (wait).
+	running sync.WaitGroup
 }
 
 func newKubeRecovery(svc *service) *kubeRecovery {
@@ -266,10 +268,21 @@ func (r *kubeRecovery) start(ctx context.Context) {
 		r.startUndo(fleetName, instanceName, j)
 	}
 	if loop {
-		go r.loop(ctx)
-		go runSharedServiceUpkeep(ctx)
+		r.running.Add(2)
+		go func() {
+			defer r.running.Done()
+			r.loop(ctx)
+		}()
+		go func() {
+			defer r.running.Done()
+			runSharedServiceUpkeep(ctx)
+		}()
 	}
 }
+
+// wait waits for the loop and the upkeep start ran to end (once start's ctx
+// has).
+func (r *kubeRecovery) wait() { r.running.Wait() }
 
 // reachable is told by a connection's worker each time a full preflight
 // finds it usable with this daemon holding its owner Lease (the first one

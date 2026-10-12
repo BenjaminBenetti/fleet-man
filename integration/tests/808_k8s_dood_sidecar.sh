@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: on a cluster, a docker-outside-of-docker devcontainer gets the pod's own docker engine (the fleet-docker sidecar): the remote user runs containers through the bound socket, siblings see the workspace and are pod-local (the create says so once), the engine's images survive a stop and start, and a change to its shared daemon.json reloads it. With Allow privileged pods off, DooD and DinD creates fail before the build, naming the toggle, and leave nothing.
+# Description: on a cluster, a docker-outside-of-docker devcontainer gets the pod's own docker engine (the fleet-docker sidecar): the remote user runs containers through the bound socket, siblings see the workspace and are pod-local (the create says so once), the engine's images survive a stop and start and a rebuild, and a change to its shared daemon.json reloads it. With Allow privileged pods off, DooD and DinD creates fail before the build, naming the toggle, and leave nothing.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -78,6 +78,14 @@ info "fleet stop + start alpha"
 wait_docker "after a stop and start"
 assert_equals "${image_id}" "$(in_instance docker image inspect --format '{{.Id}}' itest/kept:v1 2>&1)" \
   "the engine's image should survive a stop and start (it lives on vol/fleet-docker)"
+
+info "fleet rebuild alpha: a new root, the engine's volume kept"
+before_id=$(itest_container_id "${inst}")
+"${FLEET_BIN}" rebuild "${inst}" >/dev/null
+[ "$(itest_container_id "${inst}")" != "${before_id}" ] || fail "the rebuild kept the container id ${before_id}"
+wait_docker "after a rebuild"
+assert_equals "${image_id}" "$(in_instance docker image inspect --format '{{.Id}}' itest/kept:v1 2>&1)" \
+  "the engine's image should survive a rebuild (vol/fleet-docker is not part of the root)"
 
 # refused_before_build <name> <code> — a create of <name> fails with <code>,
 # naming the toggle, before the build, and leaves no object.

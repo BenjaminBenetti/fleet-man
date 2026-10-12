@@ -11,11 +11,15 @@ name: Integration Tests (BSD userland shims)
 # The technique is borrowed from the repo's QA bot, which validated the
 # #231 fix on Linux with exactly this kind of `sleep` shim.
 
+# Nightly, not per PR: its ten shards would take a PR past GitHub's 20
+# concurrent jobs beside the devcontainer and Kubernetes suites. A PR whose
+# change touches host shell-outs can still run it (workflow_dispatch).
 on:
-  pull_request:
-    branches: [main, feat/kubernetes]
-  # feat/kubernetes is a long-lived integration branch that work merges into
-  # directly, so its pushes run the suite too.
+  schedule:
+    - cron: "47 4 * * *"
+  workflow_dispatch:
+  # GitHub fires schedules only from the default branch: until
+  # feat/kubernetes merges, its pushes run it instead.
   push:
     branches: [feat/kubernetes]
 

@@ -232,6 +232,9 @@ func TestKubeDeliveryOrder(t *testing.T) {
 // the connection's gateway pull Secret applied server-side in its
 // namespace; the pod goes afterwards and the status records the deep test.
 func TestKubeDeepTestPullsThroughTheGateway(t *testing.T) {
+	// The fake cluster runs none of the other probes' pods: they give up at
+	// once instead of after two minutes.
+	t.Cleanup(preflight.BoundProbes(50 * time.Millisecond))
 	f := newKubeFixture(t)
 	withGatewayImages(t, f)
 	// The reactor goes in before the daemon's workers use the clientset

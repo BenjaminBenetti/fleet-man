@@ -167,15 +167,22 @@ func TestDesiredStateBindsTheHostSockets(t *testing.T) {
 	}
 }
 
-// freeGatewayPort is a port nothing listens at on HostGatewayAddr.
-func freeGatewayPort(t *testing.T) uint16 {
+// freeGatewayPorts are n distinct ports nothing listens at on
+// HostGatewayAddr (nor on every address: a wildcard listener holds the port
+// there too). They are held together until all are picked: one port let go
+// before the next is asked for can be handed out again.
+func freeGatewayPorts(t *testing.T, n int) []uint16 {
 	t.Helper()
-	ln, err := net.Listen("tcp4", podwire.HostGatewayAddr+":0")
-	if err != nil {
-		t.Skipf("cannot listen on %s: %v", podwire.HostGatewayAddr, err)
+	ports := make([]uint16, 0, n)
+	for range n {
+		ln, err := net.Listen("tcp4", podwire.HostGatewayAddr+":0")
+		if err != nil {
+			t.Skipf("cannot listen on %s: %v", podwire.HostGatewayAddr, err)
+		}
+		defer ln.Close()
+		ports = append(ports, uint16(ln.Addr().(*net.TCPAddr).Port))
 	}
-	defer ln.Close()
-	return uint16(ln.Addr().(*net.TCPAddr).Port)
+	return ports
 }
 
 func gatewayAddr(p uint16) string {
@@ -208,13 +215,15 @@ func talkTCP(t *testing.T, addr, msg string) (string, error) {
 func TestDesiredStateMirrorsTheGatewayPorts(t *testing.T) {
 	d := newTestDirs(t)
 	seen := make(chan hostRelayed, 8)
-	served, refused := freeGatewayPort(t), freeGatewayPort(t)
+	// The pod's own listener first: the ports picked next cannot be its.
 	pods, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pods.Close()
 	podsPort := uint16(pods.Addr().(*net.TCPAddr).Port)
+	free := freeGatewayPorts(t, 2)
+	served, refused := free[0], free[1]
 	go func() {
 		for {
 			c, err := pods.Accept()

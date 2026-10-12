@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -104,6 +105,10 @@ func TestRecorderDiesWithFleetHoweverFleetDies(t *testing.T) {
 		"SIGTERM-unhandled":           syscall.SIGTERM,
 	} {
 		t.Run(name, func(t *testing.T) {
+			if sig == syscall.SIGHUP && signal.Ignored(syscall.SIGHUP) {
+				// Inherited by the provider (nohup): it would never die of it.
+				t.Skip("SIGHUP is ignored in this process")
+			}
 			provider, recorder := startDoomedProvider(t)
 			if err := provider.Process.Signal(sig); err != nil {
 				t.Fatal(err)

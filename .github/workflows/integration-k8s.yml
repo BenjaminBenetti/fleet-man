@@ -116,6 +116,9 @@ jobs:
           FLEET_ITEST_BACKEND: kubernetes
           FLEET_ITEST_CLUSTER: minikube
           FLEET_ITEST_RANGE: ${{ matrix.range }}
+          # Each failed test's fleet.log and cluster state, before its
+          # teardown: the failure artifact below.
+          FLEET_ITEST_ARTIFACTS: ${{ runner.temp }}/k8s-dump/tests
         run: ./integration/run.sh
 
       - name: Dump the cluster
@@ -184,6 +187,8 @@ jobs:
         include:
           - group: backend
             runtime: docker
+            # TestLiveSeedCache clones from a seed cache: a snapshot class.
+            addons: --addons=volumesnapshots,csi-hostpath-driver
             run: |
               go test -count=1 -timeout 55m -v -run 'Live' ./internal/backend/kubernetes ./internal/backend/kubernetes/podspec
           - group: daemon
@@ -209,7 +214,7 @@ jobs:
 
       - uses: ./.github/actions/k8s-runner
         with:
-          minikube-flags: --memory=8g --cpus=3 --container-runtime=${{ matrix.runtime }}
+          minikube-flags: --memory=8g --cpus=3 --container-runtime=${{ matrix.runtime }} ${{ matrix.addons }}
 
       - uses: actions/setup-node@v5
         with:

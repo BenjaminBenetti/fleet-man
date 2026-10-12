@@ -357,6 +357,9 @@ func TestScanOfAPathBelowAReplacedFolder(t *testing.T) {
 	r := newRig(t, "host", "c1")
 	r.write("host", "user", "a/b/f", "x")
 	r.sync()
+	// The side stops first: its own scans would otherwise report the change
+	// before this one, which then finds nothing new.
+	r.sides["c1"].stop()
 	os.RemoveAll(r.path("c1", "user", "a"))
 	r.write("c1", "user", "a", "a file now")
 	rep, _, err := r.sides["c1"].tree.Scan(context.Background(), "user", []string{"a/b/f"})

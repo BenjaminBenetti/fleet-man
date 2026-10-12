@@ -167,10 +167,14 @@ func journalExists(key string) bool {
 }
 
 // startRecovery runs the reconciler's start (the serve loop's) until the
-// test ends.
+// test ends, and waits for its goroutines then: the next test sets the
+// seams they read.
 func (r *recoveryFixture) startRecovery() {
 	ctx, cancel := context.WithCancel(context.Background())
-	r.t.Cleanup(cancel)
+	r.t.Cleanup(func() {
+		cancel()
+		r.svc.kubeRecovery.wait()
+	})
 	r.svc.bgCtx = ctx
 	r.svc.kubeRecovery.start(ctx)
 }

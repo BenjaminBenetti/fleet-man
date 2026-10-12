@@ -19,11 +19,11 @@ import (
 
 func audioCleanupSeams(t *testing.T) {
 	t.Helper()
-	stop, settings, timeout, delay := stopMicServer, micSetting, micStopTimeout, micStopRetryDelay
+	stop, timeout, delay := stopMicServer, micStopTimeout, micStopRetryDelay
 	t.Cleanup(func() {
-		stopMicServer, micSetting, micStopTimeout, micStopRetryDelay = stop, settings, timeout, delay
+		stopMicServer, micStopTimeout, micStopRetryDelay = stop, timeout, delay
 	})
-	micSetting = func() (state.MicSettings, error) { return state.MicSettings{}, nil }
+	setMicSetting(t, func() (state.MicSettings, error) { return state.MicSettings{}, nil })
 	micStopRetryDelay = time.Millisecond
 }
 
@@ -53,12 +53,12 @@ func TestMicCleanupRechecksSettings(t *testing.T) {
 			audioCleanupSeams(t)
 			calls := 0
 			var enabled atomic.Bool
-			micSetting = func() (state.MicSettings, error) {
+			setMicSetting(t, func() (state.MicSettings, error) {
 				if unreadable && enabled.Load() {
 					return state.MicSettings{}, errors.New("config unavailable")
 				}
 				return state.MicSettings{Enabled: enabled.Load()}, nil
-			}
+			})
 			stopMicServer = func(*fleet.Instance) error {
 				calls++
 				enabled.Store(true)
@@ -142,7 +142,7 @@ func TestOutputCleanupAlsoStopsDisabledMic(t *testing.T) {
 			if tc.outputFailure {
 				t.Setenv("FLEET_TEST_OUTPUT_STOP_FAIL", "1")
 			}
-			micSetting = func() (state.MicSettings, error) { return state.MicSettings{Enabled: tc.enabled}, nil }
+			setMicSetting(t, func() (state.MicSettings, error) { return state.MicSettings{Enabled: tc.enabled}, nil })
 			stopOutputServer(&fleet.Instance{Name: "test", ContainerID: "audio-cleanup-test"})
 			data, err := os.ReadFile(log)
 			if err != nil {

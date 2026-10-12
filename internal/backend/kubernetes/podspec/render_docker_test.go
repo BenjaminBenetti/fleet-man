@@ -338,7 +338,13 @@ while :; do sleep 0.05; done
 	if s := read("signals"); s != "" {
 		t.Fatalf("signals %q before the config changed", s)
 	}
-	if err := os.WriteFile(filepath.Join(shared, "daemon.json"), []byte(`{"registry-mirrors":["http://mirror:5000"]}`), 0o644); err != nil {
+	// Replaced whole, as the image cache step writes it: a write in place
+	// could be seen half done (empty, then full: two reloads).
+	next := filepath.Join(shared, "daemon.json.new")
+	if err := os.WriteFile(next, []byte(`{"registry-mirrors":["http://mirror:5000"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, filepath.Join(shared, "daemon.json")); err != nil {
 		t.Fatal(err)
 	}
 	waitFor("a reload", func() bool { return read("signals") == "HUP\n" })
