@@ -130,7 +130,9 @@ info "stopping the gateway, then a start that must pull the image afresh"
 "${FLEET_BIN}" stop "${inst}" >/dev/null
 stop_gateway
 image_id="${image#*@}"
-minikube -p "${PROFILE}" ssh -- "sudo crictl rmi ${image} >/dev/null 2>&1 || sudo docker rmi -f ${image} >/dev/null 2>&1 || sudo crictl rmi ${image_id} >/dev/null 2>&1; true"
+# Every way the node may hold it: crictl's answer is no proof on a docker
+# runtime node (cri-dockerd), where only docker rmi drops a digest pull.
+minikube -p "${PROFILE}" ssh -- "sudo crictl rmi ${image} >/dev/null 2>&1; sudo docker rmi -f ${image} >/dev/null 2>&1; sudo crictl rmi ${image_id} >/dev/null 2>&1; true"
 rc=0
 out=$("${FLEET_BIN}" start "${inst}" 2>&1) || rc=$?
 printf '%s\n' "${out}"
