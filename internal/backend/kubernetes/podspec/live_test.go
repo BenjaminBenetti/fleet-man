@@ -295,7 +295,8 @@ func TestLiveAdmission(t *testing.T) {
 		{"fixture-go-feature", open, nil},
 		{"fixture-dind", open, nil},
 		{"fixture", restricted, nonRoot},
-		{"fixture", limited, nil},
+		// memory_limit off: the LimitRange fills the limit in.
+		{"fixture", limited, func(in *Input, _ *RenderInput) { in.Cluster.MemoryLimit = fleet.KubeNoLimit }},
 	} {
 		in, r := liveInput(t, tt.fixture, tt.ns, fleet.KubeCluster{})
 		if tt.edit != nil {
