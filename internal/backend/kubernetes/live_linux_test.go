@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -291,8 +290,7 @@ func newLiveIn(t *testing.T, kctx, prefix string) *live {
 func (lv *live) buildPod(version string) *binstore.Artifact {
 	lv.t.Helper()
 	out := filepath.Join(lv.dir, version, binstore.BinaryAsset(runtime.GOARCH))
-	cmd := exec.Command("go", "build", "-tags", "nok8s", "-ldflags", "-s -w -X "+binstore.VersionSymbol+"="+version, "-o", out, "github.com/BenjaminBenetti/fleet-man/cmd/fleet")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux")
+	cmd := goBuild([]string{"CGO_ENABLED=0", "GOOS=linux"}, "-tags", "nok8s", "-ldflags", "-s -w -X "+binstore.VersionSymbol+"="+version, "-o", out, "github.com/BenjaminBenetti/fleet-man/cmd/fleet")
 	if msg, err := cmd.CombinedOutput(); err != nil {
 		lv.t.Fatalf("build the pod binary: %v\n%s", err, msg)
 	}

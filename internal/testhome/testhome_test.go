@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,31 @@ func TestAHelperProcessKeepsItsParentsHome(t *testing.T) {
 	}
 	if len(names) != 1 || names[0] != homePrefix+"parent" {
 		t.Errorf("the temp dir after the helper holds %v, want only the parent's home", names)
+	}
+}
+
+// go run through GoCommand under a moved HOME (Main's, then the test's own)
+// keeps the module and build caches of the HOME the process started with.
+func TestGoCommandKeepsTheStartingHomesCaches(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain")
+	}
+	mainHome := os.Getenv("HOME")
+	t.Setenv("HOME", t.TempDir())
+	out, err := GoCommand("env", "GOMODCACHE", "GOCACHE").Output()
+	if err != nil {
+		t.Fatalf("go env: %v", err)
+	}
+	dirs := strings.Fields(string(out))
+	if len(dirs) != 2 {
+		t.Fatalf("go env printed %q", out)
+	}
+	for _, dir := range dirs {
+		for _, moved := range []string{mainHome, os.Getenv("HOME")} {
+			if rel, err := filepath.Rel(moved, dir); err == nil && !strings.HasPrefix(rel, "..") {
+				t.Errorf("go's cache %s is under the moved HOME %s", dir, moved)
+			}
+		}
 	}
 }
 

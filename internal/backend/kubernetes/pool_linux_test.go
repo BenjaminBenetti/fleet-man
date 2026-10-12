@@ -35,6 +35,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
 	"github.com/BenjaminBenetti/fleet-man/internal/podagent"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
+	"github.com/BenjaminBenetti/fleet-man/internal/testhome"
 )
 
 // The tests below run the whole bootstrap against local "pods": each pod is
@@ -50,6 +51,15 @@ var (
 	fakePodErr  error
 )
 
+// goBuild is `go build args...` with env added, under the go environment of
+// the HOME the test binary started with: the tests that build move HOME to
+// a TempDir of their own first (testhome.GoCommand).
+func goBuild(env []string, args ...string) *exec.Cmd {
+	cmd := testhome.GoCommand(append([]string{"build"}, args...)...)
+	cmd.Env = append(cmd.Env, env...)
+	return cmd
+}
+
 // fakePod is the fake pod binary of version v (vtest-1 or vtest-2), built
 // as the pod build (-tags nok8s) with the version stamped as releases are.
 func fakePod(t *testing.T, v string) string {
@@ -60,10 +70,9 @@ func fakePod(t *testing.T, v string) string {
 			return
 		}
 		for _, version := range []string{"vtest-1", "vtest-2"} {
-			cmd := exec.Command("go", "build", "-tags", "nok8s",
+			cmd := goBuild([]string{"CGO_ENABLED=0"}, "-tags", "nok8s",
 				"-ldflags", "-X "+binstore.VersionSymbol+"="+version,
 				"-o", filepath.Join(fakePodDir, version), "./testdata/fakepod")
-			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				fakePodErr = fmt.Errorf("build fakepod: %v\n%s", err, out)
 				return

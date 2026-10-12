@@ -31,6 +31,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
 	"github.com/BenjaminBenetti/fleet-man/internal/server"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/testhome"
 )
 
 func init() {
@@ -187,13 +188,13 @@ func collectKubeImages(t *testing.T, rec fleet.KubeCluster) {
 }
 
 // buildFleet builds the fleet command to out with extra go build flags and
-// environment.
+// environment, with go's caches outside the run's HOME (TestMain's).
 func buildFleet(t *testing.T, out string, flags []string, env ...string) string {
 	t.Helper()
 	args := append([]string{"build"}, flags...)
 	args = append(args, "-o", out, "github.com/BenjaminBenetti/fleet-man/cmd/fleet")
-	cmd := exec.Command("go", args...)
-	cmd.Env = append(append(os.Environ(), "CGO_ENABLED=0"), env...)
+	cmd := testhome.GoCommand(args...)
+	cmd.Env = append(append(cmd.Env, "CGO_ENABLED=0"), env...)
 	if msg, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, msg)
 	}

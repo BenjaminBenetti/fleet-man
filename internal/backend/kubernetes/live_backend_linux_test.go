@@ -687,8 +687,7 @@ func writeLiveWorkspace(t *testing.T, ws string, cfg map[string]any) {
 func buildFullFleet(t *testing.T, dir string) string {
 	t.Helper()
 	out := filepath.Join(dir, "full", "fleet")
-	cmd := exec.Command("go", "build", "-o", out, "github.com/BenjaminBenetti/fleet-man/cmd/fleet")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	cmd := goBuild([]string{"CGO_ENABLED=0"}, "-o", out, "github.com/BenjaminBenetti/fleet-man/cmd/fleet")
 	if msg, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build fleet: %v\n%s", err, msg)
 	}
