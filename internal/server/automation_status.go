@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"sort"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // automation_status.go publishes the scheduler's view of the automation
@@ -67,6 +70,33 @@ func (s *service) automationStatus(lim *automationLimiter, st *state.State) *fle
 		}
 		return a.GetAgent() < b.GetAgent()
 	})
+	return out
+}
+
+// GetAutomationStatus is the automation status as of the call, of one
+// fleet's agents or every fleet's: what Watch pushes, for a client that does
+// not watch (`fleet agent list`, the MCP automation list).
+func (s *service) GetAutomationStatus(_ context.Context, req *fleetgrpc.GetAutomationStatusRequest) (*fleetgrpc.GetAutomationStatusReply, error) {
+	st := loadScheduleState()
+	if name := req.GetFleet(); name != "" && (st == nil || st.Fleets[name] == nil) {
+		return nil, status.Errorf(codes.NotFound, "fleet %q not found", name)
+	}
+	return &fleetgrpc.GetAutomationStatusReply{Status: s.fleetAutomationStatus(st, req.GetFleet())}, nil
+}
+
+// fleetAutomationStatus is automationStatus of st's agents, only fleetName's
+// unless it is empty.
+func (s *service) fleetAutomationStatus(st *state.State, fleetName string) *fleetgrpc.AutomationStatus {
+	all := s.automationStatus(s.limiter(), st)
+	if fleetName == "" {
+		return all
+	}
+	out := &fleetgrpc.AutomationStatus{}
+	for _, a := range all.GetAgents() {
+		if a.GetFleet() == fleetName {
+			out.Agents = append(out.Agents, a)
+		}
+	}
 	return out
 }
 

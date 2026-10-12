@@ -16,6 +16,8 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const autoCluster = "itest-abc234"
@@ -184,6 +186,14 @@ func TestClusterAgentRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Fleets["alpha"].Instances = []*fleet.Instance{{Name: "manual", WorkspaceDir: ws, Status: fleet.StatusStopped}}
+	// Passed through from a variable the daemon host does not have, the key
+	// is empty in the pod: still no login.
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	s.fireTriggerAgents(sched, "alpha", trig, []fleet.Agent{claude}, t0.Add(30*time.Second), nil)
+	if len(*created) != 0 {
+		t.Fatalf("with the key's variable unset on the daemon host created %v", *created)
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 	s.fireTriggerAgents(sched, "alpha", trig, []fleet.Agent{claude}, t0.Add(time.Minute), nil)
 	if len(*created) != 1 {
 		t.Fatalf("with the key in the devcontainer env created %v", *created)
@@ -291,5 +301,75 @@ func TestSetFleetSettingsWarnsOfARefusedLogin(t *testing.T) {
 	}
 	if got := save(claude, keyedAgent("k", autoCluster)); len(got) != 0 {
 		t.Fatalf("a keyed agent warned: %q", got)
+	}
+}
+
+// The status reaches clients that do not watch: GetAutomationStatus (what
+// `fleet agent list` shows, local or remote) for one fleet or all, and the
+// MCP automation list's agents.
+func TestGetAutomationStatusAndTheMCPList(t *testing.T) {
+	refused := fleet.Agent{Name: "needs-login", Command: "codex exec '${PROMPT}'", Backend: fleet.BackendKubernetes, KubeCluster: autoCluster}
+	keyed := keyedAgent("keyed", autoCluster)
+	seedAutomationCluster(t, "", 0, []fleet.Agent{refused, keyed}, nil)
+	s := newService()
+	s.automation = newAutomationLimiter()
+	s.automation.hold("alpha", "keyed", "alpha/keyed-1")
+	s.automation.restoreQueued([]*queuedRun{{id: 1, firing: 1, fleet: "alpha", trigger: "t", agent: "keyed", queuedAt: time.Now()}})
+
+	for _, name := range []string{"alpha", ""} {
+		reply, err := s.GetAutomationStatus(context.Background(), &fleetgrpc.GetAutomationStatusRequest{Fleet: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if agents := reply.GetStatus().GetAgents(); len(agents) != 2 || agents[0].GetAgent() != "keyed" || agents[0].GetQueued() != 1 || agents[1].GetLogin() == "" {
+			t.Fatalf("fleet %q: status %v", name, reply.GetStatus())
+		}
+	}
+	if _, err := s.GetAutomationStatus(context.Background(), &fleetgrpc.GetAutomationStatusRequest{Fleet: "nope"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("an unknown fleet = %v, want NotFound", err)
+	}
+
+	_, out, err := s.mcpAutomationList(context.Background(), nil, FleetAutomationListInput{Fleet: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]mcpAgent{}
+	for _, a := range out.Agents {
+		byName[a.Name] = a
+	}
+	if k := byName["keyed"]; k.Queued != 1 || k.Running != 1 || k.Login != "" {
+		t.Errorf("keyed = %+v", k)
+	}
+	if n := byName["needs-login"]; n.Login != "log in to Codex once for this fleet on ☸ itest" {
+		t.Errorf("needs-login = %+v", n)
+	}
+}
+
+// A devcontainer env entry sets its variable when its value does once the
+// devcontainer CLI resolves it on the daemon host.
+func TestDevcontainerEnvSet(t *testing.T) {
+	lookup := func(name string) (string, bool) {
+		v, ok := map[string]string{"KEY": "sk-1", "EMPTY": ""}[name]
+		return v, ok
+	}
+	for v, want := range map[any]bool{
+		"sk-literal":                           true,
+		"":                                     false,
+		"${localEnv:KEY}":                      true,
+		"${localEnv:MISSING}":                  false,
+		"${localEnv:EMPTY}":                    false,
+		"${localEnv:MISSING:fallback}":         true,
+		"${localEnv:MISSING:}":                 false,
+		"Bearer ${localEnv:MISSING}":           true,
+		"${localEnv:MISSING}${localEnv:EMPTY}": false,
+		"${containerEnv:KEY_IN_IMAGE}":         true,
+		true:                                   true,
+	} {
+		if got := devcontainerEnvSet(v, lookup); got != want {
+			t.Errorf("devcontainerEnvSet(%q) = %v, want %v", v, got, want)
+		}
+	}
+	if devcontainerEnvSet(nil, lookup) {
+		t.Error("a null value sets its variable")
 	}
 }

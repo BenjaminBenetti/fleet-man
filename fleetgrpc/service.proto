@@ -128,6 +128,13 @@ service FleetService {
   // over the service works unchanged when the daemon is remote.
   rpc TriggerLogs(TriggerLogsRequest) returns (TriggerLogsReply);
 
+  // GetAutomationStatus is the automation scheduler's view of a fleet's
+  // agents (every fleet's when fleet is empty), as Watch pushes it
+  // (Event.automation_status): which ones the login check refuses, and how
+  // many runs each has queued and running. For clients that do not watch
+  // (`fleet agent list`); served to remote clients as to local ones.
+  rpc GetAutomationStatus(GetAutomationStatusRequest) returns (GetAutomationStatusReply);
+
   // Forward is the port-forward data plane: one bidi stream per forwarded TCP
   // connection (first frame is the ForwardOpen header, the rest raw bytes).
   // The client listens locally and pipes each accepted connection through this

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -43,14 +44,41 @@ func newAgentListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			st, err := loadAutomationStatus(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			byAgent := map[string]*fleetgrpc.AutomationAgentStatus{}
+			for _, a := range st.GetAgents() {
+				byAgent[a.GetAgent()] = a
+			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tBACKEND\tTRIGGERS\tCOMMAND")
+			fmt.Fprintln(w, "NAME\tBACKEND\tTRIGGERS\tSTATUS\tCOMMAND")
 			for _, a := range settings.Agents {
-				fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", a.Name, a.DeployTarget(), triggersUsing(settings.Triggers, a.Name), a.Command)
+				fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n", a.Name, a.DeployTarget(), triggersUsing(settings.Triggers, a.Name), agentStatus(byAgent[a.Name]), a.Command)
 			}
 			return w.Flush()
 		},
 	}
+}
+
+// agentStatus is the STATUS column of an agent: its runs running and queued,
+// and why the login check refuses its firings; "-" for none of it.
+func agentStatus(st *fleetgrpc.AutomationAgentStatus) string {
+	var parts []string
+	if n := st.GetRunning(); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d running", n))
+	}
+	if n := st.GetQueued(); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d queued", n))
+	}
+	if why := st.GetLogin(); why != "" {
+		parts = append(parts, why)
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func newAgentCreateCmd() *cobra.Command {

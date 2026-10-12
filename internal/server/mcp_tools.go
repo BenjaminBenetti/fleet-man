@@ -124,7 +124,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	// --- automation (agents & triggers) ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_automation_list",
-		Description: "Read a fleet's automation config: its agents (automation workers) and triggers (what fires them). Returns {agents, triggers}.",
+		Description: "Read a fleet's automation config: its agents (automation workers) and triggers (what fires them). Returns {agents, triggers}; each agent also says how many of its runs are queued and running, and login: why the automation login check refuses its firings (a Kubernetes agent whose tool was never logged in for the fleet on its cluster), absent when they may run.",
 	}, s.mcpAutomationList)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_agent_create",

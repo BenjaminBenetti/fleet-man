@@ -9,6 +9,8 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // automation.go is the shared plumbing for the `fleet agent` and `fleet trigger`
@@ -47,6 +49,23 @@ var loadAutomation = func(ctx context.Context, fleetName string) (fleet.FleetSet
 		Agents:   protoconv.AgentsFromProto(ps.GetAgents()),
 		Triggers: protoconv.TriggersFromProto(ps.GetTriggers()),
 	}, nil
+}
+
+// loadAutomationStatus fetches the scheduler's view of a fleet's agents
+// (queued and running runs, login refusals). A daemon that predates it
+// answers Unimplemented: the list then shows no status. A package var so
+// the command test can stub the server round-trip.
+var loadAutomationStatus = func(ctx context.Context, fleetName string) (*fleetgrpc.AutomationStatus, error) {
+	conn, err := fleetclient.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	reply, err := conn.Service().GetAutomationStatus(ctx, &fleetgrpc.GetAutomationStatusRequest{Fleet: fleetName})
+	if status.Code(err) == codes.Unimplemented {
+		return &fleetgrpc.AutomationStatus{}, nil
+	}
+	return reply.GetStatus(), err
 }
 
 // triggerLogs fetches a trigger's recorded event logs (its recent firings'
