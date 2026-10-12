@@ -1268,6 +1268,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		extraCmds = append(extraCmds, layoutTickCmd())
 
 	case operationDoneMsg:
+		if msg.instance == "" && m.fleetPage != nil {
+			// A fleet's removal ended, on whichever page: what the daemon
+			// still lists shows again (removingFleets).
+			delete(m.fleetPage.removingFleets, msg.fleet)
+		}
 		m.reload()
 		if msg.err != nil {
 			m.message = fmt.Sprintf("Error: %v", msg.err)

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -56,12 +57,30 @@ func TestRemovingAnEmptyFleetRunsOffTheUILoop(t *testing.T) {
 		if !ok || done.err != nil || !strings.Contains(done.message, "Removed fleet alpha") || !strings.Contains(done.message, "objects stay") {
 			t.Fatalf("%v: result %+v", mode, done)
 		}
-		// Once the job ended, what the daemon still lists shows again (a
-		// removal that failed).
-		fp.Update(m, done)
-		if !listsFleet(fp, "alpha") {
-			t.Fatalf("%v: a fleet the daemon still lists after its removal ended is not shown", mode)
-		}
+	}
+}
+
+// The removal's end lets the fleet's name show again whichever page is open
+// when it lands: a fleet the daemon still lists (a removal that failed), or a
+// new one of the same name, is never kept off the list.
+func TestARemovalsEndShowsTheFleetAgainFromAnyPage(t *testing.T) {
+	origState := fetchStateLegacy
+	fetchStateLegacy = func() (*state.State, error) { return nil, errors.New("daemon away") }
+	t.Cleanup(func() { fetchStateLegacy = origState })
+	fp := newFleetPage()
+	fp.removingFleets = map[string]bool{"alpha": true}
+	listed := &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}
+	m := model{currentPage: &settingsPage{}, fleetPage: fp, st: listed, width: 120, height: 40}
+	fp.buildRows(&m)
+	if listsFleet(fp, "alpha") {
+		t.Fatal("a fleet being removed is listed")
+	}
+	next, _ := m.Update(operationDoneMsg{fleet: "alpha", err: errors.New("refused")})
+	nm := next.(model)
+	nm.st = listed
+	nm.fleetPage.buildRows(&nm)
+	if !listsFleet(nm.fleetPage, "alpha") {
+		t.Fatal("a fleet the daemon lists after its removal ended is not shown")
 	}
 }
 

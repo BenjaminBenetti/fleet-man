@@ -186,10 +186,6 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.applyEditorResult(m, msg.(editorFinishedMsg))
 
 	case operationDoneMsg:
-		if done := msg.(operationDoneMsg); done.instance == "" {
-			// A fleet's removal ended: what the daemon still lists shows.
-			delete(fleetPage.removingFleets, done.fleet)
-		}
 		fleetPage.buildRows(m)
 		return nil
 
