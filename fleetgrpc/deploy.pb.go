@@ -88,7 +88,13 @@ type DeployTargetOption struct {
 	// client sees what the daemon can do, not what its own machine has.
 	Available bool `protobuf:"varint,2,opt,name=available,proto3" json:"available,omitempty"`
 	// reason says why the target is unavailable; empty when it is available.
-	Reason        string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	Reason string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	// warnings are what a create in this fleet would meet on an available
+	// target, as the fleet's devcontainer.json reads (the inspector's
+	// check/kubernetes: Docker-in-Docker on a cluster that allows no
+	// privileged pods, a prebuilt image on one without root), each naming the
+	// target; the New instance dialog shows them when the target is picked.
+	Warnings      []string `protobuf:"bytes,4,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -142,6 +148,13 @@ func (x *DeployTargetOption) GetReason() string {
 		return x.Reason
 	}
 	return ""
+}
+
+func (x *DeployTargetOption) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
+	}
+	return nil
 }
 
 // HostTool is one tool on the daemon host, as Settings -> Tool Status lists it.
@@ -225,7 +238,10 @@ type ListDeployTargetsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// fleet narrows the list to the targets that fleet's remote can use: a
 	// file:// template fleet is copied into each instance, which only the
-	// devcontainer target can consume. Empty or unknown: no narrowing.
+	// devcontainer target and the clusters can consume. Its devcontainer.json
+	// (the newest checkout on the daemon host, else the last inspection of its
+	// remote) decides the cluster targets' warnings, and makes every one
+	// unavailable for a compose devcontainer. Empty or unknown: no narrowing.
 	Fleet         string `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -352,11 +368,12 @@ const file_deploy_proto_rawDesc = "" +
 	"\fdeploy.proto\x12\tfleetgrpc\x1a\fdomain.proto\"c\n" +
 	"\fDeployTarget\x120\n" +
 	"\abackend\x18\x01 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackend\x12!\n" +
-	"\fkube_cluster\x18\x02 \x01(\tR\vkubeCluster\"{\n" +
+	"\fkube_cluster\x18\x02 \x01(\tR\vkubeCluster\"\x97\x01\n" +
 	"\x12DeployTargetOption\x12/\n" +
 	"\x06target\x18\x01 \x01(\v2\x17.fleetgrpc.DeployTargetR\x06target\x12\x1c\n" +
 	"\tavailable\x18\x02 \x01(\bR\tavailable\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"\x8f\x01\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x1a\n" +
+	"\bwarnings\x18\x04 \x03(\tR\bwarnings\"\x8f\x01\n" +
 	"\bHostTool\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06binary\x18\x02 \x01(\tR\x06binary\x12 \n" +

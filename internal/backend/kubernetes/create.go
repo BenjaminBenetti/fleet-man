@@ -572,6 +572,7 @@ func (c *creation) preflight(ctx context.Context, cfg *devcli.Config) error {
 	if _, err := podspec.Admit(ctx, c.cs, in, r); err != nil {
 		return classify(err)
 	}
+	c.noteAudio(ctx, cfg)
 	return nil
 }
 

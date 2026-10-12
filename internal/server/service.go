@@ -37,6 +37,10 @@ type service struct {
 	// relay sockets the daemon's children and instances connect to.
 	agent       *agentHub
 	gitHostKeys gitHostKeyHub
+	// repoChecks keeps what InspectRepo's check/kubernetes read of each
+	// remote, for the Deploy row of a fleet with no checkout on this host
+	// yet (deploy_findings.go). Its zero value is ready.
+	repoChecks repoChecks
 	// instanceMCP serves the fleet MCP server into the instances of fleets
 	// with the Fleet MCP setting on (mcp_instance.go). Its sync loop is
 	// started by the serve loop; without it (newService() tests) it is inert.

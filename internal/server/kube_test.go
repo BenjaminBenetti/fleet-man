@@ -23,6 +23,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	kubecheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/owner"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
@@ -743,7 +744,7 @@ func TestKubeDeployTargets(t *testing.T) {
 
 	clusterTargets := func() []fleet.DeployTargetOption {
 		var out []fleet.DeployTargetOption
-		for _, o := range f.svc.deployTargetOptions("git@example.com:a.git") {
+		for _, o := range f.svc.deployTargetOptions("git@example.com:a.git", kubecheck.Config{}) {
 			if o.Target.Backend == fleet.BackendKubernetes {
 				out = append(out, o)
 			}
@@ -765,7 +766,7 @@ func TestKubeDeployTargets(t *testing.T) {
 	// seed takes into the pod: every cluster is listed for them too, and
 	// only Coder and Codespaces are dropped.
 	var templateClusters []string
-	for _, o := range f.svc.deployTargetOptions("file:///srv/template") {
+	for _, o := range f.svc.deployTargetOptions("file:///srv/template", kubecheck.Config{}) {
 		switch o.Target.Backend {
 		case fleet.BackendKubernetes:
 			templateClusters = append(templateClusters, o.Target.KubeCluster)

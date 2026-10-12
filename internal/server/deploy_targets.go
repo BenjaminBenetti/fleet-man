@@ -9,6 +9,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	kubecheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
@@ -36,6 +37,7 @@ var daemonHostname = os.Hostname
 // only what any client could already learn by creating an instance.
 func (s *service) ListDeployTargets(_ context.Context, req *fleetgrpc.ListDeployTargetsRequest) (*fleetgrpc.ListDeployTargetsReply, error) {
 	remote := ""
+	var repo kubecheck.Config
 	if name := req.GetFleet(); name != "" {
 		st, err := state.Load()
 		if err != nil {
@@ -43,11 +45,12 @@ func (s *service) ListDeployTargets(_ context.Context, req *fleetgrpc.ListDeploy
 		}
 		if f, ok := st.Fleets[name]; ok {
 			remote = f.Remote
+			repo = s.fleetRepoConfig(f)
 		}
 	}
 	host, _ := daemonHostname()
 	return &fleetgrpc.ListDeployTargetsReply{
-		Targets:       protoconv.DeployTargetOptionsToProto(s.deployTargetOptions(remote)),
+		Targets:       protoconv.DeployTargetOptionsToProto(s.deployTargetOptions(remote, repo)),
 		DefaultTarget: protoconv.DeployTargetToProto(defaultTarget(remote)),
 		HostTools:     protoconv.HostToolsToProto(deps.HostBuildTools(daemonLookPath)),
 		Host:          host,
@@ -58,8 +61,9 @@ func (s *service) ListDeployTargets(_ context.Context, req *fleetgrpc.ListDeploy
 // remote can use: a file:// template fleet drops the targets that cannot copy
 // a template (Coder, Codespaces). Each is available when the CLI it needs is
 // on this host's PATH. The connected clusters follow, one target each
-// (kube_targets.go), for a template fleet too.
-func (s *service) deployTargetOptions(remote string) []fleet.DeployTargetOption {
+// (kube_targets.go), for a template fleet too, judged also by what repo, the
+// fleet's devcontainer.json, asks of them (deploy_findings.go).
+func (s *service) deployTargetOptions(remote string, repo kubecheck.Config) []fleet.DeployTargetOption {
 	template := fleet.IsTemplateRemote(remote)
 	var out []fleet.DeployTargetOption
 	for _, target := range fleet.DeployTargets() {
@@ -75,7 +79,7 @@ func (s *service) deployTargetOptions(remote string) []fleet.DeployTargetOption 
 		}
 		out = append(out, option)
 	}
-	return append(out, s.kube.deployTargets()...)
+	return append(out, s.kube.deployTargets(repo, deployAudioWanted())...)
 }
 
 // rememberedTarget returns the remembered default target (config.json
