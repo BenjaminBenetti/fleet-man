@@ -283,6 +283,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.dlg.fleet = fleetName
 			fleetPage.addInst.targets = targets.available()
 			fleetPage.addInst.unavailable = targets.unavailableClusters()
+			fleetPage.addInst.warnings = targets.warnings()
 			fleetPage.addInst.target = preferred
 			fleetPage.addInst.color = instanceColorWhite
 			fleetPage.dlg.row = addInstanceRowName

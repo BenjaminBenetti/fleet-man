@@ -10,6 +10,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/inspector"
 	devcontainercheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/devcontainer"
 	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
+	kubecheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/kubernetes"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -59,6 +60,16 @@ func (s *service) InspectRepo(ctx context.Context, req *fleetgrpc.InspectRepoReq
 	}
 
 	reply := &fleetgrpc.InspectRepoReply{HasDevcontainer: hasDevcontainer}
+	if hasDevcontainer && req.GetBranch() == "" {
+		// What the default branch asks of a cluster, for the Deploy row of
+		// the fleet this inspection is usually about to add, which has no
+		// checkout on this host until its first instance (deploy_findings.go).
+		if cfg, err := kubecheck.Read(repo); err == nil {
+			s.repoChecks.put(remoteURL, cfg)
+		} else {
+			flog.Warn("inspect: kubernetes check failed", "remote", remoteURL, "err", err)
+		}
+	}
 	if req.GetDetectHomeDir() {
 		// Home-dir detection is best-effort by design: "no hint" (no
 		// devcontainer.json, no remoteUser/containerUser, image unreadable) is an

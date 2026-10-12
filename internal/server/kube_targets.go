@@ -13,6 +13,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	kubecheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -22,8 +23,12 @@ import (
 // the daemon host has docker and the devcontainer CLI (images are built
 // there); otherwise the reason says which is missing. A template (file://)
 // fleet lists them too: its workspace is copied on the daemon host, and the
-// seed takes it into the pod from there, as it does a clone.
-func (m *kubeManager) deployTargets() []fleet.DeployTargetOption {
+// seed takes it into the pod from there, as it does a clone. repo is what
+// the fleet's devcontainer.json asks of a cluster (check/kubernetes): a
+// compose devcontainer makes every target unavailable, and what a create
+// would be refused for or lack on one is that target's warnings; audio says
+// whether either audio direction is on.
+func (m *kubeManager) deployTargets(repo kubecheck.Config, audio bool) []fleet.DeployTargetOption {
 	var missingTools []string
 	for _, tool := range deps.HostBuildTools(daemonLookPath) {
 		if !tool.Found {
@@ -32,16 +37,55 @@ func (m *kubeManager) deployTargets() []fleet.DeployTargetOption {
 	}
 	var out []fleet.DeployTargetOption
 	for _, st := range m.statuses() {
-		option := fleet.DeployTargetOption{Target: fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: st.GetCluster().GetId()}, Available: true}
-		switch {
-		case !preflight.Usable(st.GetState()):
-			option.Available, option.Reason = false, clusterStateReason(st)
-		case len(missingTools) > 0:
-			option.Available, option.Reason = false, strings.Join(missingTools, " and ")+" not found where fleetd runs"
-		}
-		out = append(out, option)
+		out = append(out, clusterTargetOption(st, missingTools, repo, audio))
 	}
 	return out
+}
+
+// clusterTargetOption is the Deploy option of the connection st reports on.
+func clusterTargetOption(st *fleetgrpc.KubeClusterStatus, missingTools []string, repo kubecheck.Config, audio bool) fleet.DeployTargetOption {
+	option := fleet.DeployTargetOption{Target: fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: st.GetCluster().GetId()}, Available: true}
+	findings := kubecheck.Check(repo, checkCluster(st), audio)
+	switch {
+	case findings.Refusal != "":
+		// The repository's, whatever the cluster's health: no cluster
+		// takes it.
+		option.Available, option.Reason = false, findings.Refusal
+	case !preflight.Usable(st.GetState()):
+		option.Available, option.Reason = false, clusterStateReason(st)
+	case len(missingTools) > 0:
+		option.Available, option.Reason = false, strings.Join(missingTools, " and ")+" not found where fleetd runs"
+	default:
+		option.Warnings = findings.Warnings
+	}
+	return option
+}
+
+// checkCluster is what check/kubernetes needs of the connection st reports
+// on, from its last checks, read the way a create's translation reads them:
+// no root when admission refuses root pods (instanceIdentity), sysbox when
+// the connection's runtime class is one, or it pins none and the cluster
+// offers one (the privilege policy's sysboxClass).
+func checkCluster(st *fleetgrpc.KubeClusterStatus) kubecheck.Cluster {
+	rec, caps := st.GetCluster(), st.GetCapabilities()
+	c := kubecheck.Cluster{Name: rec.DisplayNameOrID()}
+	if caps == nil {
+		return c
+	}
+	c.Known = true
+	c.NoRoot = caps.GetAdmission() != nil && !caps.GetAdmission().GetUnprivileged()
+	c.PrivilegedAllowed = caps.GetPrivilegedAllowed()
+	c.Version = caps.GetVersion()
+	if rc := rec.GetRuntimeClass(); rc != "" {
+		c.Sysbox = strings.Contains(rc, "sysbox")
+	} else {
+		for _, class := range caps.GetRuntimeClasses() {
+			if strings.Contains(class, "sysbox") {
+				c.Sysbox = true
+			}
+		}
+	}
+	return c
 }
 
 // clusterStateReason says why a connection in st cannot take a create.

@@ -30,6 +30,12 @@ message DeployTargetOption {
   bool available = 2;
   // reason says why the target is unavailable; empty when it is available.
   string reason = 3;
+  // warnings are what a create in this fleet would meet on an available
+  // target, as the fleet's devcontainer.json reads (the inspector's
+  // check/kubernetes: Docker-in-Docker on a cluster that allows no
+  // privileged pods, a prebuilt image on one without root), each naming the
+  // target; the New instance dialog shows them when the target is picked.
+  repeated string warnings = 4;
 }
 
 // HostTool is one tool on the daemon host, as Settings -> Tool Status lists it.
@@ -44,7 +50,10 @@ message HostTool {
 message ListDeployTargetsRequest {
   // fleet narrows the list to the targets that fleet's remote can use: a
   // file:// template fleet is copied into each instance, which only the
-  // devcontainer target can consume. Empty or unknown: no narrowing.
+  // devcontainer target and the clusters can consume. Its devcontainer.json
+  // (the newest checkout on the daemon host, else the last inspection of its
+  // remote) decides the cluster targets' warnings, and makes every one
+  // unavailable for a compose devcontainer. Empty or unknown: no narrowing.
   string fleet = 1;
 }
 

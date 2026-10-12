@@ -563,6 +563,50 @@ func TestDeployRowListsUnavailableClusters(t *testing.T) {
 	}
 }
 
+// A picked cluster's warnings (check/kubernetes findings of the fleet's
+// devcontainer.json) show under the Deploy row; another target's do not, and
+// a compose fleet's clusters are listed unavailable with the daemon's reason.
+func TestDeployRowShowsThePickedClustersWarnings(t *testing.T) {
+	m, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	m.kubeClusters.Clusters = append(m.kubeClusters.Clusters, kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY))
+	mk := fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "mk-1"}
+	eu := fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "eu-1"}
+	warning := "prod-eu: Docker-in-Docker needs privileged pods, which are not allowed there (Allow privileged pods, Settings → Kubernetes)"
+	list := deployTargetList{options: []fleet.DeployTargetOption{
+		{Target: fleet.DeployTarget{Backend: fleet.BackendDevcontainer}, Available: true},
+		{Target: mk, Available: true},
+		{Target: eu, Available: true, Warnings: []string{warning}},
+		{Target: fleet.DeployTarget{Backend: fleet.BackendCoder}, Reason: "coder CLI not found where fleetd runs", Warnings: []string{"never shown"}},
+	}}
+	if got := list.warnings(); len(got) != 1 || len(got[eu]) != 1 {
+		t.Fatalf("warnings %v, want only prod-eu's", got)
+	}
+	fp.mode = viewAddInstance
+	fp.dlg.fleet = "alpha"
+	fp.addInst.targets = list.available()
+	fp.addInst.warnings = list.warnings()
+	fp.addInst.target = eu
+	if view := flatText(fp.renderAddInstanceDialog(m)); !strings.Contains(view, "⚠ prod-eu: Docker-in-Docker needs privileged pods") {
+		t.Errorf("the picked cluster's warning is missing:\n%s", view)
+	}
+	fp.addInst.target = mk
+	if view := flatText(fp.renderAddInstanceDialog(m)); strings.Contains(view, "Docker-in-Docker") {
+		t.Errorf("another cluster's warning shows:\n%s", view)
+	}
+
+	compose := deployTargetList{options: []fleet.DeployTargetOption{
+		{Target: fleet.DeployTarget{Backend: fleet.BackendDevcontainer}, Available: true},
+		{Target: mk, Reason: "compose devcontainers are not supported on Kubernetes"},
+	}}
+	fp.addInst.targets = compose.available()
+	fp.addInst.unavailable = compose.unavailableClusters()
+	fp.addInst.warnings = compose.warnings()
+	fp.addInst.target = fleet.DeployTarget{Backend: fleet.BackendDevcontainer}
+	if view := flatText(fp.renderAddInstanceDialog(m)); !strings.Contains(view, "☸ minikube ✕ compose devcontainers are not supported on Kubernetes") {
+		t.Errorf("a compose fleet's cluster is not listed unavailable:\n%s", view)
+	}
+}
+
 // For a remote daemon the logs view reads the logs through this binary's
 // `fleet logs` (the Logs RPC), not the daemon host's argv.
 func TestLogsViewOfARemoteDaemon(t *testing.T) {

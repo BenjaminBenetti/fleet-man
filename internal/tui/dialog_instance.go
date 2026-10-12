@@ -80,6 +80,7 @@ func (fleetPage *fleetPage) openEditInstanceDialog(m *model) tea.Cmd {
 	fleetPage.addInst.target = instance.DeployTarget()
 	fleetPage.addInst.targets = nil
 	fleetPage.addInst.unavailable = nil
+	fleetPage.addInst.warnings = nil
 	fleetPage.addInst.color = instance.Color
 	if fleetPage.addInst.color == "" {
 		fleetPage.addInst.color = instanceColorWhite
@@ -593,8 +594,12 @@ type addInstanceState struct {
 	// unavailable are the cluster targets the daemon cannot create on now,
 	// with its reasons, listed under the Deploy row.
 	unavailable []fleet.DeployTargetOption
-	color       string
-	editing     bool
+	// warnings are what a create in the fleet would meet on an available
+	// target (Docker-in-Docker on a cluster where privileged pods
+	// are not allowed, say), shown under the Deploy row while it is picked.
+	warnings map[fleet.DeployTarget][]string
+	color    string
+	editing  bool
 	// template is set when the target fleet's remote is a file:// template
 	// dir: the branch row is disabled and the daemon offers only the
 	// targets that provision from a workspace copied on its host
@@ -654,6 +659,9 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 		}
 		if note := deployBuildkitNote(m, fleetPage.dlg.fleet, target); note != "" {
 			deployField += "\n          " + warnTextStyle.Render("⚠ "+note)
+		}
+		for _, w := range fleetPage.addInst.warnings[target] {
+			deployField += "\n          " + warnTextStyle.Render("⚠ "+w)
 		}
 		for _, option := range fleetPage.addInst.unavailable {
 			deployField += "\n            " + dimStyle.Render(deployTargetLabel(m, option.Target)+"  ") +

@@ -14,6 +14,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	kubecheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 	"github.com/BenjaminBenetti/fleet-man/internal/startup"
@@ -238,6 +239,28 @@ func (c *creation) checkAudioWith(ctx context.Context, sess *AgentSession, rec *
 	if audioWanted() {
 		c.warn(ctx, AudioUnavailableMessage(c.rec.GetDisplayName()))
 	}
+}
+
+// noteAudio says in the job's log, before the build, what the inspector's
+// check/kubernetes finds of a prebuilt image on a cluster without root: fleet
+// gives the audio stack only to images it builds (addAudioLayer), and the
+// devcontainer CLI builds none for an image-only configuration without
+// features, so the instance has audio only if the image carries the stack.
+// Whether it does is known once the pod runs (checkAudio, which warns).
+func (c *creation) noteAudio(ctx context.Context, cfg *devcli.Config) {
+	if !c.identity.NonRoot || !audioWanted() {
+		return
+	}
+	repo, err := kubecheck.Parse(cfg.Configuration)
+	if err != nil {
+		return
+	}
+	note := kubecheck.AudioWarning(repo, kubecheck.Cluster{Name: c.rec.GetDisplayName(), Known: true, NoRoot: true})
+	if note == "" {
+		return
+	}
+	_, _ = fmt.Fprintf(backend.JobLogFrom(ctx), "%s (checked once the instance runs)\n", note)
+	flog.Info("kube create: a prebuilt image on a cluster without root gets no audio layer", "fleet", c.id.fleet, "instance", c.id.name, "cluster", c.id.cluster, "image", repo.Prebuilt)
 }
 
 // audioWanted reports whether either audio direction is on (the daemon's

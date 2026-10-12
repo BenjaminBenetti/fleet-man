@@ -36,6 +36,7 @@ func DeployTargetOptionsToProto(in []fleet.DeployTargetOption) []*fleetgrpc.Depl
 			Target:    DeployTargetToProto(o.Target),
 			Available: o.Available,
 			Reason:    o.Reason,
+			Warnings:  o.Warnings,
 		})
 	}
 	return out
@@ -49,6 +50,7 @@ func DeployTargetOptionsFromProto(in []*fleetgrpc.DeployTargetOption) []fleet.De
 			Target:    DeployTargetFromProto(o.GetTarget()),
 			Available: o.GetAvailable(),
 			Reason:    o.GetReason(),
+			Warnings:  o.GetWarnings(),
 		})
 	}
 	return out

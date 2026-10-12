@@ -57,6 +57,23 @@ func (l deployTargetList) unavailableClusters() []fleet.DeployTargetOption {
 	return out
 }
 
+// warnings returns what a create in the fleet would meet on each available
+// target that has something to say (the daemon's check/kubernetes findings
+// of the fleet's devcontainer.json): the Deploy row shows a target's while
+// it is picked.
+func (l deployTargetList) warnings() map[fleet.DeployTarget][]string {
+	var out map[fleet.DeployTarget][]string
+	for _, option := range l.options {
+		if option.Available && len(option.Warnings) > 0 {
+			if out == nil {
+				out = map[fleet.DeployTarget][]string{}
+			}
+			out[option.Target] = option.Warnings
+		}
+	}
+	return out
+}
+
 // preferred returns the target the dialog opens on: the default when it is
 // available, else the first available target. ok is false when none is.
 func (l deployTargetList) preferred() (fleet.DeployTarget, bool) {

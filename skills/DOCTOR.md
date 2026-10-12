@@ -474,6 +474,164 @@ docker ps -a --filter "label=devcontainer.local_folder" --format "table {{.ID}}\
 
 ---
 
+## 17. Kubernetes Clusters (optional)
+
+Fleet can run instances as pods on Kubernetes clusters. This section is
+**optional**: skip it unless the user runs instances on a cluster, i.e. `fleet
+cluster ls` lists a connection. Never report "no cluster connected" as an
+issue. Everything here runs **on the daemon host** (where fleetd runs); for a
+remote fleet, the `fleet` commands below already answer from there, but
+`kubectl` and `docker` checks must run on that host. The reference is
+[Fleet on Kubernetes](https://github.com/BenjaminBenetti/fleet-man/blob/main/doc/kubernetes.md).
+
+### 17.1 Connections and their health
+
+```bash
+fleet cluster ls
+```
+
+- **Expected:** every connection `ready` or `limited` (usable; `fleet cluster
+  ls <name>` prints the warnings that make it limited).
+- **Otherwise** run the checks, which print a fix under each failing one:
+  ```bash
+  fleet cluster test <name>          # exit 0 when ready or limited
+  fleet cluster test --deep <name>   # also throwaway-pod probes (minutes)
+  ```
+
+| State | Fix |
+|---|---|
+| `unreachable` | the API server does not answer from the daemon host: VPN, the cluster being up, the kubeconfig's server URL |
+| `unauthorized` | the login expired: `fleet cluster login <name>` (relays the device code), or TUI Settings → Kubernetes → [ login on fleetd ] |
+| `plugin missing` | install the context's exec plugin on the daemon host, or add its folder: `fleet cluster set <name> extra_path=/path/to/bin` |
+| `context missing` | the context left the pinned kubeconfig: restore it, or re-point the connection (the cluster editor's Context row) |
+| `forbidden` | grant the verbs the `rbac` check lists (see 17.3) |
+| `misconfigured` | the check names the setting or namespace to fix |
+| `owner conflict` | another fleet daemon holds this connection (a copied `~/.fleet`); stop it, or wait for its Lease to expire |
+
+### 17.2 Build tools on the daemon host
+
+Cluster images are built where fleetd runs, so cluster targets need Docker
+(section 2) and the devcontainer CLI (section 5) **on the daemon host**, even
+when the user's own machine has neither. A missing one shows as `docker not
+found where fleetd runs` on every cluster Deploy option, and in TUI Settings →
+Tool Status as `on fleetd @ <host>`.
+
+### 17.3 Kubeconfig, namespace and permissions
+
+```bash
+fleet cluster contexts                                 # what fleetd's kubeconfig holds
+kubectl --context <ctx> get namespace <ns>             # the namespace exists
+kubectl --context <ctx> -n <ns> auth can-i create pods/exec
+kubectl --context <ctx> -n <ns> auth can-i --list      # everything fleet's identity may do
+```
+
+- **Namespace missing:** fleet never creates one unasked. Create it, or let
+  `fleet cluster add <ctx> --create-namespace` (or the cluster editor's
+  `[ Create ]`) do it, which needs `namespaces create`.
+- **RBAC:** the `rbac` check names each missing verb. The full Role is in
+  [What you need](https://github.com/BenjaminBenetti/fleet-man/blob/main/doc/kubernetes.md#2-what-you-need).
+  Ask before applying RBAC changes: they are the cluster owner's call.
+
+### 17.4 Admission: root, privileged pods, debug capabilities
+
+`fleet cluster test <name>` reports the namespace's admission:
+
+- `admission_unprivileged` warns `root containers denied`: the namespace
+  (pod-security `restricted`) runs every container as one non-root user, with
+  no apt or sudo. Fix: a namespace at the `baseline` level or looser.
+- `admission_privileged` warns `Allow privileged pods is off`: Docker-in-Docker,
+  the docker.sock sidecar and `--device` are refused. Fix, if the user accepts
+  that the node becomes the isolation boundary: `fleet cluster set <name>
+  allow_privileged=true` (ideally with a dedicated node pool,
+  `node_selector=` / `tolerations=`), or a sysbox runtime class
+  (`runtime_class=`).
+- `admission_debug_caps` warns that SYS_PTRACE / unconfined seccomp are denied:
+  they are dropped with a warning (`debug_capabilities=require` fails instead).
+
+### 17.5 Storage
+
+- `root_storage` and `shared_storage` name the StorageClasses Auto picked and
+  why. A disk that never binds fails the create `kubernetes:pvc_pending`:
+  `kubectl -n <ns> describe pvc <name>` says why.
+- `fleet cluster test --storage <class> <name>` runs the multi-node share test
+  on a class now. A limited `each fleet on one node` means no class passed: each
+  fleet's instances share one node (a fleet-size cap applies).
+- The first create of a fleet on a connection no deep test has told runs one
+  first (the `testing the cluster` step, minutes): that wait is expected.
+
+### 17.6 Image delivery
+
+- `image_delivery` says how built images reach the nodes (node load on a local
+  cluster, a registry, or the Fleet gateway) and why not.
+- **Registry:** the daemon host's `docker login` for that registry must work;
+  an insecure registry also needs the host Docker's `insecure-registries` and
+  the nodes' containerd config.
+- **Gateway:** TUI Settings → Fleet MCP → **Enable Image Registry**, and a
+  gateway run with `--session-key` and an `https` `--public-url`;
+  `fleet cluster test --deep <name>` has a pod pull through it (`image_pull`).
+- **`ErrImageNeverPull`** on a node-loaded image: the kubelet once pulled the
+  same image under another name and now checks pull credentials. Use registry
+  delivery for that cluster, or set the kubelet's
+  `imagePullCredentialsVerificationPolicy` to `NeverVerify`.
+
+### 17.7 A failed or parked instance
+
+In the TUI, `enter` on the instance says what happened and links the setting
+that fixes it; the MCP `fleet_list` record carries the same `error`. From a
+shell:
+
+```bash
+fleet ls                                               # its status (failed, stopped)
+cat ~/.fleet/logs/<fleet>-<instance>.log               # the creation log (on the daemon host)
+fleet logs <fleet>/<instance>                          # the dev container's output
+kubectl --context <ctx> -n <ns> describe pod <sts>-0   # <sts> is in the container id: k8s:<cid>/<ns>/<sts>@g<n>
+```
+
+| Error code | Fix |
+|---|---|
+| `kubernetes:unsupported:compose` | compose devcontainers do not run on clusters: use Docker for this fleet |
+| `kubernetes:unsupported:privileged`, `…:dood-needs-privileged` | see 17.4 |
+| `kubernetes:unauthorized` | the login expired or its plugin failed: see 17.1 |
+| `kubernetes:misconfigured` | the setting it names; or the API server's certificate did not verify (the kubeconfig's CA or server) |
+| `kubernetes:admission_denied` | a namespace whose admission allows the pod, or change the devcontainer |
+| `kubernetes:quota` | room in the namespace's ResourceQuota, or the connection's `max_instances` / `max_total_disk` |
+| `kubernetes:unschedulable` | a node that fits the pod, or smaller `resources.cpu_request` / `resources.memory_request` |
+| `kubernetes:image_pull` | see 17.6 |
+| `kubernetes:oomkilled` | raise `memory_limit`, then start the instance again |
+| `kubernetes:crash_loop` | `fleet logs` shows why it exits; start it again once fixed |
+| `kubernetes:timeout` | the cluster was slow: raise the wait's `FLEET_KUBE_*_TIMEOUT` where fleetd starts |
+| `kubernetes:interrupted`, `kubernetes:rebuild_failed` | `fleet rebuild <fleet>/<instance>` (or `R`) retries it |
+| `kubernetes:tampered` | the pod or StatefulSet was changed outside fleet: destroy and recreate the instance |
+| `kubernetes:cluster_missing` | the connection was removed: reconnect it, or destroy the instance |
+
+### 17.8 Shared folders
+
+On a cluster, agent logins, `~/.claude.json` and custom mounts are synced
+between the daemon host and the cluster:
+
+```bash
+fleet sync status            # each fleet's folders, what is pending, the shares
+fleet sync wait <fleet>      # exits 1 naming what is behind
+fleet sync conflicts         # conflict copies kept on the daemon host
+```
+
+A row badge `sync paused: <reason>` names the cause (a size cap, a full share,
+the daemon host under 5% free). Each cluster logs in to the agents once per
+fleet: an agent asking to log in on a cluster instance is expected the first
+time.
+
+### 17.9 Leftovers in the cluster
+
+```bash
+fleet cluster gc <name>      # dry run: what no instance record accounts for
+```
+
+- **Fix (only with the user's consent):** `fleet cluster gc <name> --apply`
+  deletes what the listing marks. Mounted volumes, objects younger than an
+  hour and those of existing fleets are kept.
+
+---
+
 ## Summary Template
 
 After running all checks, report your findings using this format:
@@ -497,6 +655,7 @@ Optional (installed):
   coder:         [OK / AUTH ISSUE]
   tmux:          OK
   Agents:        claude, codex
+  Kubernetes:    [only if a cluster is connected: <name> ready / limited (why) / ISSUE]
 
 Issues Fixed:
 - [list each issue you fixed — never list missing optional tools]

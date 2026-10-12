@@ -199,3 +199,30 @@ for the ~600 MB image and at `FLEET_NIGHTLY_VM_DIR` for the VM's disk).
 
 The QA image pins kubectl, minikube, kind and k3s; `qa/env/README.md` covers
 multi-node kind and k3s clusters.
+
+### Live tests against a cluster
+
+Go tests that need a real cluster are gated by an environment variable, so
+`go test ./...` stays cluster-free. Each makes its own `fleet-it-*` namespaces
+and deletes them:
+
+```bash
+FLEET_KUBE_TEST_CONTEXT=minikube go test -count=1 -run Live ./internal/...
+FLEET_CONFORMANCE=kubernetes:minikube go test -count=1 ./internal/backend/conformance/
+```
+
+`FLEET_KUBE_TEST_IMAGE` picks the dev image the backend's live tests run and
+`FLEET_TEST_TMUX_BUNDLE` a tmux bundle for it. The preflight probes and the
+cache runtime have gates of their own, each naming a context
+(`FLEET_PREFLIGHT_STORAGE_LIVE`, `FLEET_PREFLIGHT_SHARE_LIVE`,
+`FLEET_PREFLIGHT_NETWORK_LIVE`, `FLEET_KUBERT_LIVE`; the test's skip message
+says what else it needs). The pod seed's and pod-init's root tests skip
+unless run as root: `go test -c` the package and run the binary under
+`sudo FLEET_PODSEED_REQUIRE_ROOT=1`, which turns a skip into a failure.
+`FLEET_PODINIT_DOCKER=1` runs pod-init as PID 1 in a docker container.
+
+fleetd serves pods only a pod build of exactly its own source (`make
+fleet-pod`, or `FLEET_POD_BINARY_<ARCH>`): `-trimpath` drops the version a
+release daemon checks, so such a build is refused. After `make dist`, `make
+check-binstore` checks that each daemon build serves the pod builds beside
+it.

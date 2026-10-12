@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: on a cluster, a compose devcontainer is refused before anything is built or applied: the create fails kubernetes:unsupported:compose, no object carries the instance's key, and destroying it leaves nothing.
+# Description: on a cluster, a compose devcontainer is refused before anything is built or applied: the create fails kubernetes:unsupported:compose, no object carries the instance's key, the New instance dialog then lists the cluster unavailable for the fleet, and destroying it leaves nothing.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
+itest_cleanup() { tui_kill; }
 itest_begin
 
 itest_backend_is kubernetes || pass "kubernetes only: compose devcontainers are not supported on a cluster"
@@ -47,7 +48,25 @@ assert_equals "" "${left}" "nothing is applied for a refused compose devcontaine
 log="${HOME}/.fleet/logs/${FIXTURE_REPO_NAME}-alpha.log"
 assert_not_contains "$(cat "${log}")" "==> building image" "a compose devcontainer is refused before the build"
 
+# The fleet's checkout on the daemon host is a compose devcontainer, so the
+# New instance dialog lists the cluster as unavailable with the reason (the
+# inspector's check/kubernetes) instead of offering it.
+cluster=$(itest_kube_clusters 'print $c[0]{display_name} || $c[0]{id}')
+tui_spawn
+tui_wait_for "alpha" 15 || fail "the TUI did not show the fleet"
+info "pressing 'a' on the fleet header"
+tui_send a
+tui_wait_for "instance-name" 5 || fail "the New instance dialog did not open"
+# The dialog box wraps the reason; read it with the box's borders taken out.
+dialog=$(tui_capture | perl -CS -Mutf8 -pe 's/[│╭╮╰╯─]//g' | tr -s ' \n' '  ')
+assert_contains "${dialog}" "☸ ${cluster} ✕ compose devcontainers are not supported on Kubernetes" "the Deploy row should list the cluster unavailable for a compose fleet"
+tui_send Escape
+sleep 0.3
+tui_send q
+tui_wait_for_absent "instance-name" 5 || fail "the New instance dialog did not close"
+tui_kill
+
 "${FLEET_BIN}" down "${inst}" >/dev/null
 itest_k8s_wait_no_objects "${key}" 60
 
-pass "a compose devcontainer is refused before the build (kubernetes:unsupported:compose), nothing left"
+pass "a compose devcontainer is refused before the build (kubernetes:unsupported:compose) and listed unavailable on the Deploy row, nothing left"

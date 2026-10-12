@@ -364,6 +364,19 @@ func TestMcpRestoreBackupDocuments(t *testing.T) {
 	if !strings.Contains(out.Procedure[0], "fleet server") {
 		t.Errorf("first step should stop the daemon, got %q", out.Procedure[0])
 	}
+	// The warning names every file the contents mark as a secret.
+	for _, c := range out.Contents {
+		if !strings.Contains(c.Description, "SECRET") {
+			continue
+		}
+		want := c.Name
+		if strings.Contains(c.Name, "buildkit") {
+			want = "Buildkit CA keys"
+		}
+		if !strings.Contains(out.Warning, want) {
+			t.Errorf("the warning does not name the secret %s (%q): %q", c.Name, want, out.Warning)
+		}
+	}
 }
 
 func TestMcpRestoreBackupNoBackups(t *testing.T) {

@@ -14,11 +14,14 @@ type DeployTarget struct {
 }
 
 // DeployTargetOption is a DeployTarget as the daemon offers it: whether a
-// create can go there now and, when it cannot, why.
+// create can go there now and, when it cannot, why; and, when it can, what a
+// create of the fleet would meet there (Warnings, from the inspector's
+// check/kubernetes).
 type DeployTargetOption struct {
 	Target    DeployTarget
 	Available bool
 	Reason    string
+	Warnings  []string
 }
 
 // deployTargets lists every target this build knows that needs no

@@ -45,7 +45,7 @@ func TestDeployTargetUnspecified(t *testing.T) {
 
 func TestDeployTargetWirePlacement(t *testing.T) {
 	pinArity[fleet.DeployTarget](t, 2)
-	pinArity[fleet.DeployTargetOption](t, 3)
+	pinArity[fleet.DeployTargetOption](t, 4)
 
 	pt := DeployTargetToProto(fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "kc"})
 	if pt.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES || pt.GetKubeCluster() != "kc" {
@@ -55,8 +55,9 @@ func TestDeployTargetWirePlacement(t *testing.T) {
 		Target:    fleet.DeployTarget{Backend: fleet.BackendCoder},
 		Available: true,
 		Reason:    "why",
+		Warnings:  []string{"careful"},
 	}})
-	if len(opts) != 1 || opts[0].GetTarget().GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODER || !opts[0].GetAvailable() || opts[0].GetReason() != "why" {
+	if len(opts) != 1 || opts[0].GetTarget().GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODER || !opts[0].GetAvailable() || opts[0].GetReason() != "why" || len(opts[0].GetWarnings()) != 1 || opts[0].GetWarnings()[0] != "careful" {
 		t.Fatalf("deploy target option wire placement wrong: %v", opts)
 	}
 }

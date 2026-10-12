@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	kubecheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/server/remote"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -26,7 +27,7 @@ func (*kubeManager) startImages(context.Context, bool) []remote.Option { return 
 
 func (*kubeManager) attachTunnel(*remote.Manager) {}
 
-func (*kubeManager) deployTargets() []fleet.DeployTargetOption { return nil }
+func (*kubeManager) deployTargets(kubecheck.Config, bool) []fleet.DeployTargetOption { return nil }
 
 func (*kubeManager) defaultCluster(string) string { return "" }
 
