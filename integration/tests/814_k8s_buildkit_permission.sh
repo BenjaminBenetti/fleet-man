@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: on a cluster the fleet's Buildkit toggle decides and the connection's allow_shared_buildkit permits: turned off, the fleet's server there goes, and an instance created or started there runs without it with its banner naming the setting; turned on, the server comes back; in a namespace whose pod-security level is baseline, shared Buildkit either runs or the instance's banner says the admission denies it, never a silent skip.
+# Description: on a cluster the fleet's Buildkit toggle decides and the connection's allow_shared_buildkit permits: turned off, the fleet's server there goes, and an instance created or started there runs without it with its banner naming the setting; turned on, the server comes back and the running instances get it at once (a certificate, the banner line gone), no start needed; in a namespace whose pod-security level is baseline, shared Buildkit either runs or the instance's banner says the admission denies it, never a silent skip.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -46,9 +46,17 @@ info "a start there does too"
 "${FLEET_BIN}" start "${FIXTURE_REPO_NAME}/alpha"
 assert_contains "$(cat "$(warn_file alpha)" 2>/dev/null)" "allow_shared_buildkit" "alpha's banner after its start names the setting"
 
-info "allowed again: the server comes back, and a start gives the instance a certificate"
+info "allowed again: the server comes back, and the running instances get it now, with no start"
 "${FLEET_BIN}" cluster set itest allow_shared_buildkit=true >/dev/null
 itest_wait_service "${FIXTURE_REPO_NAME}" buildkit running 240
+# beta was made while the connection refused the server; alpha started then.
+deadline=$(( $(date +%s) + $(_scale_timeout 120) ))
+until has_credential beta && ! grep -q allow_shared_buildkit "$(warn_file alpha)" 2>/dev/null; do
+  [ "$(date +%s)" -lt "${deadline}" ] \
+    || fail "the running instances did not get shared Buildkit once it was allowed again (beta's certificate: $(has_credential beta && echo yes || echo no); alpha's banner: $(cat "$(warn_file alpha)" 2>/dev/null))"
+  sleep 2
+done
+info "a start gives an instance a certificate too"
 "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/beta" -- sh -c 'rm -rf "$HOME/.fleet/buildkit"'
 "${FLEET_BIN}" stop "${FIXTURE_REPO_NAME}/beta"
 "${FLEET_BIN}" start "${FIXTURE_REPO_NAME}/beta"

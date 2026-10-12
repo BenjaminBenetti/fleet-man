@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
@@ -289,13 +290,16 @@ func prepareClusterFleets(clusterID string) {
 // it on and an instance on Kubernetes connection clusterID, so a change of
 // whether the connection runs it (its Allow shared Buildkit) reaches the
 // server now: turned off, the server goes; turned on, it comes back, and the
-// fleet's running instances there get their credentials at the next check
-// (renewSharedServiceCredentials, run right after). Best-effort, logged.
+// fleet's running instances there get the shared builder now, as a start
+// gives it (giveRunningBuilders), not at their next start. The others'
+// credentials follow (renewSharedServiceCredentials, run right after).
+// Best-effort, logged.
 func reensureClusterBuildkit(ctx context.Context, clusterID string) {
 	rt := clusterSharedServices(clusterID)
 	if rt == nil {
 		return
 	}
+	var serving []string
 	for _, name := range clusterFleets(clusterID, func(f *fleet.Fleet) bool { return f.Settings.BuildkitServer }) {
 		switch err := rt.EnsureService(name, fleet.ServiceBuildkit); {
 		case errors.Is(err, svcruntime.ErrNoEndpoint):
@@ -304,9 +308,71 @@ func reensureClusterBuildkit(ctx context.Context, clusterID string) {
 			flog.Warn("shared services: re-ensuring a fleet's Buildkit on a connection failed", "runtime", rt.Key(), "fleet", name, "err", err)
 		default:
 			flog.Info("shared services: re-ensured a fleet's Buildkit on a connection", "runtime", rt.Key(), "fleet", name)
+			serving = append(serving, name)
 		}
 	}
+	giveRunningBuilders(ctx, rt, clusterID, serving)
 	renewSharedServiceCredentials(ctx)
+}
+
+// giveInstanceBuilder gives a running instance its fleet's shared builder,
+// with a credential of its own, unless it has one (what a start does,
+// svcruntime.BuildkitStart). A package var so tests can see the call without
+// an instance.
+var giveInstanceBuilder = func(rt svcruntime.Runtime, fleetName string, inst *fleet.Instance) (bool, error) {
+	return svcruntime.ConfigureBuildkit(rt, backendutil.NewForInstance(inst, false), fleetName, inst.Name, inst.WorkspaceDir, svcruntime.BuildkitStart)
+}
+
+// buildkitWarnPrefix starts an instance's banner line about its fleet's
+// shared Buildkit (a start's too, reviveSharedServices).
+const buildkitWarnPrefix = "buildkit server: "
+
+// giveRunningBuilders gives the running instances of fleets on connection
+// clusterID the shared builder of rt, their fleet's server there, a few at a
+// time. A failure is a warning on the instance, as on a start; success takes
+// one off (the refusal its start put there while the connection did not
+// allow the server).
+func giveRunningBuilders(ctx context.Context, rt svcruntime.Runtime, clusterID string, fleets []string) {
+	if len(fleets) == 0 {
+		return
+	}
+	st, err := state.Load()
+	if err != nil {
+		flog.Warn("shared services: load state failed", "err", err)
+		return
+	}
+	type running struct {
+		fleet string
+		inst  *fleet.Instance
+	}
+	var todo []running
+	for _, name := range fleets {
+		f := st.Fleets[name]
+		if f == nil {
+			continue
+		}
+		for _, inst := range f.Instances {
+			if inst != nil && inst.Backend == fleet.BackendKubernetes && inst.KubeCluster == clusterID && inst.Status == fleet.StatusRunning && inst.ContainerID != "" {
+				todo = append(todo, running{name, inst})
+			}
+		}
+	}
+	forEachBounded(len(todo), pollerWorkers, func(i int) {
+		r := todo[i]
+		if ctx.Err() != nil {
+			return
+		}
+		configured, err := giveInstanceBuilder(rt, r.fleet, r.inst)
+		line := ""
+		switch {
+		case err != nil:
+			flog.Warn("shared services: giving a running instance the fleet's Buildkit failed", "runtime", rt.Key(), "fleet", r.fleet, "instance", r.inst.Name, "err", err)
+			line = fmt.Sprintf("%s%v", buildkitWarnPrefix, err)
+		case configured:
+			flog.Info("shared services: a running instance got the fleet's Buildkit", "runtime", rt.Key(), "fleet", r.fleet, "instance", r.inst.Name)
+		}
+		state.ReplaceWarnLine(r.fleet, r.inst.Name, buildkitWarnPrefix, line)
+	})
 }
 
 // clusterFleets are the fleets, by name, with an instance on Kubernetes
