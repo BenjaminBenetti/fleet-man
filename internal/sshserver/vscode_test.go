@@ -262,8 +262,9 @@ func TestPostAttachRunsOncePerVSCodeConnection(t *testing.T) {
 	}
 	waitFor(t, func() bool { return strings.Contains(r.log.String(), "==> postAttachCommand: done") })
 	done()
-	if got := lines(out); !reflect.DeepEqual(got, []string{workspace, "named"}) {
-		t.Fatalf("postAttachCommand wrote %q", got)
+	// pwd prints the folder resolved (macOS's /var is /private/var).
+	if real, _ := filepath.EvalSymlinks(workspace); !reflect.DeepEqual(lines(out), []string{real, "named"}) {
+		t.Fatalf("postAttachCommand wrote %q", lines(out))
 	}
 	if real, _ := filepath.EvalSymlinks(filepath.Join(r.home, ".vscode-server")); len(askedDirs) != 1 || askedDirs[0] != real {
 		t.Errorf("owner asked about %q", askedDirs)

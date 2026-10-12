@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -157,7 +158,7 @@ func TestExecRunsAsTheAccountWithItsEnvironment(t *testing.T) {
 	// stdin, then EOF.
 	s, _ := c.NewSession()
 	s.Stdin = strings.NewReader("abc")
-	got, err := s.Output("cat; echo -n :done")
+	got, err := s.Output("cat; printf :done")
 	if err != nil || string(got) != "abc:done" {
 		t.Fatalf("stdin: %q %v", got, err)
 	}
@@ -208,7 +209,11 @@ func TestPTYAndWindowChange(t *testing.T) {
 		t.Fatalf("pty session: %v (%q)", err, out.String())
 	}
 	got := out.String()
-	for _, want := range []string{"/dev/pts/", "TERM=xterm-256color", "30 100", "40 120", "got hello"} {
+	tty := "/dev/pts/"
+	if runtime.GOOS == "darwin" {
+		tty = "/dev/ttys"
+	}
+	for _, want := range []string{tty, "TERM=xterm-256color", "30 100", "40 120", "got hello"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("pty output lacks %q:\n%s", want, got)
 		}
