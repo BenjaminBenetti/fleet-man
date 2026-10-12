@@ -235,3 +235,58 @@ func TestReensureClusterBuildkit(t *testing.T) {
 		t.Fatalf("c2 calls %+v", got)
 	}
 }
+
+// A connection edit of what its cache servers run with re-ensures every
+// service each fleet there has on (the running Deployments take it now);
+// the other connections' are left alone.
+func TestReensureClusterServices(t *testing.T) {
+	isolateFleetDir(t)
+	seedFleets(t, map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{DebCacheServer: true, ImageCacheServer: true}, Instances: []*fleet.Instance{{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"}}},
+		"beta":  {Name: "beta", Settings: fleet.FleetSettings{BuildkitServer: true}, Instances: []*fleet.Instance{{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"}}},
+		"delta": {Name: "delta", Instances: []*fleet.Instance{{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"}}},
+		"gamma": {Name: "gamma", Settings: fleet.FleetSettings{DebCacheServer: true}, Instances: []*fleet.Instance{{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c2"}}},
+	})
+	recs := clusterRecorders(t, svcruntimetest.New("docker"), nil, "c1", "c2")
+	reensureClusterServices(context.Background(), "c1")
+	var want []string
+	for _, svc := range (fleet.FleetSettings{DebCacheServer: true, ImageCacheServer: true}).EnabledSharedServices() {
+		want = append(want, "alpha/"+string(svc))
+	}
+	want = append(want, "beta/buildkit")
+	if got := ensured(recs["c1"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("c1 ensured %v, want %v", got, want)
+	}
+	if got := recs["c2"].Calls(); len(got) != 0 {
+		t.Fatalf("c2 calls %+v", got)
+	}
+}
+
+func TestCacheServersChanged(t *testing.T) {
+	on := true
+	base := fleet.KubeCluster{ID: "c1", Context: "minikube", Namespace: "fleet"}
+	for name, tc := range map[string]struct {
+		edit func(*fleet.KubeCluster)
+		want bool
+	}{
+		"service image":   {func(c *fleet.KubeCluster) { c.ServiceImages.DebCache = "mirror.example/apt-cacher-ng:3" }, true},
+		"cache class":     {func(c *fleet.KubeCluster) { c.CacheStorageClass = "fast" }, true},
+		"cache size":      {func(c *fleet.KubeCluster) { c.CacheSizes.ImageCache = "40Gi" }, true},
+		"node selector":   {func(c *fleet.KubeCluster) { c.NodeSelector = map[string]string{"pool": "fleet"} }, true},
+		"toleration":      {func(c *fleet.KubeCluster) { c.Tolerations = []fleet.KubeToleration{{Key: "fleet", Operator: "Exists"}} }, true},
+		"service account": {func(c *fleet.KubeCluster) { c.ServiceAccount = "fleet" }, true},
+		"memory limit":    {func(c *fleet.KubeCluster) { c.MemoryLimit = "8Gi" }, true},
+		"privileged":      {func(c *fleet.KubeCluster) { c.AllowPrivileged = &on }, true},
+		"display name":    {func(c *fleet.KubeCluster) { c.DisplayName = "lab" }, false},
+		"disk size":       {func(c *fleet.KubeCluster) { c.DiskSize = "80Gi" }, false},
+		"empty selector": {func(c *fleet.KubeCluster) {
+			c.NodeSelector, c.Tolerations = map[string]string{}, []fleet.KubeToleration{}
+		}, false},
+	} {
+		next := base
+		tc.edit(&next)
+		if got := cacheServersChanged(base, next); got != tc.want {
+			t.Errorf("%s: cacheServersChanged = %v, want %v", name, got, tc.want)
+		}
+	}
+}

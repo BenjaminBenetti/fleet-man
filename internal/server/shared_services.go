@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -307,6 +308,70 @@ func reensureClusterBuildkit(ctx context.Context, clusterID string) {
 		}
 	}
 	renewSharedServiceCredentials(ctx)
+}
+
+// reensureClusterServices re-ensures every service each fleet with an
+// instance on Kubernetes connection clusterID has on, so a change of what
+// the connection's cache servers run with (their images, node placement,
+// service account, memory limit, volumes, privilege) reaches the servers
+// running now, not only those ensured next. Best-effort, logged.
+func reensureClusterServices(ctx context.Context, clusterID string) {
+	rt := clusterSharedServices(clusterID)
+	if rt == nil {
+		return
+	}
+	st, err := state.Load()
+	if err != nil {
+		flog.Warn("shared services: load state failed", "err", err)
+		return
+	}
+	for _, name := range clusterFleets(clusterID, nil) {
+		f := st.Fleets[name]
+		if f == nil {
+			continue
+		}
+		for _, svc := range f.Settings.EnabledSharedServices() {
+			if ctx.Err() != nil {
+				return
+			}
+			switch err := rt.EnsureService(name, svc); {
+			case errors.Is(err, svcruntime.ErrNoEndpoint):
+				flog.Info("shared services: the connection does not run the fleet's service", "runtime", rt.Key(), "fleet", name, "service", svc, "reason", err)
+			case err != nil:
+				flog.Warn("shared services: re-ensuring a fleet's service on a connection failed", "runtime", rt.Key(), "fleet", name, "service", svc, "err", err)
+			default:
+				flog.Info("shared services: re-ensured a fleet's service on a connection", "runtime", rt.Key(), "fleet", name, "service", svc)
+			}
+		}
+	}
+}
+
+// cacheServersChanged reports whether next changes what the connection's
+// cache servers run with (the fields of the connection svcruntime/kubert
+// renders their Deployments and volumes from) from cur.
+func cacheServersChanged(cur, next fleet.KubeCluster) bool {
+	type servers struct {
+		images         fleet.KubeServiceImages
+		storageClass   string
+		sizes          fleet.KubeCacheSizes
+		nodeSelector   map[string]string
+		tolerations    []fleet.KubeToleration
+		serviceAccount string
+		memoryLimit    string
+		privileged     *bool
+	}
+	of := func(c fleet.KubeCluster) servers {
+		s := servers{images: c.ServiceImages, storageClass: c.CacheStorageClass, sizes: c.CacheSizes,
+			serviceAccount: c.ServiceAccount, memoryLimit: c.MemoryLimit, privileged: c.AllowPrivileged}
+		if len(c.NodeSelector) > 0 {
+			s.nodeSelector = c.NodeSelector
+		}
+		if len(c.Tolerations) > 0 {
+			s.tolerations = c.Tolerations
+		}
+		return s
+	}
+	return !reflect.DeepEqual(of(cur), of(next))
 }
 
 // clusterFleets are the fleets, by name, with an instance on Kubernetes
