@@ -209,7 +209,7 @@ tui_cursor_to '▶ Security'
 tui_send l
 tui_cursor_to 'Allow privileged:'
 tui_send Right
-tui_wait_for "Privileged pods allowed" 15
+tui_wait_for "Privileged allowed" 15
 tui_cursor_to '▶ Advanced'
 tui_send l
 tui_cursor_to 'Extra PATH:'

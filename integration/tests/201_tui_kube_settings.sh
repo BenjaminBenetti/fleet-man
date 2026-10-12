@@ -76,7 +76,7 @@ tui_cursor_to '▶ Security'
 tui_send l
 tui_cursor_to 'Allow privileged:'
 tui_send Right
-tui_wait_for "Privileged pods allowed" 10
+tui_wait_for "Privileged allowed" 10
 [ "$(itest_kube_clusters 'print $c[0]{allow_privileged} ? "on" : "off"')" = on ] || fail "allow_privileged was not saved"
 tui_cursor_to '▶ Advanced'
 tui_send l
