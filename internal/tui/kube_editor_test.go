@@ -232,16 +232,16 @@ func TestEditorWarnsOfARemoteDaemonsHostGateway(t *testing.T) {
 }
 
 // Allow privileged cycles auto → on → off; each step is one masked update
-// carrying the revision the editor read, and turning it on says the node
-// becomes the boundary (the warning also sits beside the toggle).
+// carrying the revision the editor read, and turning it on says so in two
+// words (no warning line sits beside the toggle).
 func TestEditorAllowPrivilegedSavesWithMaskAndRevision(t *testing.T) {
 	st := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED)
 	m, sp := kubeTestModel(t, st)
 	calls := stubKubeUpdate(t, savedStatus(st))
 	e := openEditor(m, sp, "eu-1")
 	editorRowOf(t, e, "allow_privileged")
-	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "Allow privileged: [ auto → off ]") || !strings.Contains(out, "⚠ "+kubePrivilegedWarning) {
-		t.Fatalf("the toggle must show its resolved auto and the node warning:\n%s", out)
+	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "Allow privileged: [ auto → off ]") || strings.Contains(out, "isolation boundary") {
+		t.Fatalf("the toggle must show its resolved auto, and no warning while off:\n%s", out)
 	}
 
 	pumpKube(t, m, press(m, sp, "right"))
@@ -252,7 +252,7 @@ func TestEditorAllowPrivilegedSavesWithMaskAndRevision(t *testing.T) {
 	if c.id != "eu-1" || !slices.Equal(c.paths, []string{"allow_privileged"}) || c.rev != 3 || c.cluster.AllowPrivileged == nil || !c.cluster.GetAllowPrivileged() {
 		t.Fatalf("update = %+v, want allow_privileged=true under its own mask at revision 3", c)
 	}
-	if !strings.Contains(m.message, "node becomes the isolation boundary") {
+	if m.message != "Privileged allowed" {
 		t.Fatalf("message = %q", m.message)
 	}
 	if got := m.kubeStatus("eu-1").GetCluster(); !got.GetAllowPrivileged() || got.GetRevision() != 4 {

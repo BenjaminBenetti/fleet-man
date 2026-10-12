@@ -153,9 +153,6 @@ var kubeGroups = []kubeGroup{
 	}},
 }
 
-// kubePrivilegedWarning goes beside Allow privileged.
-const kubePrivilegedWarning = "the node becomes the isolation boundary: give these pods a dedicated node pool (node selector + tolerations)"
-
 // kubeAllFields is every editable field, top fields first.
 func kubeAllFields() []kubeField {
 	out := append([]kubeField(nil), kubeTopFields...)

@@ -360,12 +360,19 @@ func TestFullRootDenied(t *testing.T) {
 	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED, "no pods here")
 }
 
-// Off a local cluster privileged pods are off until allowed: admitted but not
-// allowed is LIMITED; allowed is READY with the node warning.
+// Off a local cluster privileged pods are off until allowed. Off is no limit
+// and no warning (the check passes "off"); allowed is the exposure: the
+// check warns "allowed", with the "privileged allowed" warning.
 func TestFullPrivilegedPolicyOffLocal(t *testing.T) {
 	c := newCluster(t, cloudNode("gke-a"), cloudNode("gke-b"), storageClass("standard-rwo", "pd.csi.storage.gke.io", isDefault, wffc, expandable))
 	res := Full(context.Background(), target(c, fleet.KubeCluster{}), nil)
-	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, "privileged not allowed")
+	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, LimitedOneNode)
+	if strings.Contains(res.Message, "privileged") {
+		t.Errorf("privileged pods off limit it: %q", res.Message)
+	}
+	if ch := check(t, res, CheckAdmissionPrivileged); ch.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS || ch.GetDetail() != "off" {
+		t.Errorf("admission privileged = %v, want a pass: off", ch)
+	}
 	if res.Capabilities.GetLocalCluster() || res.Capabilities.GetPrivilegedAllowed() || !res.Capabilities.GetAdmission().GetPrivileged() {
 		t.Errorf("capabilities = %v", res.Capabilities)
 	}
@@ -381,8 +388,11 @@ func TestFullPrivilegedPolicyOffLocal(t *testing.T) {
 	if strings.Contains(res.Message, "privileged") {
 		t.Errorf("still limited by privileged pods: %q", res.Message)
 	}
-	if len(res.Warnings) != 2 || !strings.Contains(res.Warnings[0], "node is the isolation boundary") || res.Warnings[1] != OneNodeWarning {
+	if len(res.Warnings) != 2 || res.Warnings[0] != "privileged allowed" || res.Warnings[1] != OneNodeWarning {
 		t.Errorf("warnings = %v", res.Warnings)
+	}
+	if ch := check(t, res, CheckAdmissionPrivileged); ch.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN || ch.GetDetail() != "allowed" {
+		t.Errorf("admission privileged = %v, want a warning: allowed", ch)
 	}
 }
 
@@ -524,10 +534,14 @@ func TestFullQuotaExhaustedIsNotAnAdmissionDenial(t *testing.T) {
 	}
 	res := Full(context.Background(), target(c, fleet.KubeCluster{}), nil)
 	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, "quota full")
-	for _, name := range []string{CheckAdmissionUnprivileged, CheckAdmissionDebug, CheckAdmissionPrivileged, CheckBuildkit} {
+	for _, name := range []string{CheckAdmissionUnprivileged, CheckAdmissionDebug, CheckBuildkit} {
 		if ch := check(t, res, name); ch.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS {
 			t.Errorf("%s = %v", name, ch)
 		}
+	}
+	// A local cluster allows privileged pods (auto): the exposure warning.
+	if ch := check(t, res, CheckAdmissionPrivileged); ch.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN || ch.GetDetail() != "allowed" {
+		t.Errorf("%s = %v", CheckAdmissionPrivileged, ch)
 	}
 	if a := res.Capabilities.GetAdmission(); !a.GetUnprivileged() || !a.GetPrivileged() {
 		t.Errorf("admission = %v", a)
@@ -575,10 +589,10 @@ func TestFullStorage(t *testing.T) {
 		{name: "node-local on several nodes", nodes: []runtime.Object{cloudNode("a"), cloudNode("b")}, classes: []runtime.Object{storageClass("local-path", "rancher.io/local-path", isDefault)},
 			state: fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, msg: "node-local storage", warning: "data lost if node replaced"},
 		{name: "node-local acknowledged", nodes: []runtime.Object{cloudNode("a"), cloudNode("b")}, classes: []runtime.Object{storageClass("local-path", "rancher.io/local-path", isDefault)},
-			rec: fleet.KubeCluster{NodeLocalAck: true}, state: fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, msg: "privileged not allowed", warning: "data lost if node replaced"},
+			rec: fleet.KubeCluster{NodeLocalAck: true}, state: fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, msg: LimitedOneNode, warning: "data lost if node replaced"},
 		{name: "network beats node-local on several nodes", nodes: []runtime.Object{cloudNode("a"), cloudNode("b")},
 			classes: []runtime.Object{storageClass("local-path", "rancher.io/local-path", isDefault, wffc), storageClass("gp3", "ebs.csi.aws.com", wffc, retain)},
-			state:   fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, msg: "privileged not allowed", detail: "auto → gp3 (RWO, WFFC, network): reclaim policy Retain: disks outlive the instances they belonged to", warning: "keeps disks after destroy"},
+			state:   fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, msg: LimitedOneNode, detail: "auto → gp3 (RWO, WFFC, network): reclaim policy Retain: disks outlive the instances they belonged to", warning: "keeps disks after destroy"},
 		// On one node too: a network disk outlives its node, and the
 		// cluster's default being node-local does not outweigh that.
 		{name: "network beats node-local on one node", nodes: []runtime.Object{minikubeNode()},

@@ -113,18 +113,26 @@ func (r *run) admission(ctx context.Context) {
 	switch {
 	case priv.err != nil:
 		r.warn(CheckAdmissionPrivileged, Message(priv.err), "")
+	// Privileged pods are the exposure (the node becomes the isolation
+	// boundary), so allowing them is the warning; off is no limit.
 	case priv.admitted && allowed:
-		r.pass(CheckAdmissionPrivileged, "admitted and allowed")
-		r.warning("privileged allowed: the node is the isolation boundary")
+		r.warn(CheckAdmissionPrivileged, "allowed", "")
+		r.warning("privileged allowed")
 	case priv.admitted:
-		r.warn(CheckAdmissionPrivileged, "admitted, but Allow privileged pods is off: DinD, DooD and host devices are refused", "turn on Allow privileged pods (the node becomes the isolation boundary)")
-		r.limit("privileged not allowed")
-	default:
+		r.pass(CheckAdmissionPrivileged, "off")
+	case allowed:
+		// Allowed, but the namespace refuses them: what the setting asks
+		// for cannot run.
 		if adm.Denial == "" {
 			adm.Denial = priv.denial
 		}
 		r.fail(CheckAdmissionPrivileged, priv.denial, "a sysbox runtime class, or a namespace that admits privileged pods")
 		r.limit("privileged denied")
+	default:
+		if adm.Denial == "" {
+			adm.Denial = priv.denial
+		}
+		r.pass(CheckAdmissionPrivileged, "off (the namespace refuses them too)")
 	}
 
 	// The shared Buildkit server runs rootless unless privileged pods are

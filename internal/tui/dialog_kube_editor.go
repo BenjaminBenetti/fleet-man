@@ -444,7 +444,7 @@ func (e *kubeEditor) onSaved(m *model, msg kubeSavedMsg) tea.Cmd {
 		m.kubeUpsert(msg.status)
 		m.message = "Saved " + msg.field.label
 		if msg.field.path == "allow_privileged" && msg.field.text(msg.status.GetCluster()) == "on" {
-			m.message = "Privileged pods allowed: " + kubePrivilegedWarning
+			m.message = "Privileged allowed"
 		}
 		e.onNamespace(m, msg.ns)
 	}
@@ -600,9 +600,6 @@ func (e *kubeEditor) view(m *model, _ *settingsPage) string {
 			body = kubeLines(body, kubeHangingIndent(marker+indent+e.labelCell(f.label+":", i == e.row)+e.fieldValue(m, st, f, i == e.row), inner, kubeEditorValueCol+len(indent)))
 			if msg := e.fieldErr[f.path]; msg != "" {
 				body = kubeLines(body, kubeHangingIndent("      "+indent+kubeErrStyle.Render(kubeGlyphFailed+" "+msg), inner, 8+len(indent)))
-			}
-			if f.path == "allow_privileged" {
-				body = kubeLines(body, kubeHangingIndent("      "+indent+kubeWarnStyle.Render(kubeGlyphWarn+" "+kubePrivilegedWarning), inner, 8+len(indent)))
 			}
 			// The ports a pod reaches are the daemon host's, not this
 			// machine's, once the daemon is remote.

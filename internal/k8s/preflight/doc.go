@@ -20,9 +20,9 @@
 //
 // The result's state follows from what the checks found, not from their
 // pass/warn/fail marks: LIMITED is reserved for degraded usability
-// (privileged denied, node-local storage, ...), while exposure facts such as
-// other RoleBinding subjects are warnings that never make a working
-// connection look broken.
+// (privileged pods allowed but denied, node-local storage, ...), while
+// exposure facts such as privileged pods allowed or other RoleBinding
+// subjects are warnings that never make a working connection look broken.
 //
 // Results are the wire's health messages (fleetgrpc.KubeCheck,
 // KubeCapabilities): health is computed by the daemon and only ever

@@ -528,7 +528,7 @@ func TestTestKubeCluster(t *testing.T) {
 	}
 
 	events = collectTest(t, client, &fleetgrpc.TestKubeClusterRequest{Cluster: &fleetgrpc.KubeCluster{Context: "prod"}})
-	if r := events[len(events)-1].GetResult(); r.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED || r.GetCluster().GetNamespace() != "team" {
+	if r := events[len(events)-1].GetResult(); r.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY || r.GetCluster().GetNamespace() != "team" {
 		t.Errorf("draft result = %v %q in %q", r.GetState(), r.GetMessage(), r.GetCluster().GetNamespace())
 	}
 	if leases, _ := f.apis["prod"].CoordinationV1().Leases("team").List(context.Background(), metav1.ListOptions{}); len(leases.Items) != 0 {

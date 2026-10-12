@@ -105,7 +105,7 @@ func TestMCPClusterTest(t *testing.T) {
 	}
 
 	callJSON(t, cs, "fleet_cluster_test", map[string]any{"cluster": "prod"}, &out)
-	if out.Cluster.State != "limited" || !out.Cluster.Usable {
+	if out.Cluster.State != "ready" || !out.Cluster.Usable {
 		t.Errorf("prod = %s usable %v: %q", out.Cluster.State, out.Cluster.Usable, out.Cluster.Message)
 	}
 

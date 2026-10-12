@@ -21,7 +21,7 @@ func kubeThemeStatuses() []*fleetgrpc.KubeClusterStatus {
 	for state := range fleetgrpc.KubeClusterState_name {
 		st := kubeSt(fleetgrpc.KubeClusterState(state).String(), "c"+fleetgrpc.KubeClusterState(state).String()[19:], fleetgrpc.KubeClusterState(state))
 		st.Message = "a reason"
-		st.Warnings = []string{"privileged allowed: the node is the isolation boundary"}
+		st.Warnings = []string{"privileged allowed"}
 		st.Checks = []*fleetgrpc.KubeCheck{
 			{Name: "rbac", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS},
 			{Name: "admission_debug_caps", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN},

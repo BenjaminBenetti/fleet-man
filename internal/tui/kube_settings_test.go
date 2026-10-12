@@ -67,7 +67,7 @@ func TestKubeClustersPushKeepsTheCursor(t *testing.T) {
 func TestKubeRowRendersHealthUsersAndWarnings(t *testing.T) {
 	ready := kubeSt("mk-1", "minikube", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
 	ready.Capabilities = &fleetgrpc.KubeCapabilities{Version: "v1.37.0"}
-	ready.Warnings = []string{"privileged allowed: the node is the isolation boundary"}
+	ready.Warnings = []string{"privileged allowed"}
 	expired := kubeSt("stg-1", "staging", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNAUTHORIZED)
 	expired.Message = "credentials expired 2h ago"
 	limited := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED)
@@ -83,7 +83,7 @@ func TestKubeRowRendersHealthUsersAndWarnings(t *testing.T) {
 	for _, want := range []string{
 		"Kubernetes contexts from fleetd @ ben-desktop",
 		"☸ minikube", "minikube-ctx · fleet", "● ready v1.37.0", "2 instances", "[ test ] [ delete ]",
-		"⚠ privileged allowed: the node is the isolation boundary",
+		"⚠ privileged allowed",
 		"☸ staging", "✕ unauthorized (credentials expired 2h ago)", "1 agent",
 		"☸ prod-eu", "▲ privileged denied",
 		"+ Kubernetes Cluster",

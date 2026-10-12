@@ -542,12 +542,13 @@ kubectl --context <ctx> -n <ns> auth can-i --list      # everything fleet's iden
 - `admission_unprivileged` warns `root containers denied`: the namespace
   (pod-security `restricted`) runs every container as one non-root user, with
   no apt or sudo. Fix: a namespace at the `baseline` level or looser.
-- `admission_privileged` warns `Allow privileged pods is off`: Docker-in-Docker,
-  the docker.sock sidecar and `--device` are refused. Fix, if the user accepts
-  that the node becomes the isolation boundary: `fleet cluster set <name>
-  allow_privileged=true` (ideally with a dedicated node pool,
-  `node_selector=` / `tolerations=`), or a sysbox runtime class
-  (`runtime_class=`).
+- `admission_privileged` warns `allowed` when privileged pods are allowed: the
+  node becomes the isolation boundary (ideally a dedicated node pool,
+  `node_selector=` / `tolerations=`). `off` is no problem, but
+  Docker-in-Docker, the docker.sock sidecar and `--device` are then refused.
+  To allow them: `fleet cluster set <name> allow_privileged=true`, or a sysbox
+  runtime class (`runtime_class=`). It fails only when they are allowed and the
+  namespace refuses them.
 - `admission_debug_caps` warns that SYS_PTRACE / unconfined seccomp are denied:
   they are dropped with a warning (`debug_capabilities=require` fails instead).
 

@@ -176,7 +176,7 @@ func TestClusterLs(t *testing.T) {
 		}
 	}
 
-	f.clusters[1].Warnings = []string{"privileged allowed: the node is the isolation boundary"}
+	f.clusters[1].Warnings = []string{"privileged allowed"}
 	f.clusters[1].Cluster.AllowPrivileged = ptrTo(true)
 	out, _, err = runClusterCLI(t, f, "cluster", "list", "prod-eu")
 	if err != nil {
@@ -185,7 +185,7 @@ func TestClusterLs(t *testing.T) {
 	if strings.Contains(out, "minikube-a1b2c3") {
 		t.Errorf("ls <cluster> lists the others:\n%s", out)
 	}
-	for _, want := range []string{"warning: privileged allowed: the node is the isolation boundary\n", "\nid=prod-d4e5f6\n", "\nallow_privileged=true\n", "\nkubeconfig_paths=/home/me/.kube/config\n"} {
+	for _, want := range []string{"warning: privileged allowed\n", "\nid=prod-d4e5f6\n", "\nallow_privileged=true\n", "\nkubeconfig_paths=/home/me/.kube/config\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("ls <cluster> lacks %q:\n%s", want, out)
 		}
@@ -512,7 +512,7 @@ func resultEvent(st *fleetgrpc.KubeClusterStatus) *fleetgrpc.TestKubeClusterEven
 func TestClusterTest(t *testing.T) {
 	f := newFakeKube()
 	limited := proto.Clone(f.clusters[1]).(*fleetgrpc.KubeClusterStatus)
-	limited.Warnings = []string{"privileged allowed: the node is the isolation boundary"}
+	limited.Warnings = []string{"privileged allowed"}
 	f.testEvents = []*fleetgrpc.TestKubeClusterEvent{
 		checkEvent("kubeconfig", fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_RUNNING, "", ""),
 		checkEvent("kubeconfig", fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, "~/.kube/config: gke_acme_europe_prod", ""),
@@ -535,7 +535,7 @@ admission privileged    fail    violates PodSecurity "baseline:latest"
                                 fix: label the namespace privileged
 limits                  warn    LimitRange default memory 1Gi
                                 → explicit 8Gi limit
-warning: privileged allowed: the node is the isolation boundary
+warning: privileged allowed
 limited: privileged denied · each fleet on one node
 `
 	if out != want {
