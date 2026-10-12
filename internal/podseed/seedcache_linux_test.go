@@ -43,8 +43,12 @@ func topLevel(t *testing.T, dir string) []string {
 func TestSeedCacheTrimAndAClonedSeed(t *testing.T) {
 	e := newJobEnv(t)
 	const id = "abc234def567"
+	// The homes copy-up volume carries the remapped user's home, which a
+	// cached seed copies up again.
+	homes := Volume{Name: "homes", Target: "/home", CopyUp: true}
 	first := e.seedSpec(1)
 	first.Seed.Workspace = &Workspace{}
+	first.Seed.Volumes = append(first.Seed.Volumes, homes)
 	if code, res, log := e.runJob(t, first, true, workspaceTar(t, map[string]string{"first.txt": "first"})); code != 0 || !res.OK {
 		t.Fatalf("first seed: %d %+v\n%s", code, res, log)
 	}
@@ -96,6 +100,7 @@ func TestSeedCacheTrimAndAClonedSeed(t *testing.T) {
 	second.PVC = cloned
 	second.Seed.Cache = id
 	second.Seed.Workspace = &Workspace{}
+	second.Seed.Volumes = append(second.Seed.Volumes, homes)
 	code, res, log = e.runJob(t, second, true, workspaceTar(t, map[string]string{"second.txt": "second"}))
 	if code != 0 || !res.OK {
 		t.Fatalf("cached seed: %d %+v\n%s", code, res, log)
@@ -134,8 +139,10 @@ func TestSeedCacheTrimAndAClonedSeed(t *testing.T) {
 			t.Errorf("%s: %v", dir, err)
 		}
 	}
-	if os.Geteuid() == 0 {
-		if st := lstat(t, filepath.Join(cloned, "vol/homes/vscode")); st.Uid != 4321 && slices.Contains(m.Volumes, "homes") {
+	if !slices.Contains(m.Volumes, "homes") {
+		t.Errorf("the cached seed's volumes %v lack homes", m.Volumes)
+	} else if os.Geteuid() == 0 {
+		if st := lstat(t, filepath.Join(cloned, "vol/homes/vscode")); st.Uid != 4321 {
 			t.Errorf("a volume copied up in a cached seed lost the remap: owner %d", st.Uid)
 		}
 	}
