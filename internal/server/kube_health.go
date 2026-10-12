@@ -476,10 +476,20 @@ type kubeWorker struct {
 	credAt  time.Time
 	// stuck names a probe that has not returned for far longer than it may.
 	stuck string
+	// ctx is the serve loop's for the worker (nil for a worker it does not
+	// run); firstDeep is the deep test a create started before the
+	// connection's first fleet share, while it runs, and firstDeepKey the
+	// connection key one ran for (kube_first_deep.go).
+	ctx          context.Context
+	firstDeep    *deepRun
+	firstDeepKey string
 }
 
 func (w *kubeWorker) start(ctx context.Context) {
 	ctx, w.cancel = context.WithCancel(ctx)
+	w.mu.Lock()
+	w.ctx = ctx
+	w.mu.Unlock()
 	go w.loop(ctx)
 }
 

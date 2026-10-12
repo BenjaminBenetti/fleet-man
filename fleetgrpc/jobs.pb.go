@@ -128,6 +128,10 @@ const (
 	// Wiring the instance into the fleet's shared buildkit server and deb/image
 	// caches (create, clone, rebuild).
 	JobStep_JOB_STEP_CONFIGURE_CACHES JobStep = 28
+	// The cluster's deep test, which the create of the first fleet share on a
+	// Kubernetes connection waits for: its two-pod probe decides the share's
+	// mode.
+	JobStep_JOB_STEP_TEST_CLUSTER JobStep = 29
 )
 
 // Enum value maps for JobStep.
@@ -162,6 +166,7 @@ var (
 		26: "JOB_STEP_EXPORT_WORKSPACE",
 		27: "JOB_STEP_ROLLBACK",
 		28: "JOB_STEP_CONFIGURE_CACHES",
+		29: "JOB_STEP_TEST_CLUSTER",
 	}
 	JobStep_value = map[string]int32{
 		"JOB_STEP_UNSPECIFIED":          0,
@@ -193,6 +198,7 @@ var (
 		"JOB_STEP_EXPORT_WORKSPACE":     26,
 		"JOB_STEP_ROLLBACK":             27,
 		"JOB_STEP_CONFIGURE_CACHES":     28,
+		"JOB_STEP_TEST_CLUSTER":         29,
 	}
 )
 
@@ -1356,7 +1362,7 @@ const file_jobs_proto_rawDesc = "" +
 	"\x17JOB_KIND_START_INSTANCE\x10\x03\x12\x1a\n" +
 	"\x16JOB_KIND_STOP_INSTANCE\x10\x04\x12\x1b\n" +
 	"\x17JOB_KIND_CLONE_INSTANCE\x10\x05\x12\x1d\n" +
-	"\x19JOB_KIND_REBUILD_INSTANCE\x10\x06*\xbb\x06\n" +
+	"\x19JOB_KIND_REBUILD_INSTANCE\x10\x06*\xd6\x06\n" +
 	"\aJobStep\x12\x18\n" +
 	"\x14JOB_STEP_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19JOB_STEP_VALIDATE_BACKEND\x10\x01\x12\x1a\n" +
@@ -1387,7 +1393,8 @@ const file_jobs_proto_rawDesc = "" +
 	"\x18JOB_STEP_LIFECYCLE_HOOKS\x10\x19\x12\x1d\n" +
 	"\x19JOB_STEP_EXPORT_WORKSPACE\x10\x1a\x12\x15\n" +
 	"\x11JOB_STEP_ROLLBACK\x10\x1b\x12\x1d\n" +
-	"\x19JOB_STEP_CONFIGURE_CACHES\x10\x1c*b\n" +
+	"\x19JOB_STEP_CONFIGURE_CACHES\x10\x1c\x12\x19\n" +
+	"\x15JOB_STEP_TEST_CLUSTER\x10\x1d*b\n" +
 	"\bLogLevel\x12\x19\n" +
 	"\x15LOG_LEVEL_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eLOG_LEVEL_INFO\x10\x01\x12\x12\n" +

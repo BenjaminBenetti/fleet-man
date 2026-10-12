@@ -65,6 +65,10 @@ enum JobStep {
   // Wiring the instance into the fleet's shared buildkit server and deb/image
   // caches (create, clone, rebuild).
   JOB_STEP_CONFIGURE_CACHES = 28;
+  // The cluster's deep test, which the create of the first fleet share on a
+  // Kubernetes connection waits for: its two-pod probe decides the share's
+  // mode.
+  JOB_STEP_TEST_CLUSTER = 29;
 }
 
 // LogLevel classifies a JobLog line. WARN replaces the legacy non-fatal

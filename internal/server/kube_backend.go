@@ -54,7 +54,7 @@ func configureKubePool(records []fleet.KubeCluster) { kubernetes.DefaultPool().C
 // setBackendEnvironment gives the backend handles the daemon's image
 // delivery (and the gateway image server, when it runs) and connection facts.
 func (m *kubeManager) setBackendEnvironment(im *kubeImages) {
-	env := kubernetes.Environment{Images: im.manager, Facts: m.backendFacts}
+	env := kubernetes.Environment{Images: im.manager, Facts: m.backendFacts, DeepFacts: m.backendDeepFacts}
 	if m.svc != nil && m.svc.shareSync != nil {
 		// The Ready gate of a start (a create's, clone's and rebuild's come
 		// through their jobs' hooks).

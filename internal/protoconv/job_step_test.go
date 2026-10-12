@@ -41,6 +41,7 @@ func TestJobStepsMatchTheWire(t *testing.T) {
 		fleet.StepExportWorkspace:    "JOB_STEP_EXPORT_WORKSPACE",
 		fleet.StepRollback:           "JOB_STEP_ROLLBACK",
 		fleet.StepConfigureCaches:    "JOB_STEP_CONFIGURE_CACHES",
+		fleet.StepTestCluster:        "JOB_STEP_TEST_CLUSTER",
 	}
 	for step, name := range want {
 		if got := JobStepToProto(step).String(); got != name {

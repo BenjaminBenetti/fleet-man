@@ -206,6 +206,83 @@ func TestPrepareShareOnTheCopyTier(t *testing.T) {
 	}
 }
 
+// stepsLog is a job log that keeps its steps.
+type stepsLog struct {
+	steps []string
+}
+
+func (l *stepsLog) Write(p []byte) (int, error) { return len(p), nil }
+func (l *stepsLog) Step(step fleet.JobStep, detail string) {
+	l.steps = append(l.steps, step.Label()+": "+detail)
+}
+func (l *stepsLog) Warn(string) {}
+
+// TestPrepareShareWaitsForTheDeepTest: the fleet's first share on a
+// connection no deep test has told takes its mode from the one the create
+// waits for (Environment.DeepFacts), showing its checks as the create's
+// step: here the two-pod probe failed, so the fleet gets no share (the copy
+// tier) where the preflight alone gave single-node mode. A share already
+// there asks for nothing.
+func TestPrepareShareWaitsForTheDeepTest(t *testing.T) {
+	cs := fake.NewClientset()
+	single := shareCaps(wffc)
+	single.ShareMode = string(topology.SingleNode)
+	c := shareCreation(cs, "web", single, fleet.KubeCluster{})
+	asked := 0
+	c.env.DeepFacts = func(_ context.Context, cluster string, progress func(*fleetgrpc.KubeCheck)) (Facts, error) {
+		asked++
+		if cluster != handleCluster {
+			t.Errorf("deep facts of %q", cluster)
+		}
+		progress(&fleetgrpc.KubeCheck{Name: "share_pods", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_RUNNING})
+		progress(&fleetgrpc.KubeCheck{Name: "share_pods", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, Detail: "the second pod could not mount it"})
+		copyTier := shareCaps(wffc)
+		copyTier.ShareMode = string(topology.Copy)
+		return Facts{Capabilities: copyTier}, nil
+	}
+	log := &stepsLog{}
+	ctx := backend.WithJobLog(context.Background(), log)
+	if err := c.prepareShare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if asked != 1 || c.share.mode != topology.Copy {
+		t.Fatalf("asked %d times; share mode %q, want the deep test's copy tier", asked, c.share.mode)
+	}
+	if l, _ := cs.CoreV1().PersistentVolumeClaims(handleNS).List(ctx, metav1.ListOptions{}); len(l.Items) != 0 {
+		t.Fatalf("a share was made though the deep test put the connection on the copy tier: %v", l.Items)
+	}
+	want := []string{"testing the cluster: share pods …", "testing the cluster: share pods: fail: the second pod could not mount it", "testing the cluster: done: share mode copy"}
+	if !reflect.DeepEqual(log.steps, want) {
+		t.Fatalf("steps %q\nwant  %q", log.steps, want)
+	}
+
+	// A fleet whose share is there already: its mode stays, nothing waits.
+	cs = fake.NewClientset()
+	first := shareCreation(cs, "web", single, fleet.KubeCluster{})
+	if err := first.prepareShare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first.share.done()
+	second := shareCreation(cs, "api", single, fleet.KubeCluster{})
+	second.env.DeepFacts = func(context.Context, string, func(*fleetgrpc.KubeCheck)) (Facts, error) {
+		t.Error("a create beside the fleet's share waited for the deep test")
+		return Facts{}, nil
+	}
+	if err := second.prepareShare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second.share.done()
+
+	// A deep test that fails the create's wait fails the create.
+	c = shareCreation(fake.NewClientset(), "web", single, fleet.KubeCluster{})
+	c.env.DeepFacts = func(context.Context, string, func(*fleetgrpc.KubeCheck)) (Facts, error) {
+		return Facts{}, kubeerr.New(kubeerr.Unreachable, "the deep test did not finish")
+	}
+	if err := c.prepareShare(context.Background()); err == nil || !strings.Contains(err.Error(), "deep test did not finish") {
+		t.Fatalf("prepareShare = %v", err)
+	}
+}
+
 // TestPrepareShareRefusesImmediateBindingOnManyNodes: a class that binds
 // each volume when made would put the share and the instance disks on
 // different nodes; the create is refused with the fix, making nothing.
