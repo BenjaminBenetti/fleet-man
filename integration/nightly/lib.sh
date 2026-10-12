@@ -10,7 +10,8 @@
 # Inputs (environment):
 #   FLEET_BIN, FLEET_POD_BINARY_<ARCH>, FLEET_POD_TMUX_<ARCH>  the binaries
 #       under test (one build); unset, run.sh builds fleet and the pod build
-#   FLEET_NIGHTLY_OUT  where each job's folder goes (default ./nightly-out)
+#   FLEET_NIGHTLY_OUT  where each job's folder goes (default ./nightly-out); a
+#       run replaces its job's folder
 #   FLEET_NIGHTLY_KEEP=1  keep the cluster when the job ends (debugging)
 # Output, in <out>/<job>/: summary.md (also appended to
 # $GITHUB_STEP_SUMMARY), budgets.tsv (metric, value, unit, budget, verdict),
@@ -25,6 +26,9 @@ NIGHTLY_FAILED=""
 nightly_begin() {
   NIGHTLY_JOB="$1"
   NIGHTLY_OUT="${FLEET_NIGHTLY_OUT:-${REPO_ROOT}/nightly-out}/${NIGHTLY_JOB}"
+  # A run's folder holds only its own results: a local rerun into the same
+  # output folder must not report the last run's failures or measurements.
+  rm -rf "${NIGHTLY_OUT:?}"
   mkdir -p "${NIGHTLY_OUT}/artifacts"
   : > "${NIGHTLY_OUT}/budgets.tsv"
   NIGHTLY_START=$(date +%s)
@@ -76,9 +80,15 @@ nightly_itests() {
   ) 2>&1 | tee "${log}"; then
     rc=1
   fi
-  local summary
+  local summary not_run
   summary=$(grep -E '^==> Summary:|^Failed:' "${log}" | sed 's/\x1b\[[0-9;]*m//g' | tr '\n' ' ')
   nightly_note "- itests ${range}${*:+ (\`$*\`)}: ${summary:-no summary}"
+  # A test whose cluster this job did not give it passes saying it did not
+  # run: named here, as a pass is not proof it ran.
+  not_run=$(sed 's/\x1b\[[0-9;]*m//g' "${log}" | awk '
+    /^==> RUN / { t = $3 }
+    /^\[pass\]/ && /not run/ { sub(/^\[pass\] +/, ""); printf "%s%s (%s)", sep, t, $0; sep = "; " }')
+  [ -z "${not_run}" ] || nightly_note "  - passed without running: ${not_run}"
   if [ "${rc}" != 0 ] || grep -q '^Failed:' "${log}"; then
     nightly_fail "itests ${range}"
     return 1
