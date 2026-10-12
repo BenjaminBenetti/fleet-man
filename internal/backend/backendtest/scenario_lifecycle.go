@@ -271,5 +271,10 @@ func caseBlockingLoginShell(c *C) {
 	if n := lineCount(c, i, PostCreateLog); n != 1 {
 		c.Errorf("postCreateCommand ran %d times, want 1: the hooks run without the probed environment", n)
 	}
-	c.Sh(i, `touch "$1"`, UnblockLoginShell)
+	// Its shells left blocked, the unblock is the instance's own (a
+	// target whose commands run on this host has no Dockerfile's rc to
+	// unblock, and no /tmp of its own to touch).
+	if !c.Target().HostProcesses {
+		c.Sh(i, `touch "$1"`, UnblockLoginShell)
+	}
 }
