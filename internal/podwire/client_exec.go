@@ -183,7 +183,7 @@ func startExec(ctx context.Context, rw io.ReadWriteCloser, header ExecHeader, op
 		return nil, err
 	}
 	if reply.Refused != "" {
-		return nil, fmt.Errorf("%w: %s", ErrRefused, reply.Error)
+		return nil, &StreamRefusedError{Reason: reply.Refused, Message: reply.Error}
 	}
 	if reply.Error != "" {
 		code := reply.Code
@@ -272,7 +272,7 @@ func (e *Exec) finishReattach(ctx context.Context, rw io.ReadWriteCloser) error 
 			return ErrHeldStreamGone
 		}
 		if reply.Refused != "" {
-			return fmt.Errorf("%w: %s", ErrRefused, reply.Error)
+			return &StreamRefusedError{Reason: reply.Refused, Message: reply.Error}
 		}
 		return fmt.Errorf("re-attach: %s", reply.Error)
 	}

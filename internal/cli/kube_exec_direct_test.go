@@ -157,6 +157,175 @@ func TestKubeExecResumeStopsWhenFleetdRefuses(t *testing.T) {
 	}
 }
 
+// podAgent is the agent end of one direct-mode exec transport in the pod
+// whose uid is uid, answering as `pod-agent exec --stdio` does: a re-attach
+// finds no held command (this pod replaced the one that held it), an exec
+// that names another pod is refused before anything runs (the shim's
+// verification was of the pod this one replaced), and any other exec starts
+// and exits 0.
+func podAgent(t *testing.T, uid string) net.Conn {
+	t.Helper()
+	a, b := net.Pipe()
+	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+	go func() {
+		defer a.Close()
+		_, raw, err := podwire.ReadPreamble(a)
+		var h podwire.ExecHeader
+		if err != nil || podwire.DecodeHeader(raw, &h) != nil {
+			return
+		}
+		w := podwire.NewFrameWriter(a)
+		switch {
+		case h.Resume != "":
+			_ = w.WriteJSON(podwire.FrameOpen, podwire.OpenReply{Gone: true})
+			return
+		case h.PodUID != "" && h.PodUID != uid:
+			_ = w.WriteJSON(podwire.FrameOpen, podwire.OpenReply{Refused: podwire.RefusedOtherPod, Error: fmt.Sprintf("this is pod %s, not %s", uid, h.PodUID)})
+			return
+		}
+		if w.WriteJSON(podwire.FrameOpen, podwire.OpenReply{ResumeID: strings.Repeat("ef", 16), PID: 7}) != nil ||
+			w.WriteJSON(podwire.FrameExit, podwire.ExitStatus{}) != nil {
+			return
+		}
+		r := podwire.NewFrameReader(a)
+		for {
+			if _, err := r.Next(); err != nil {
+				return
+			}
+		}
+	}()
+	return b
+}
+
+// shortWaits makes an attach's waits for its pod short.
+func shortWaits(t *testing.T, wait time.Duration) {
+	t.Helper()
+	backoff, was := redialBackoff, attachWait
+	redialBackoff = []time.Duration{0, time.Millisecond, 2 * time.Millisecond}
+	attachWait = wait
+	t.Cleanup(func() { redialBackoff, attachWait = backoff, was })
+}
+
+// A replaced pod's pane rejoins though fleetd has not taken the replacement
+// in yet (its watch of the cluster lags, as after an API server outage): the
+// attach's re-dial, which fleetd still verifies as the pod that is gone,
+// reaches the new pod and finds its command gone (exit 75); the wrapper's new
+// attach, verified as the gone pod again, is refused by the new pod's agent,
+// and asks fleetd again until it vouches for the new pod, where it starts.
+func TestKubeExecRejoinOutwaitsFleetdsView(t *testing.T) {
+	shortWaits(t, 10*time.Second)
+	var mu sync.Mutex
+	asks := 0
+	vouch := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		asks++
+		if asks <= 3 {
+			// The re-dial's ask and the new attach's first two.
+			return "uid-old"
+		}
+		return "uid-new"
+	}
+	e := openDropped(t)
+	go kubeExecResume(context.Background(), e, func(context.Context, int) (io.ReadWriteCloser, error) {
+		vouch()
+		return podAgent(t, "uid-new"), nil
+	})
+	if code, err := attachExit(waitExec(t, e)); code != podwire.ExitHeldStreamGone || err != nil {
+		t.Fatalf("the replaced pod's attach: exit %d, %v; want %d", code, err, podwire.ExitHeldStreamGone)
+	}
+
+	header := podwire.ExecHeader{Request: execas.Request{Class: execas.ClassExec, Argv: []string{"sh"}}, Resumable: true}
+	rejoined, err := kubeExecOpen(context.Background(), func(ctx context.Context) (*podwire.Exec, error) {
+		h := header
+		h.PodUID = vouch()
+		return podwire.OpenExec(ctx, podAgent(t, "uid-new"), h, podwire.ExecOptions{})
+	})
+	if err != nil {
+		t.Fatalf("the rejoin: %v; want it started once fleetd vouched for the new pod", err)
+	}
+	if code, err := waitExec(t, rejoined); code != 0 || err != nil {
+		t.Fatalf("the rejoined command: exit %d, %v; want 0", code, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if asks != 4 {
+		t.Fatalf("fleetd was asked %d times, want 4 (the re-dial, two refused starts, the start)", asks)
+	}
+}
+
+// An attach asks fleetd again while it answers not now; it stops at once when
+// fleetd refuses the pod (a substituted one: nothing starts in it) or the
+// start fails another way, and gives up after attachWait on a pod fleetd never
+// vouches for.
+func TestKubeExecOpenStops(t *testing.T) {
+	refused := fmt.Errorf("%w: tampered", errKubeExecRefused)
+	notNow := fleetdAnswer(status.Error(codes.FailedPrecondition, "the instance pod is not running"))
+	header := podwire.ExecHeader{Request: execas.Request{Class: execas.ClassExec, Argv: []string{"sh"}}, Resumable: true}
+	for _, tc := range []struct {
+		name string
+		wait time.Duration
+		// answer is fleetd's answer to its ask n (from 1): an error, or the
+		// uid it vouches for (the pod is uid-new).
+		answer func(n int) (string, error)
+		want   func(error) bool
+		asks   int
+	}{
+		{"not now, then the pod", 10 * time.Second, func(n int) (string, error) {
+			if n == 1 {
+				return "", notNow
+			}
+			return "uid-new", nil
+		}, func(err error) bool { return err == nil }, 2},
+		{"a substituted pod", 10 * time.Second, func(n int) (string, error) {
+			switch n {
+			case 1:
+				return "", notNow
+			case 2:
+				return "uid-old", nil
+			}
+			return "", refused
+		}, func(err error) bool { return errors.Is(err, errKubeExecRefused) }, 3},
+		{"fleetd cannot issue", 10 * time.Second, func(int) (string, error) {
+			return "", fleetdAnswer(status.Error(codes.Unauthenticated, "the credential plugin failed"))
+		}, func(err error) bool { return err != nil && !errors.Is(err, errKubeExecNotNow) }, 1},
+		{"never vouched for", 50 * time.Millisecond, func(int) (string, error) { return "uid-old", nil },
+			func(err error) bool {
+				var r *podwire.StreamRefusedError
+				return errors.As(err, &r) && r.Reason == podwire.RefusedOtherPod
+			}, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shortWaits(t, tc.wait)
+			asks := 0
+			e, err := kubeExecOpen(context.Background(), func(ctx context.Context) (*podwire.Exec, error) {
+				asks++
+				uid, err := tc.answer(asks)
+				if err != nil {
+					return nil, err
+				}
+				h := header
+				h.PodUID = uid
+				return podwire.OpenExec(ctx, podAgent(t, "uid-new"), h, podwire.ExecOptions{})
+			})
+			if !tc.want(err) {
+				t.Fatalf("open: %v", err)
+			}
+			if e != nil {
+				if code, err := waitExec(t, e); code != 0 || err != nil {
+					t.Fatalf("the command: exit %d, %v", code, err)
+				}
+			}
+			if tc.asks > 0 && asks != tc.asks {
+				t.Fatalf("%d asks, want %d", asks, tc.asks)
+			}
+			if tc.asks < 0 && asks < 3 {
+				t.Fatalf("%d asks: gave up before attachWait", asks)
+			}
+		})
+	}
+}
+
 // fleetd's answers to an issue, as the shim reads them: away (go to the
 // kubeconfig), a refusal for good, or not now.
 func TestFleetdIssueErrors(t *testing.T) {
@@ -174,6 +343,23 @@ func TestFleetdIssueErrors(t *testing.T) {
 		err := status.Error(tc.code, "x")
 		if fleetdUnavailable(err) != tc.unavailable || fleetdRefused(err) != tc.refused {
 			t.Errorf("%v: unavailable %v refused %v, want %v %v", tc.code, fleetdUnavailable(err), fleetdRefused(err), tc.unavailable, tc.refused)
+		}
+	}
+	// Of fleetd's other answers, a pod it cannot vouch for now is one an
+	// attach waits out; each keeps fleetd's message as is.
+	for _, tc := range []struct {
+		code   codes.Code
+		notNow bool
+	}{
+		{codes.FailedPrecondition, true},
+		{codes.DeadlineExceeded, true},
+		{codes.Unauthenticated, false},
+		{codes.Internal, false},
+	} {
+		msg := "kubernetes:unreachable: instance pod ns/p"
+		err := fleetdAnswer(status.Error(tc.code, msg))
+		if errors.Is(err, errKubeExecNotNow) != tc.notNow || err.Error() != msg {
+			t.Errorf("%v: %q, not now %v; want %q, %v", tc.code, err, errors.Is(err, errKubeExecNotNow), msg, tc.notNow)
 		}
 	}
 }

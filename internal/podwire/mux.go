@@ -65,6 +65,17 @@ const (
 // ErrRefused wraps a refused stream's error.
 var ErrRefused = errors.New("stream refused")
 
+// StreamRefusedError is an exec the agent refused before anything ran:
+// Reason is its Refused* reason, Message the agent's own words. It is
+// ErrRefused.
+type StreamRefusedError struct {
+	Reason, Message string
+}
+
+func (e *StreamRefusedError) Error() string { return ErrRefused.Error() + ": " + e.Message }
+
+func (e *StreamRefusedError) Is(target error) bool { return target == ErrRefused }
+
 // Stream is a stream the other side opened, past its preamble.
 type Stream struct {
 	Tag Tag
