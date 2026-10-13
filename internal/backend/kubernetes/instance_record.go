@@ -51,10 +51,16 @@ type InstanceRecord struct {
 	SpecHash string `json:"specHash"`
 	// Image is the image the pod runs, as its spec names it; ImageDigests
 	// what its container status may report as the image's id (the
-	// delivered digest, the host's image id, and for a node-loaded image the
-	// id the node gave it when the instance first ran).
+	// delivered digest, the host's image id, the platform manifest's digest,
+	// and for a node-loaded image the id the node gave it when the instance
+	// first ran). ImageConfig is the image's config digest on the nodes'
+	// platform, its content: a status that reports another digest of the
+	// same content verifies too (Expect.runsImage). "" for a node-loaded
+	// image, and in a record an older fleet wrote until a start learns it
+	// (learnImageConfig).
 	Image        string   `json:"image"`
 	ImageDigests []string `json:"imageDigests"`
+	ImageConfig  string   `json:"imageConfig,omitempty"`
 	// Strategy is how the image was delivered (kubeimage.Strategy).
 	Strategy string `json:"strategy,omitempty"`
 	// RemoteUser and WorkspaceFolder are the devcontainer's, which its

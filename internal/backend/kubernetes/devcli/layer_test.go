@@ -43,6 +43,7 @@ func TestLayerDockerfile(t *testing.T) {
 // builder and platform, from the context holding its files, and the new
 // image is read back by the id the build reported.
 func TestAddLayer(t *testing.T) {
+	unsetenv(t, envNoDefaultAttestations)
 	f := newFakeTools(t)
 	if err := os.WriteFile(filepath.Join(f.dir, "layered.json"), []byte(`[{"Id":"sha256:layered","Config":{"User":"vscode"}}]`), 0o644); err != nil {
 		t.Fatal(err)
@@ -66,7 +67,7 @@ func TestAddLayer(t *testing.T) {
 		t.Fatalf("the layer's file holds %q", got)
 	}
 	env := f.read(t, "layer.env")
-	if !strings.Contains(env, "BUILDX_BUILDER=desktop-linux") || !strings.Contains(env, "DOCKER_DEFAULT_PLATFORM=linux/arm64") {
+	if !strings.Contains(env, "BUILDX_BUILDER=desktop-linux") || !strings.Contains(env, "DOCKER_DEFAULT_PLATFORM=linux/arm64") || !strings.Contains(env, "BUILDX_NO_DEFAULT_ATTESTATIONS=1") {
 		t.Fatalf("the build was not pinned like capture-up's:\n%s", env)
 	}
 

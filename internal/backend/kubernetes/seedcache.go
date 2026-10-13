@@ -408,7 +408,7 @@ func (c *creation) trimIntoSeedCache(ctx context.Context, adm *podspec.Admitted,
 		PVC:       p.name,
 		Deadlines: &deadlines,
 		Check: func(pod *corev1.Pod) error {
-			_, err := checkJobPod(pod, &want, del, []string{del.Digest, del.ImageID, c.nodeImage})
+			_, err := checkJobPod(pod, &want, del, deliveredExpect(c.id.cluster, del, c.nodeImage))
 			return err
 		},
 	})

@@ -176,7 +176,7 @@ func (rb *rebuilding) exportStopped(ctx context.Context, export bool) error {
 			}
 		},
 		Check: func(pod *corev1.Pod) error {
-			_, err := checkJobPod(pod, &want, del, rb.prev.ImageDigests)
+			_, err := checkJobPod(pod, &want, del, rb.prev.expect())
 			return err
 		},
 		While: func(ctx context.Context, exec JobExec) error {

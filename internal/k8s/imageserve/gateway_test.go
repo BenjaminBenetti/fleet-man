@@ -210,8 +210,8 @@ func TestGatewayDeliver(t *testing.T) {
 	}
 	prefix, _ := f.tunnel.Registry()
 	// The node-platform manifest (arm64 here), never the image (index) ID.
-	if d.Digest != f.img.manifestDigest || d.Ref != prefix+"/devcontainer@"+f.img.manifestDigest {
-		t.Fatalf("delivery %+v, want %s", d, f.img.manifestDigest)
+	if d.Digest != f.img.manifestDigest || d.Ref != prefix+"/devcontainer@"+f.img.manifestDigest || d.Config != f.img.configDigest {
+		t.Fatalf("delivery %+v, want %s of config %s", d, f.img.manifestDigest, f.img.configDigest)
 	}
 	if d.PullSecret != "fleet-gwpull-3fa2c91e0b77-kc-1" || d.Location != "gateway" {
 		t.Fatalf("delivery %+v", d)

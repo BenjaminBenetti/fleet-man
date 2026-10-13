@@ -121,6 +121,7 @@ func (b *Backend) Start(containerID string) error {
 	if err != nil {
 		return failed(err)
 	}
+	learnImageConfig(pod, &rec)
 	if ready := currentEnvironment().ShareReady; ready != nil {
 		if err := ready(ctx, id.fleet, id.name); err != nil {
 			state.WriteWarn(id.fleet, id.name, fmt.Sprintf("shared state is not in sync yet: %v", err))
@@ -156,6 +157,7 @@ func (b *Backend) RunPostStart(containerID string) error {
 	if err != nil {
 		return classify(err)
 	}
+	learnImageConfig(pod, &rec)
 	return b.startHooks(ctx, sess, pod, rec, containerID)
 }
 

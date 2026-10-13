@@ -120,6 +120,10 @@ type Delivery struct {
 	ImageID string
 	// Digest is the manifest digest Ref pins; "" for node load.
 	Digest string
+	// Manifest and Config are the image's platform manifest digest and
+	// config digest on the nodes' platform (Entry.Manifest, Entry.Config);
+	// "" when fleet has none.
+	Manifest, Config string
 	// Tag is the tag fleet put on the image on the daemon host.
 	Tag string
 	// Location is where the image went (Entry.Location).
@@ -129,7 +133,7 @@ type Delivery struct {
 }
 
 func deliveryOf(e Entry) *Delivery {
-	d := &Delivery{Strategy: e.Strategy, Ref: e.Ref, PullPolicy: PullIfNotPresent, ImageID: e.ImageID, Digest: e.Digest, Tag: e.Tag, Location: e.Location}
+	d := &Delivery{Strategy: e.Strategy, Ref: e.Ref, PullPolicy: PullIfNotPresent, ImageID: e.ImageID, Digest: e.Digest, Manifest: e.Manifest, Config: e.Config, Tag: e.Tag, Location: e.Location}
 	if e.Strategy == StrategyNodeLoad {
 		d.PullPolicy = PullNever
 	}
@@ -174,6 +178,7 @@ func (m *Manager) Deliver(ctx context.Context, t Target, img Image, holder strin
 	var d *Delivery
 	if p, ok := m.passthrough(ctx, t, img); ok {
 		e := Entry{ImageID: img.Config.ID, Strategy: StrategyPassthrough, Location: p.ref.Repository(), Ref: p.ref.String(), Digest: p.ref.Digest, Platform: t.Platform, DeliveredAt: m.now()}
+		m.identifyPassthrough(ctx, path, p, &e)
 		if d, err = m.hold(path, e, holder, true); err != nil {
 			return nil, err
 		}
@@ -295,6 +300,10 @@ func (m *Manager) deliverBy(ctx context.Context, t Target, img Image, s Strategy
 			return Entry{}, err
 		}
 		e.Ref, e.Digest, e.PullSecret = g.Ref, g.Digest, g.PullSecret
+		if digestPattern.MatchString(g.Config) {
+			// The gateway serves the platform's manifest itself.
+			e.Manifest, e.Config = g.Digest, g.Config
+		}
 		if g.Location != "" {
 			e.Location = g.Location
 		}
@@ -333,18 +342,26 @@ func (m *Manager) nodeLoad(ctx context.Context, log io.Writer, t Target, imageID
 }
 
 // push tags the image under the daemon's registry path and pushes it,
-// unless the registry still holds what an earlier push left there.
+// unless the registry still holds what an earlier push left there; either
+// way the entry says what it delivered (identify).
 func (m *Manager) push(ctx context.Context, log io.Writer, t Target, imageID string, e Entry, cur *Entry) (Entry, error) {
 	repo, err := ParseReference(e.Location)
 	if err != nil {
 		return Entry{}, err
 	}
+	c, cerr := m.client(ctx, t, repo.Domain)
 	if cur != nil && cur.Digest != "" {
-		c, err := m.client(ctx, t, repo.Domain)
+		err := cerr
 		if err == nil {
 			if _, err = c.headManifest(ctx, repo.Path, cur.Digest); err == nil {
 				fmt.Fprintf(log, "%s is already in the registry\n", cur.Ref)
-				return *cur, nil
+				kept := *cur
+				if kept.Config == "" || kept.Platform != t.Platform {
+					// Recorded before fleet read it back, or for other nodes.
+					kept.Manifest, kept.Config = "", ""
+					identify(ctx, c, repo.Path, t.Platform, &kept)
+				}
+				return kept, nil
 			}
 		}
 		if !isNotFound(err) {
@@ -368,6 +385,9 @@ func (m *Manager) push(ctx context.Context, log io.Writer, t Target, imageID str
 	}
 	e.Digest = digest
 	e.Ref = e.Location + "@" + digest
+	if cerr == nil {
+		identify(ctx, c, repo.Path, t.Platform, &e)
+	}
 	return e, nil
 }
 
@@ -422,6 +442,21 @@ type passthroughRef struct {
 	ref Reference
 	// private: the registry needs the daemon host's login to serve it.
 	private bool
+	// client is the registry client that found it there.
+	client *registryClient
+}
+
+// identifyPassthrough fills in what a passthrough image is (identify), from
+// the index when an earlier delivery read it for the same digest and
+// platform.
+func (m *Manager) identifyPassthrough(ctx context.Context, path string, p passthroughRef, e *Entry) {
+	if ix, err := m.files.read(path); err == nil {
+		if cur := ix.find(e.key()); cur != nil && cur.Digest == e.Digest && cur.Platform == e.Platform && cur.Config != "" {
+			e.Manifest, e.Config = cur.Manifest, cur.Config
+			return
+		}
+	}
+	identify(ctx, p.client, p.ref.Path, e.Platform, e)
 }
 
 // passthrough reports whether img can be pulled from its own registry: the
@@ -459,7 +494,7 @@ func (m *Manager) passthrough(ctx context.Context, t Target, img Image) (passthr
 	anon := newRegistryClient(r.Domain, t.insecure(r.Domain), Credential{}, m.Transport)
 	_, err = anon.headManifest(ctx, r.Path, r.Digest)
 	if err == nil {
-		return passthroughRef{ref: r}, true
+		return passthroughRef{ref: r, client: anon}, true
 	}
 	if !isDenied(err) && !isNotFound(err) {
 		flog.Info("kubernetes image: registry check of an unbuilt image failed; delivering it as built", "ref", r.String(), "err", err)
@@ -472,7 +507,7 @@ func (m *Manager) passthrough(ctx context.Context, t Target, img Image) (passthr
 	if _, err := authed.headManifest(ctx, r.Path, r.Digest); err != nil {
 		return passthroughRef{}, false
 	}
-	return passthroughRef{ref: r, private: true}, true
+	return passthroughRef{ref: r, private: true, client: authed}, true
 }
 
 // parseLocal reads a node load entry's location back into its cluster.

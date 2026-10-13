@@ -575,7 +575,7 @@ func TestCheckJobPod(t *testing.T) {
 		"another spec, node-loaded":     {pod(changed, nodeLoad.Ref, nodeID), nodeLoad, false, ""},
 		"another image from a registry": {pod(want, "evil", "sha256:"+strings.Repeat("f", 64)), registry, false, ""},
 	} {
-		learned, err := checkJobPod(tc.pod, &want, tc.del, []string{digest})
+		learned, err := checkJobPod(tc.pod, &want, tc.del, Expect{ImageDigests: []string{digest}})
 		if tc.ok != (err == nil) || (err != nil && !errors.As(err, &tampered)) || learned != tc.learned {
 			t.Errorf("%s: learned %q, %v", name, learned, err)
 		}

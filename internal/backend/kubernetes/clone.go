@@ -596,7 +596,7 @@ func (c *cloning) copyDisk(ctx context.Context, o *podspec.Objects) error {
 		return err
 	}
 	want := jo.Job.Spec.Template.Spec
-	digests := slices.Clone(c.srcRec.ImageDigests)
+	img := c.srcRec.expect()
 	run := JobRun{
 		Cluster: c.id.cluster, Job: jo.Job.Name, PVC: o.Disk.Name,
 		Spec: podseed.JobSpec{Op: podseed.OpClone, Gen: c.gen, PVC: podspec.JobDiskPath, Clone: &spec},
@@ -607,7 +607,7 @@ func (c *cloning) copyDisk(ctx context.Context, o *podspec.Objects) error {
 			if podspec.SpecHash(&pod.Spec) != podspec.SpecHash(&want) {
 				return &TamperedError{Namespace: pod.Namespace, Pod: pod.Name, Reasons: []string{"its spec differs from fleet's render"}}
 			}
-			if st := containerStatus(pod, podspec.JobContainer); st != nil && st.ImageID != "" && !digestIn(st.ImageID, digests) {
+			if st := containerStatus(pod, podspec.JobContainer); st != nil && st.ImageID != "" && !img.runsImage(st) {
 				return &TamperedError{Namespace: pod.Namespace, Pod: pod.Name, Reasons: []string{fmt.Sprintf("its %s container runs %s, not the source's image", podspec.JobContainer, st.ImageID)}}
 			}
 			return nil
@@ -675,7 +675,7 @@ func (c *cloning) cloneRecord(o *podspec.Objects) InstanceRecord {
 	return InstanceRecord{
 		Cluster: c.id.cluster, Namespace: c.ns, Key: c.id.key, Fleet: c.id.fleet, Instance: c.id.name,
 		StatefulSet: c.id.sts, Gen: c.gen, SpecHash: podspec.SpecHash(&o.StatefulSet.Spec.Template.Spec),
-		Image: src.Image, ImageDigests: slices.Clone(src.ImageDigests), Strategy: src.Strategy, RemoteUser: src.RemoteUser,
+		Image: src.Image, ImageDigests: slices.Clone(src.ImageDigests), ImageConfig: src.ImageConfig, Strategy: src.Strategy, RemoteUser: src.RemoteUser,
 		WorkspaceFolder: src.WorkspaceFolder, NonRoot: src.NonRoot, AudioMissing: src.AudioMissing, Created: src.Created, Ports: slices.Clone(src.Ports),
 		HostSockets: slices.Clone(src.HostSockets), HostSocketDirs: cloneSocketDirs(src.HostSocketDirs), HostGateway: src.HostGateway, GatewaySkip: slices.Clone(src.GatewaySkip),
 		Share: src.Share.clone(), DockerImage: dockerImageOf(o),
@@ -711,7 +711,7 @@ func (c *cloning) startClone(ctx context.Context, o *podspec.Objects) (*backend.
 	if err != nil {
 		return nil, classify(err)
 	}
-	if st := containerStatus(pod, DevContainer); st != nil && st.ImageID != "" && !digestIn(st.ImageID, rec.ImageDigests) {
+	if st := containerStatus(pod, DevContainer); st != nil && st.ImageID != "" && !rec.expect().runsImage(st) {
 		return nil, &TamperedError{Namespace: pod.Namespace, Pod: pod.Name, Reasons: []string{fmt.Sprintf("its %s container runs %s, not the source's image", DevContainer, st.ImageID)}}
 	}
 	if err := c.step(ctx, stepAgent, fleet.StepWaitPod, "the pod agent"); err != nil {

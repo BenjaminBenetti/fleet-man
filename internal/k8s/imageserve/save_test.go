@@ -274,6 +274,9 @@ func TestPrepareSavesOnceAndSurvivesAPrunedImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if p.Config != img.configDigest {
+		t.Fatalf("prepared config %s, want %s", p.Config, img.configDigest)
+	}
 	if err := s.Ref("c1", p.Digest, img.configDigest); err != nil {
 		t.Fatal(err)
 	}
