@@ -445,7 +445,7 @@ func fuzzMerge(t *testing.T, policy Merger, format docFormat, base, cur, inc []b
 		case Merged:
 			sgot, _ = format.parse(sres.Content)
 		}
-		if res.Reason == "" || format.seed(vi) || format.seed(vc) || strings.Contains(res.Reason, "empty") || strings.Contains(sres.Reason, "empty") {
+		if res.Reason == "" || format.seed(vi) || format.seed(vc) {
 			continue // the guards are one-sided by design
 		}
 		if !sameAsSets(got, sgot) {

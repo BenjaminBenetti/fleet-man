@@ -28,10 +28,11 @@ type docFormat interface {
 
 // mergeDocument is json3 and toml3's decision: a whole document of the
 // format is taken as it is when nothing else changed the path since its
-// base; two changed copies merge three ways; the seed never replaces
-// content, and a file that does not parse waits on its side (ErrIncomplete)
-// until a whole one is written. Deletes, other kinds and files too large to
-// merge go as mirror.
+// base; two changed copies merge three ways, the newer copy kept when the
+// merge would leave an empty document; the seed never replaces content, and
+// a file that does not parse waits on its side (ErrIncomplete) until a whole
+// one is written. Deletes, other kinds and files too large to merge go as
+// mirror.
 func mergeDocument(ctx context.Context, in *MergeInput, f docFormat) (MergeResult, error) {
 	if in.Incoming.Entry.Kind != File {
 		return newestWins(in), nil
@@ -83,9 +84,13 @@ func mergeDocument(ctx context.Context, in *MergeInput, f docFormat) (MergeResul
 		return MergeResult{Decision: Keep, Reason: reason}, nil
 	case same(merged, inc):
 		return MergeResult{Decision: Accept, Reason: reason}, nil
-	case f.seed(merged):
-		// Each copy removed what the other kept: the merge would leave the
-		// seed, which never replaces content.
+	case isEmptyObject(merged):
+		// Each copy removed what the other kept: the merge would leave an
+		// empty document. JSON's '{}' is the seed, which never replaces
+		// content; an empty TOML config is the current copy's comments if
+		// it has any and otherwise an empty file (a write under way), so
+		// whether it could be written would turn on which copy arrived
+		// first.
 		res := newestWins(in)
 		res.Reason = fmt.Sprintf("%s changes from %s would merge to an empty %s; the newer copy kept", f.name(), in.Side.ID, f.name())
 		return res, nil
