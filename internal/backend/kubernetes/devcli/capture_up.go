@@ -179,11 +179,27 @@ func gpuAvailability(gpu bool) string {
 	return "none"
 }
 
+// envNoDefaultAttestations turns off the attestations buildx adds to every
+// build by default (a provenance attestation, since buildx 0.10).
+const envNoDefaultAttestations = "BUILDX_NO_DEFAULT_ATTESTATIONS"
+
 // captureEnv is the environment capture-up adds for the CLI and the builds it
-// runs: the pinned builder, the node platform, and FLEET_DEVCONTAINER_BUILDKIT
-// as the devcontainer backend applies it.
+// runs: the pinned builder, the node platform, no default attestations, and
+// FLEET_DEVCONTAINER_BUILDKIT as the devcontainer backend applies it.
+//
+// A provenance attestation records when and how its build ran, so on docker's
+// containerd image store, which keeps it beside the image in one OCI index,
+// every build of unchanged content gets a new image ID: delivery would push
+// each rebuild again and pin its pods to the new digest. Without it an
+// unchanged rebuild keeps its ID, and its delivery finds it delivered. An
+// attestation the build asks for itself (--provenance, --attest in the
+// configuration's build options) still comes, and a BUILDX_NO_DEFAULT_ATTESTATIONS
+// the daemon was started with is left to decide.
 func captureEnv(ctx context.Context, docker string, req CaptureRequest) ([]string, error) {
 	var env []string
+	if _, set := os.LookupEnv(envNoDefaultAttestations); !set {
+		env = append(env, envNoDefaultAttestations+"=1")
+	}
 	builder := req.Builder
 	if builder == "" {
 		builder = contextBuilder(ctx, docker)

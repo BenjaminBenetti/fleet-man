@@ -258,6 +258,42 @@ func TestCaptureUpEnvironment(t *testing.T) {
 	}
 }
 
+// unsetenv unsets name for the test; it is restored after.
+func unsetenv(t *testing.T, name string) {
+	t.Helper()
+	t.Setenv(name, "")
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The CLI's builds come without buildx's default attestations, so an
+// unchanged rebuild keeps its image ID on docker's containerd store; a
+// setting the daemon was started with is the user's and stays.
+func TestCaptureUpBuildsWithoutDefaultAttestations(t *testing.T) {
+	f := newFakeTools(t)
+	ws, configFile := appWorkspace(t, map[string]string{".devcontainer/.dockerignore": "x\n"})
+	f.writeConfigs(t, configFile, `,"image":"base:1"`)
+	cfg, err := ReadMerged(context.Background(), ReadRequest{Tools: f.Tools, WorkspaceDir: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsetenv(t, envNoDefaultAttestations)
+	if _, err := CaptureUp(context.Background(), CaptureRequest{Tools: f.Tools, WorkspaceDir: ws, Config: cfg, Builder: "pinned"}); err != nil {
+		t.Fatal(err)
+	}
+	if env := "\n" + f.read(t, "cli.env"); !strings.Contains(env, "\nBUILDX_NO_DEFAULT_ATTESTATIONS=1\n") {
+		t.Errorf("CLI env without BUILDX_NO_DEFAULT_ATTESTATIONS=1:\n%s", env)
+	}
+	t.Setenv(envNoDefaultAttestations, "0")
+	if _, err := CaptureUp(context.Background(), CaptureRequest{Tools: f.Tools, WorkspaceDir: ws, Config: cfg, Builder: "pinned"}); err != nil {
+		t.Fatal(err)
+	}
+	if env := "\n" + f.read(t, "cli.env"); !strings.Contains(env, "\nBUILDX_NO_DEFAULT_ATTESTATIONS=0\n") || strings.Contains(env, "BUILDX_NO_DEFAULT_ATTESTATIONS=1") {
+		t.Errorf("the daemon's own setting was overridden:\n%s", env)
+	}
+}
+
 // TestCaptureUpBindsTheOriginAgent: a configuration whose
 // ${localEnv:SSH_AUTH_SOCK} read as the daemon's relay socket is captured
 // with the agent the daemon was started with, as the devcontainer backend's
