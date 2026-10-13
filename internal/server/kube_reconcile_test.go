@@ -509,9 +509,19 @@ func TestReconcilerPass(t *testing.T) {
 	if clones != 1 {
 		t.Fatalf("%d clone undos", clones)
 	}
-	fp, _ := kubernetes.LoadFootprint()
-	if ts := fp.TombstonesOf(r.id); len(ts) != 1 || ts[0].Key != "tttttttt" {
-		t.Fatalf("tombstones after the first pass: %+v", ts)
+	// The pass drops a key held again (bbbbbbbb) after the journals it
+	// deletes, so the footprint can trail them.
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		fp, _ := kubernetes.LoadFootprint()
+		ts := fp.TombstonesOf(r.id)
+		if len(ts) == 1 && ts[0].Key == "tttttttt" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tombstones after the first pass: %+v", ts)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	// The pass counts what is still owed once its deletions are done, so
 	// the count can trail what the cluster already shows.
