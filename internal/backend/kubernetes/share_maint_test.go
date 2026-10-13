@@ -103,3 +103,34 @@ func TestMeasureShareSkipsAPodWithoutAKey(t *testing.T) {
 		t.Fatalf("measureShare = %d, %v, want nothing measured", used, ok)
 	}
 }
+
+// A growth is under way until the filesystem has it: while the volume is not
+// its requested size, and while the node has still to grow the filesystem.
+func TestResizeUnderway(t *testing.T) {
+	claim := func(request, capacity string, conds ...corev1.PersistentVolumeClaimConditionType) *corev1.PersistentVolumeClaim {
+		pvc := &corev1.PersistentVolumeClaim{}
+		pvc.Spec.Resources.Requests = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(request)}
+		if capacity != "" {
+			pvc.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(capacity)}
+		}
+		for _, c := range conds {
+			pvc.Status.Conditions = append(pvc.Status.Conditions, corev1.PersistentVolumeClaimCondition{Type: c, Status: corev1.ConditionTrue})
+		}
+		return pvc
+	}
+	for _, tc := range []struct {
+		name string
+		pvc  *corev1.PersistentVolumeClaim
+		want bool
+	}{
+		{"settled", claim("2Gi", "2Gi"), false},
+		{"not bound yet", claim("2Gi", ""), false},
+		{"volume still growing", claim("2Gi", "1Gi"), true},
+		{"resizing", claim("2Gi", "2Gi", corev1.PersistentVolumeClaimResizing), true},
+		{"filesystem still to grow", claim("2Gi", "2Gi", corev1.PersistentVolumeClaimFileSystemResizePending), true},
+	} {
+		if got := ResizeUnderway(tc.pvc); got != tc.want {
+			t.Errorf("%s: ResizeUnderway = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

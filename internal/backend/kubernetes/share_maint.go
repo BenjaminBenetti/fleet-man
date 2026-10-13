@@ -142,10 +142,10 @@ func (p *Pool) growShare(ctx context.Context, clusterID, claim string) error {
 	if err != nil {
 		return err
 	}
-	have := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-	if capacity, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok && capacity.Cmp(have) < 0 {
-		return nil
+	if ResizeUnderway(pvc) {
+		return nil // a growth asked for earlier has not reached the filesystem yet
 	}
+	have := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 	next := grownBy(have)
 	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"resources": map[string]any{"requests": map[string]string{"storage": next.String()}}}})
 	if _, err := pvcs.Patch(ctx, claim, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: DefaultFieldManager}); err != nil {
@@ -153,6 +153,27 @@ func (p *Pool) growShare(ctx context.Context, clusterID, claim string) error {
 	}
 	flog.Info("kube share: grew a nearly full share", "cluster", clusterID, "claim", claim, "from", have.String(), "to", next.String())
 	return nil
+}
+
+// ResizeUnderway reports whether a growth asked of pvc has not reached its
+// filesystem yet: the volume is not its requested size, or it is and the
+// node has still to grow the filesystem on it (Resizing,
+// FileSystemResizePending). The filesystem measures as full until then, so
+// growing again would grow a volume twice for one need.
+func ResizeUnderway(pvc *corev1.PersistentVolumeClaim) bool {
+	have := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if capacity, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok && capacity.Cmp(have) < 0 {
+		return true
+	}
+	for _, c := range pvc.Status.Conditions {
+		switch c.Type {
+		case corev1.PersistentVolumeClaimResizing, corev1.PersistentVolumeClaimFileSystemResizePending:
+			if c.Status == corev1.ConditionTrue {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // grownBy is q grown by half, rounded up to a whole Gi.

@@ -348,10 +348,10 @@ func (r *Runtime) grow(ctx context.Context, c *conn, m fleetMeta, svc fleet.Shar
 	if err != nil {
 		return err
 	}
-	have := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-	if capacity, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok && capacity.Cmp(have) < 0 {
-		return nil // a growth asked for earlier has not happened yet
+	if kubernetes.ResizeUnderway(pvc) {
+		return nil // a growth asked for earlier has not reached the filesystem yet
 	}
+	have := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 	next := growQuantity(have)
 	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"resources": map[string]any{"requests": map[string]string{"storage": next.String()}}}})
 	if _, err := pvcs.Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: kubernetes.DefaultFieldManager}); err != nil {

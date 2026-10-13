@@ -772,6 +772,25 @@ func TestCacheUsageAndUpkeep(t *testing.T) {
 	if n := f.execCount("sh -c"); n != 1 {
 		t.Fatalf("apt expiry runs %d, want one a day", n)
 	}
+	// The volume is its new size, but the node has still to grow the
+	// filesystem (it measures full until then): no second growth.
+	pvc.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("15Gi")}
+	pvc.Status.Conditions = []corev1.PersistentVolumeClaimCondition{{Type: corev1.PersistentVolumeClaimFileSystemResizePending, Status: corev1.ConditionTrue}}
+	if _, err := f.cs.CoreV1().PersistentVolumeClaims("fleet").UpdateStatus(context.Background(), pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Maintain(context.Background(), "alpha", []fleet.SharedService{fleet.ServiceDebCache}); err != nil {
+		t.Fatal(err)
+	}
+	pvc, _ = f.cs.CoreV1().PersistentVolumeClaims("fleet").Get(context.Background(), m.name(names.SuffixAptCache), metav1.GetOptions{})
+	if q := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; q.String() != "15Gi" {
+		t.Fatalf("grown again before the filesystem was: %v", q.String())
+	}
+	pvc.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")}
+	pvc.Status.Conditions = nil
+	if _, err := f.cs.CoreV1().PersistentVolumeClaims("fleet").UpdateStatus(context.Background(), pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Auto-expand off: the warning names it.
 	no := false
