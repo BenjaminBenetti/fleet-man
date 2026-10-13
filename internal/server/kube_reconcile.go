@@ -87,6 +87,9 @@ type kubeRecoveryPool interface {
 type kubeRecovery struct {
 	svc  *service
 	pool func() kubeRecoveryPool
+	// fleetTeardowns runs the fleet teardowns owed on a connection and
+	// counts those still owed (kubert's; a fake in tests).
+	fleetTeardowns func(ctx context.Context, clusterID string) int
 	// jobsDir is the journals' directory (state.KubeJobsDir).
 	jobsDir func() string
 
@@ -114,16 +117,17 @@ type kubeRecovery struct {
 
 func newKubeRecovery(svc *service) *kubeRecovery {
 	return &kubeRecovery{
-		svc:      svc,
-		pool:     func() kubeRecoveryPool { return kubernetes.DefaultPool() },
-		jobsDir:  state.KubeJobsDir,
-		wake:     make(chan struct{}, 1),
-		journals: map[string]kubernetes.JournalFile{},
-		claimed:  map[string]kubernetes.Journal{},
-		failedAt: map[string]kubernetes.Journal{},
-		wanted:   map[string]bool{},
-		edge:     make(chan struct{}),
-		pending:  map[string]int{},
+		svc:            svc,
+		pool:           func() kubeRecoveryPool { return kubernetes.DefaultPool() },
+		fleetTeardowns: kubert.RunPendingTeardowns,
+		jobsDir:        state.KubeJobsDir,
+		wake:           make(chan struct{}, 1),
+		journals:       map[string]kubernetes.JournalFile{},
+		claimed:        map[string]kubernetes.Journal{},
+		failedAt:       map[string]kubernetes.Journal{},
+		wanted:         map[string]bool{},
+		edge:           make(chan struct{}),
+		pending:        map[string]int{},
 	}
 }
 
@@ -308,10 +312,6 @@ func (r *kubeRecovery) want(clusterID string) {
 
 // pendingTeardowns is the connection's known garbage not yet gone (its
 // KubeCapabilities.pending_teardowns).
-// runPendingFleetTeardowns runs the fleet teardowns owed on a connection and
-// counts those still owed (kubert's; a package var for tests).
-var runPendingFleetTeardowns = kubert.RunPendingTeardowns
-
 func (r *kubeRecovery) pendingTeardowns(clusterID string) int32 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -386,7 +386,7 @@ func (r *kubeRecovery) pass(ctx context.Context, clusterID string) {
 	pendingKeys, deletedKeys, waiting := r.passTombstones(ctx, scope, st, fp)
 	// The fleet teardowns owed here (a fleet that left the cluster while it
 	// could not be reached).
-	pendingFleets := runPendingFleetTeardowns(ctx, clusterID)
+	pendingFleets := r.fleetTeardowns(ctx, clusterID)
 	pending := pendingJournals + pendingKeys + pendingFleets
 	r.mu.Lock()
 	changed := r.pending[clusterID] != pending

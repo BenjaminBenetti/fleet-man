@@ -103,9 +103,7 @@ func newRecoveryFixture(t *testing.T) *recoveryFixture {
 	f.svc.kubeRecovery.pool = func() kubeRecoveryPool { return pool }
 	// A fleet teardown a destroy leaves owed is kubert's to run, over the
 	// default pool, which reaches no fake cluster: nothing is owed here.
-	oldFleets := runPendingFleetTeardowns
-	runPendingFleetTeardowns = func(context.Context, string) int { return 0 }
-	t.Cleanup(func() { runPendingFleetTeardowns = oldFleets })
+	f.svc.kubeRecovery.fleetTeardowns = func(context.Context, string) int { return 0 }
 	oldPoll, oldAttempts, oldRetry := kubeUndoPoll, kubeUndoAttempts, kubeUndoRetry
 	kubeUndoPoll, kubeUndoAttempts, kubeUndoRetry = 10*time.Millisecond, 2, 10*time.Millisecond
 	t.Cleanup(func() { kubeUndoPoll, kubeUndoAttempts, kubeUndoRetry = oldPoll, oldAttempts, oldRetry })
