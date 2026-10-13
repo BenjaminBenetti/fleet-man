@@ -405,9 +405,20 @@ code=$(deliver itest-burst 121)
 assert_equals "429" "${code}" "a delivery to a full queue should get 429: $(cat "${TEST_SCRATCH_DIR}/reply.121" 2>/dev/null)"
 grep -qi '^retry-after: [1-9]' "${TEST_SCRATCH_DIR}/headers.121" \
   || fail "the 429 should carry Retry-After: $(cat "${TEST_SCRATCH_DIR}/headers.121")"
-logs=$("${FLEET_BIN}" trigger logs "${FLEET}" burst 2>&1)
-events=$(printf '%s\n' "${logs}" | grep -c '^===== event-' || true)
-assert_equals "25" "${events}" "the 429'd delivery should fire nothing (5 + 20 firings)"
+# burst_firings — how many firings the burst trigger's log records.
+burst_firings() {
+  "${FLEET_BIN}" trigger logs "${FLEET}" burst 2>/dev/null | grep -c '^===== event-' || true
+}
+# The scheduler records a delivery's firing a moment after its reply, so the
+# last of the 20 can still be on their way to the log: wait for them.
+events=0
+deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
+  events=$(burst_firings)
+  [ "${events}" -ge 25 ] && break
+  sleep 1
+done
+assert_equals "25" "${events}" "the 20 queued deliveries should be 20 firings (5 + 20)"
 
 # An agent whose tool was never logged in for this fleet on the cluster: its
 # save warns, and each firing is refused with the reason.
@@ -448,6 +459,10 @@ wait_log() {  # <trigger> <text>
   fail "trigger $1's log never said: $2"
 }
 wait_log nologin "needlogin: refused: log in to Claude once for this fleet on ☸ itest"
+# The scheduler takes deliveries in the order they came: having recorded the
+# no-login one, it would have recorded the 429'd one too, had it been handed
+# over.
+assert_equals "25" "$(burst_firings)" "the 429'd delivery should fire nothing (5 + 20 firings)"
 wait_log forgot "goner: refused: cluster ${gone_id} is no longer connected"
 if grep -qE '"(needlogin|goner)-[0-9]+-[0-9]+"' "${HOME}/.fleet/state.json"; then
   fail "a refused agent got an instance: $(grep -oE '"(needlogin|goner)-[0-9]+-[0-9]+"' "${HOME}/.fleet/state.json")"
