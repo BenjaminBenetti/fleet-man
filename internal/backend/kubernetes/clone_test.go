@@ -86,6 +86,7 @@ func TestCloneRecordCarriesTheSources(t *testing.T) {
 	sts, rec := cloneSourceObjects(t, nil)
 	rec.Strategy, rec.RemoteUser, rec.WorkspaceFolder, rec.NonRoot = "push", "vscode", "/workspaces/web", true
 	rec.AudioMissing = true
+	rec.ImageConfig = "sha256:" + strings.Repeat("c", 64)
 	rec.Created = time.Unix(1700000000, 0)
 	rec.Ports = []backend.PublishedPort{{HostIP: "127.0.0.1", HostPort: 3000, ContainerPort: 3000}}
 	rec.HostSockets = []hostrelay.Socket{{Target: "/run/gpg.sock", Source: "/home/u/.gnupg/S.gpg-agent.extra", Mode: 0o700}}

@@ -118,7 +118,7 @@ func (p *Pool) Track(items []Tracked) {
 }
 
 func sameExpect(a, b Expect) bool {
-	if a.SpecHash != b.SpecHash || a.StatefulSetUID != b.StatefulSetUID || a.FieldManager != b.FieldManager || len(a.ImageDigests) != len(b.ImageDigests) {
+	if a.SpecHash != b.SpecHash || a.StatefulSetUID != b.StatefulSetUID || a.FieldManager != b.FieldManager || a.ImageConfig != b.ImageConfig || len(a.ImageDigests) != len(b.ImageDigests) {
 		return false
 	}
 	for i := range a.ImageDigests {

@@ -27,6 +27,12 @@ type Index struct {
 	// Registries are what the daemon knows about each registry it pushes to,
 	// by domain.
 	Registries map[string]RegistryState `json:"registries,omitempty"`
+	// Configs are, by config digest, the digests the connection's images of
+	// that content were delivered under (Entry.Digest, Entry.Manifest), kept
+	// while an entry of that content remains: a node that pulled the
+	// content under one of them reports it for a pod that pins another,
+	// even once the entry that delivered it was collected (identity.go).
+	Configs map[string][]string `json:"configs,omitempty"`
 }
 
 // Entry is one delivered image.
@@ -46,6 +52,13 @@ type Entry struct {
 	// Digest is the manifest digest Ref pins; "" for node load.
 	Digest   string `json:"digest,omitempty"`
 	Platform string `json:"platform,omitempty"`
+	// Manifest and Config are what Digest is on Platform, as fleet read it
+	// back after delivering it: the platform manifest's digest (Digest
+	// itself unless Digest is an index's) and its config digest, the image's
+	// content. "" for node load, and when the registry could not say (an
+	// entry an older fleet recorded gets them at its next delivery).
+	Manifest string `json:"manifest,omitempty"`
+	Config   string `json:"config,omitempty"`
 	// PullSecret is a Secret the pods need beyond the connection's own
 	// (the gateway's).
 	PullSecret string `json:"pull_secret,omitempty"`
@@ -130,11 +143,14 @@ func (ix *Index) find(key string) *Entry {
 }
 
 // put adds or replaces the entry with e's key, keeping e's holders as they
-// are in the index.
+// are in the index, and records the digests it was delivered under by its
+// config.
 func (ix *Index) put(e Entry) *Entry {
+	ix.noteConfig(&e)
 	if cur := ix.find(e.key()); cur != nil {
 		e.Holders, e.ReleasedAt = cur.Holders, cur.ReleasedAt
 		*cur = e
+		ix.pruneConfigs()
 		return cur
 	}
 	ix.Images = append(ix.Images, e)
@@ -143,6 +159,7 @@ func (ix *Index) put(e Entry) *Entry {
 
 func (ix *Index) remove(key string) {
 	ix.Images = slices.DeleteFunc(ix.Images, func(e Entry) bool { return e.key() == key })
+	ix.pruneConfigs()
 }
 
 // indexFiles serializes access to index files: one mutex per path, held for

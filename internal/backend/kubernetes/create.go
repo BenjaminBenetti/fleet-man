@@ -431,6 +431,8 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 	rec.addImageDigest(del.Digest)
 	rec.addImageDigest(del.ImageID)
 	rec.addImageDigest(c.nodeImage)
+	rec.addImageDigest(del.Manifest)
+	rec.ImageConfig = del.Config
 	c.started = true
 	// A create makes the StatefulSet; a rebuild changes the one it has,
 	// and mirrors its steps on it.
@@ -470,6 +472,7 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 	if err := c.learnNodeImage(pod, &rec, del); err != nil {
 		return nil, err
 	}
+	learnImageConfig(pod, &rec)
 
 	if err := c.step(ctx, stepAgent, fleet.StepWaitPod, "the pod agent"); err != nil {
 		return nil, err
@@ -896,7 +899,7 @@ func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built, 
 	c.claimSharedVolumes(ctx, spec)
 	job := adm.Objects.Seed
 	want := job.Job.Spec.Template.Spec
-	digests := []string{del.Digest, del.ImageID}
+	image := deliveredExpect(c.id.cluster, del)
 	res, err := c.p.RunJob(ctx, JobRun{
 		Cluster:   c.id.cluster,
 		Job:       job.Job.Name,
@@ -908,7 +911,7 @@ func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built, 
 		},
 		Scheduling: c.reportPending(fleet.StepSeed),
 		Check: func(pod *corev1.Pod) error {
-			id, err := checkJobPod(pod, &want, del, digests)
+			id, err := checkJobPod(pod, &want, del, image)
 			if id != "" {
 				c.nodeImage = id
 			}
@@ -979,20 +982,22 @@ func seedProgress(p jobboot.Progress) string {
 
 // checkJobPod verifies a Job's pod before it gets anything (the workspace,
 // which may hold secrets): its spec is the one fleetd rendered (want) and its
-// container runs the image fleetd delivered, one of digests. A node-loaded
+// container runs the image fleetd delivered (img's, runsImage). A node-loaded
 // image has no digest before a node gives it an id: its pod runs whatever
 // image the node holds under the tag only fleet daemons load (the spec, which
 // names that tag with pull policy Never, is fleet's), and checkJobPod returns
-// that id to be learned. The status's image name is not compared: a kubelet
-// names a running image by any of its tags, and an image whose config another
-// load gave the node too (a rebuild, another daemon's load) has several.
-func checkJobPod(pod *corev1.Pod, want *corev1.PodSpec, del *kubeimage.Delivery, digests []string) (string, error) {
+// that id to be learned. A tag the status names the image by is never
+// compared: a kubelet names a running image by any of its tags, and an image
+// whose config another load gave the node too (a rebuild, another daemon's
+// load) has several. A pulled image is known by its content just as well
+// (runsImage): a node names it by whichever digest of it it pulled first.
+func checkJobPod(pod *corev1.Pod, want *corev1.PodSpec, del *kubeimage.Delivery, img Expect) (string, error) {
 	var reasons []string
 	if podspec.SpecHash(&pod.Spec) != podspec.SpecHash(want) {
 		reasons = append(reasons, "its spec differs from fleet's render")
 	}
 	learned := ""
-	if st := containerStatus(pod, podspec.JobContainer); st != nil && st.ImageID != "" && !digestIn(st.ImageID, digests) {
+	if st := containerStatus(pod, podspec.JobContainer); st != nil && st.ImageID != "" && !img.runsImage(st) {
 		if del.Strategy == kubeimage.StrategyNodeLoad {
 			learned = imageDigest(st.ImageID)
 		} else {
@@ -1010,7 +1015,7 @@ func checkJobPod(pod *corev1.Pod, want *corev1.PodSpec, del *kubeimage.Delivery,
 // the id the node gave it, learned (as checkJobPod's).
 func (c *creation) learnNodeImage(pod *corev1.Pod, rec *InstanceRecord, del *kubeimage.Delivery) error {
 	st := containerStatus(pod, DevContainer)
-	if st == nil || st.ImageID == "" || digestIn(st.ImageID, rec.ImageDigests) {
+	if st == nil || st.ImageID == "" || rec.expect().runsImage(st) {
 		return nil
 	}
 	if del.Strategy != kubeimage.StrategyNodeLoad || c.nodeImage != "" {
@@ -1018,6 +1023,31 @@ func (c *creation) learnNodeImage(pod *corev1.Pod, rec *InstanceRecord, del *kub
 	}
 	rec.addImageDigest(imageDigest(st.ImageID))
 	return SaveInstanceRecord(*rec)
+}
+
+// learnImageConfig records in rec, which names no config digest (a record an
+// older fleet wrote, a delivery whose registry could not say), the id the
+// runtime names the pod's image by (containerd's image: sha256:<config>),
+// once its dev container runs one of the digests rec names: as node load
+// learns the id a node gives its image, so that a later pod a node reports
+// under another digest of the same content verifies too (Expect.runsImage).
+// The record is read again first, and left as it is when anything changed
+// it meanwhile.
+func learnImageConfig(pod *corev1.Pod, rec *InstanceRecord) {
+	st := containerStatus(pod, DevContainer)
+	if rec.ImageConfig != "" || st == nil || !isImageID(st.Image) || !digestIn(st.ImageID, rec.ImageDigests) {
+		return
+	}
+	cur, err := LoadInstanceRecord(rec.Cluster, rec.Key)
+	if err != nil || cur.Gen != rec.Gen || cur.ImageConfig != "" || !slices.Equal(cur.ImageDigests, rec.ImageDigests) {
+		return
+	}
+	cur.ImageConfig = st.Image
+	if err := SaveInstanceRecord(cur); err != nil {
+		flog.Warn("kube: recording the instance image's config digest", "cluster", rec.Cluster, "key", rec.Key, "err", err)
+		return
+	}
+	rec.ImageConfig = cur.ImageConfig
 }
 
 // failedCreate is WaitReady's check: a FailedCreate event of the

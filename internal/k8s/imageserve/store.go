@@ -99,8 +99,9 @@ type blobRecord struct {
 // Prepared is an image ready to serve.
 type Prepared struct {
 	// Digest is the node-platform manifest's digest: what the pod spec
-	// pins.
+	// pins. Config is its config digest.
 	Digest    string
+	Config    string
 	MediaType string
 	Platform  string
 	// Bytes is the size of the manifest and every blob it lists (what a
@@ -234,6 +235,9 @@ func (s *Store) complete(d string, m *manifestRecord) bool {
 
 func preparedOf(d string, m *manifestRecord) Prepared {
 	p := Prepared{Digest: d, MediaType: m.MediaType, Platform: m.Platform, Bytes: m.Size}
+	if len(m.Blobs) > 0 {
+		p.Config = m.Blobs[0].Digest
+	}
 	for _, b := range m.Blobs {
 		p.Bytes += b.Size
 	}

@@ -20,8 +20,12 @@ type fakeGateway struct {
 func (g *fakeGateway) Available(Target) (bool, string) { return g.ok, g.why }
 
 func (g *fakeGateway) Deliver(_ context.Context, _ Target, img Image) (GatewayDelivery, error) {
-	return GatewayDelivery{Ref: "gw.example.com/rid/devcontainer@" + img.Config.ID, Digest: img.Config.ID, PullSecret: "fleet-gateway"}, nil
+	return GatewayDelivery{Ref: "gw.example.com/rid/devcontainer@" + img.Config.ID, Digest: img.Config.ID, Config: fakeGatewayConfig(img.Config.ID), PullSecret: "fleet-gateway"}, nil
 }
+
+// fakeGatewayConfig is the config digest the fake gateway's manifest of the
+// image imageID names.
+func fakeGatewayConfig(imageID string) string { return sha256Digest([]byte("config of " + imageID)) }
 
 func (g *fakeGateway) Remove(_ context.Context, _ Target, e Entry) error {
 	g.removed = append(g.removed, e.Ref)

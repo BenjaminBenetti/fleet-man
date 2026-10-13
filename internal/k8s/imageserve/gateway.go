@@ -185,7 +185,7 @@ func (g *Gateway) Deliver(ctx context.Context, t kubeimage.Target, img kubeimage
 		return kubeimage.GatewayDelivery{}, err
 	}
 	fmt.Fprintf(backend.JobLogFrom(ctx), "image %s is served through the gateway as %s (%s to pull on a fresh node)\n", short(img.Config.ID), ref, humanBytes(prep.Bytes))
-	return kubeimage.GatewayDelivery{Ref: ref, Digest: prep.Digest, Location: "gateway", PullSecret: secret}, nil
+	return kubeimage.GatewayDelivery{Ref: ref, Digest: prep.Digest, Config: prep.Config, Location: "gateway", PullSecret: secret}, nil
 }
 
 // serve makes the connection serve a cached manifest for holder: the pull

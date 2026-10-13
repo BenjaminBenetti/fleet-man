@@ -225,8 +225,10 @@ type Gateway interface {
 // GatewayDelivery is where the gateway serves an image.
 type GatewayDelivery struct {
 	// Ref is "<public-host>/<rid>/devcontainer@sha256:<digest>".
-	Ref    string
-	Digest string
+	Ref string
+	// Digest is the platform manifest's digest, Config that manifest's
+	// config digest.
+	Digest, Config string
 	// Location names what serves it, for the index.
 	Location string
 	// PullSecret is the namespace's gateway pull Secret.

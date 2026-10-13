@@ -5,6 +5,7 @@ package kubernetes
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -30,8 +31,20 @@ const DevContainer = podspec.DevContainer
 type Expect struct {
 	// ImageDigests are the image fleetd delivered (its config digest for a
 	// node-loaded image, the manifest digest for a pulled one; any form
-	// carrying sha256:<hex>): the dev container must run one of them.
+	// carrying sha256:<hex>): the dev container must run one of them, or
+	// the same content (runsImage).
 	ImageDigests []string
+	// ImageConfig is the delivered image's config digest on the nodes'
+	// platform (sha256:<hex>; "" when fleet has none: a node-loaded image, a
+	// record an older fleet wrote): its content, since the config lists
+	// every layer's diff_id.
+	ImageConfig string
+	// SameContent is fleet's record of what it delivered on the connection
+	// (kubeimage.Manager.SameContent): the config digests of the content of
+	// an image with config digest config or delivered under one of digests,
+	// and every digest fleet delivered that content under. nil knows only
+	// ImageDigests and ImageConfig.
+	SameContent func(config string, digests []string) (configs, delivered []string)
 	// SpecHash is the spec hash of fleetd's own render of the pod
 	// (PoolOptions.SpecHash of the StatefulSet template's spec), from its
 	// journal. The pod's annotation is never trusted.
@@ -102,11 +115,11 @@ func VerifyPod(pod *corev1.Pod, sts *appsv1.StatefulSet, want Expect, hash func(
 		reasons = append(reasons, "its spec differs from fleet's render")
 	}
 	status := containerStatus(pod, DevContainer)
-	if status != nil && status.ImageID != "" && !digestIn(status.ImageID, want.ImageDigests) {
+	if status != nil && status.ImageID != "" && !want.runsImage(status) {
 		reasons = append(reasons, fmt.Sprintf("its %s container runs %s, not the image fleet delivered", DevContainer, status.ImageID))
 	}
 	// The share's init container runs the delivered image too.
-	if s := initContainerStatus(pod, podspec.ShareInit); s != nil && s.ImageID != "" && !digestIn(s.ImageID, want.ImageDigests) {
+	if s := initContainerStatus(pod, podspec.ShareInit); s != nil && s.ImageID != "" && !want.runsImage(s) {
 		reasons = append(reasons, fmt.Sprintf("its %s container runs %s, not the image fleet delivered", podspec.ShareInit, s.ImageID))
 	}
 	reasons = append(reasons, dockerSidecarReasons(pod, want.DockerImage)...)
@@ -123,6 +136,35 @@ func VerifyPod(pod *corev1.Pod, sts *appsv1.StatefulSet, want Expect, hash func(
 	}
 	return nil
 }
+
+// runsImage reports whether a container's status shows it runs the image
+// fleet delivered. Its imageID is a digest fleet recorded for it; or else it
+// runs the delivered content under another name: a node reports an image by
+// the digest it first pulled that content under, and docker's containerd
+// image store gives each build of one content a new index digest (its
+// provenance attestation changes). Content is the config digest, which
+// covers every layer's diff_id, so no other image has it: the runtime names
+// the image by a config digest of the delivered content (containerd's image:
+// sha256:<config> for an image pulled by digest), or its imageID is a digest
+// fleet itself delivered that content under on the connection. The image
+// names a kubelet reports otherwise (tags) are never compared, and nothing
+// is asked of a registry.
+func (e Expect) runsImage(st *corev1.ContainerStatus) bool {
+	switch {
+	case digestIn(st.ImageID, e.ImageDigests):
+		return true
+	case isImageID(e.ImageConfig) && st.Image == e.ImageConfig:
+		return true
+	case e.SameContent == nil:
+		return false
+	}
+	configs, delivered := e.SameContent(e.ImageConfig, e.ImageDigests)
+	return (isImageID(st.Image) && slices.Contains(configs, st.Image)) || digestIn(st.ImageID, delivered)
+}
+
+// isImageID reports whether s is a bare sha256:<hex> digest, as a runtime
+// names an image by its id.
+func isImageID(s string) bool { return s != "" && imageDigest(s) == s }
 
 // dockerImageOf is the image of the docker engine's sidecar o's pod runs, ""
 // without one.
