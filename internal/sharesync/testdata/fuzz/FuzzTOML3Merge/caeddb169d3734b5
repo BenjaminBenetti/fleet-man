@@ -1,0 +1,4 @@
+go test fuzz v1
+[]byte("a=1\nb = 1")
+[]byte("# c\n# t\nb = 1\n")
+[]byte("a =  1\n")

@@ -20,8 +20,10 @@ import (
 // until a whole one is written. The merged file is the current copy with
 // the other's changes written into it, so its comments, order and layout
 // stay; where that cannot be done exactly (arrays of tables, a table made
-// by dotted keys elsewhere), the merged config is written out plain.
-// Deletes go as mirror.
+// by dotted keys elsewhere), the merged config is written out plain. Two
+// copies that would merge to an empty config (each removed what the other
+// kept) keep the newer one, whatever comments are left. Deletes go as
+// mirror.
 type TOML3 struct{}
 
 // Scope is fleet-wide.

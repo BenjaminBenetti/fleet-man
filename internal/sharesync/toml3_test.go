@@ -27,7 +27,8 @@ theme = "dark"
 `
 
 // TestTOML3Decisions pins toml3's table: fast forwards taken, a file that
-// does not parse or is empty left waiting, two changed copies merged.
+// does not parse or is empty left waiting, two changed copies merged, the
+// newer copy kept for a merge to nothing.
 func TestTOML3Decisions(t *testing.T) {
 	ctx := context.Background()
 	c := docCase{path: "config.toml", cur: "a = 1\n", inc: "a = 2\n", fast: true}
@@ -51,6 +52,21 @@ func TestTOML3Decisions(t *testing.T) {
 	res, err := TOML3{}.Merge(ctx, c.input())
 	if err != nil || res.Decision != Merged || string(res.Content) != "a = 2\nb = 2\n" {
 		t.Errorf("both changed other keys: %+v %q, %v", res, res.Content, err)
+	}
+	// Each copy removed what the other kept: the newer copy, in either
+	// order, whatever comments the current copy would leave.
+	for _, curNewer := range []bool{false, true} {
+		want := Accept
+		if curNewer {
+			want = Keep
+		}
+		for _, cur := range []string{"a = 1\n", "# c\n# t\na = 1\n"} {
+			c = docCase{path: "config.toml", base: "a = 1\nb = 1\n", cur: cur, inc: "b = 1\n", curNewer: curNewer}
+			res, err := TOML3{}.Merge(ctx, c.input())
+			if err != nil || res.Decision != want || !strings.Contains(res.Reason, "would merge to an empty") {
+				t.Errorf("a merge to nothing from %q (current newer %v): %+v %q, %v", cur, curNewer, res, res.Content, err)
+			}
+		}
 	}
 	// TOML is typed: 1 and 1.0 are two values.
 	c = docCase{path: "config.toml", base: "a = 1\n", cur: "a = 1.0\n", inc: "a = 1\nb = 1\n"}
