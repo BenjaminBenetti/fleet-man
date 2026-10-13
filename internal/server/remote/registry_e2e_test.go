@@ -112,14 +112,26 @@ func TestManagerServesRegistryThroughGateway(t *testing.T) {
 		t.Fatal("the registry id must differ from the public id")
 	}
 
-	req, _ := http.NewRequest(http.MethodGet, "http://"+publicAddr+"/v2/"+rid+"/devcontainer/manifests/sha256:abc", nil)
-	req.Header.Set("Authorization", "Basic Zm9vOmJhcg==")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("pull: %v", err)
+	// The gateway makes the session routable just after its reply, which
+	// fleetd may have acted on already: a pull at once can find no route yet.
+	var (
+		resp *http.Response
+		body []byte
+		err  error
+	)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		req, _ := http.NewRequest(http.MethodGet, "http://"+publicAddr+"/v2/"+rid+"/devcontainer/manifests/sha256:abc", nil)
+		req.Header.Set("Authorization", "Basic Zm9vOmJhcg==")
+		resp, err = http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("pull: %v", err)
+		}
+		body, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound || time.Now().After(deadline) {
+			break
+		}
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || string(body) != "GET /v2/devcontainer/manifests/sha256:abc Basic Zm9vOmJhcg==" {
 		t.Fatalf("pull through the gateway -> %d %q", resp.StatusCode, body)
 	}
