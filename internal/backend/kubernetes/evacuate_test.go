@@ -5,6 +5,7 @@ package kubernetes
 import (
 	"context"
 	"errors"
+	"k8s.io/apimachinery/pkg/watch"
 	"slices"
 	"strings"
 	"sync"
@@ -529,6 +530,19 @@ func TestNodeWatchesFollowTheHolders(t *testing.T) {
 	r := newHandleRig(t, n1, n2, set)
 	changes := make(chan string, 100)
 	r.pool.OnChange(func(_, sts string) { changes <- sts })
+	// A node watch is a list and then a watch, and the fake clientset drops
+	// what changes between the two: the test cordons a node only once its
+	// watch is there.
+	nodeWatches := make(chan struct{}, 8)
+	r.cs.PrependWatchReactor("nodes", func(a k8stesting.Action) (bool, watch.Interface, error) {
+		var opts metav1.ListOptions
+		if wa, ok := a.(k8stesting.WatchActionImpl); ok {
+			opts = wa.ListOptions
+		}
+		w, err := r.cs.Tracker().Watch(a.GetResource(), a.GetNamespace(), opts)
+		nodeWatches <- struct{}{}
+		return true, w, err
+	})
 	r.pool.Track([]Tracked{{Cluster: handleCluster, StatefulSet: handleSTS()}})
 
 	pod := holderPod(topology.SingleNode, "n1")
@@ -545,6 +559,11 @@ func TestNodeWatchesFollowTheHolders(t *testing.T) {
 		t.Fatalf("before the cordon: %+v", o)
 	}
 
+	select {
+	case <-nodeWatches:
+	case <-time.After(10 * time.Second):
+		t.Fatal("n1's watch never started")
+	}
 	for len(changes) > 0 {
 		<-changes
 	}
