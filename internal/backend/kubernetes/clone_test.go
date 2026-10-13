@@ -277,3 +277,36 @@ func TestAnUnfreezableSourceIsBestEffortOnlyForACopy(t *testing.T) {
 		})
 	}
 }
+
+// A snapshot's error is its controller's last, retried: a clone gives up on
+// it only once the same snapshot has reported errors for the grace, and an
+// error that clears (or a ready snapshot) starts the grace over.
+func TestSnapshotErrorsFailOnlyOnceTheyLast(t *testing.T) {
+	var e snapshotErrors
+	t0 := time.Now()
+	if first, fails := e.see("", false, t0); first || fails {
+		t.Fatal("no error counts")
+	}
+	if first, fails := e.see("context deadline exceeded", false, t0); !first || fails {
+		t.Fatal("a new error is first, and does not fail")
+	}
+	if first, fails := e.see("context deadline exceeded", false, t0.Add(snapshotErrorGrace-time.Second)); first || fails {
+		t.Fatal("an error within the grace does not fail")
+	}
+	if _, fails := e.see("", false, t0.Add(snapshotErrorGrace-time.Second)); fails {
+		t.Fatal("a cleared error does not fail")
+	}
+	// It came back: the grace starts over.
+	if first, fails := e.see("again", false, t0.Add(snapshotErrorGrace)); !first || fails {
+		t.Fatal("an error after a clear is new")
+	}
+	if _, fails := e.see("again", true, t0.Add(3*snapshotErrorGrace)); fails {
+		t.Fatal("a ready snapshot's error does not count")
+	}
+	if _, fails := e.see("again", false, t0.Add(3*snapshotErrorGrace)); fails {
+		t.Fatal("ready started the grace over")
+	}
+	if _, fails := e.see("again", false, t0.Add(4*snapshotErrorGrace)); !fails {
+		t.Fatal("an error that lasts the grace fails")
+	}
+}

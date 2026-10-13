@@ -506,6 +506,30 @@ func (c *cloning) cloneInput(source *corev1.TypedLocalObjectReference, size stri
 	}
 }
 
+// snapshotErrorGrace is how long a snapshot may report an error, while its
+// controller retries, before the clone gives up on it. A var for tests.
+var snapshotErrorGrace = 5 * time.Minute
+
+// snapshotErrors follows a snapshot's reported error. The error is the last
+// its controller saw, and the controller retries (a driver's own timeout
+// clears on the next try), so only one that lasts snapshotErrorGrace fails.
+type snapshotErrors struct{ since time.Time }
+
+// see takes the snapshot's error msg (or none) at now: first is an error
+// newly reported, fails one that has lasted the grace. A ready snapshot
+// has no error that counts.
+func (e *snapshotErrors) see(msg string, ready bool, now time.Time) (first, fails bool) {
+	switch {
+	case msg == "" || ready:
+		e.since = time.Time{}
+		return false, false
+	case e.since.IsZero():
+		e.since = now
+		return true, false
+	}
+	return false, now.Sub(e.since) >= snapshotErrorGrace
+}
+
 // snapshot takes the source disk's snapshot at a point the source is held
 // still for, and waits for it to be ready to restore from. It returns the
 // snapshot and its restore size.
@@ -532,6 +556,7 @@ func (c *cloning) snapshot(ctx context.Context) (string, string, error) {
 	}
 	d := DefaultDeadlines()
 	deadline := time.Now().Add(d.Snapshot)
+	var failing snapshotErrors
 	for {
 		v, err := readSnapshot(ctx, c.cs, c.ns, name)
 		if err != nil && !gone(err) {
@@ -541,8 +566,12 @@ func (c *cloning) snapshot(ctx context.Context) (string, string, error) {
 		if v != nil {
 			st = v.Status
 		}
-		if msg := st.failure(); msg != "" && !st.ready() {
+		msg := st.failure()
+		switch first, fails := failing.see(msg, st.ready(), time.Now()); {
+		case fails:
 			return "", "", fmt.Errorf("the snapshot of the source's disk failed: %s", msg)
+		case first:
+			flog.Warn("kube clone: the snapshot of the source's disk reports an error; its controller retries", "fleet", c.id.fleet, "snapshot", name, "err", msg)
 		}
 		if st.cut() || st.ready() {
 			c.letGo()
