@@ -2,7 +2,9 @@ package fleetclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -25,6 +27,13 @@ func StartGitHostKeyPrompts(parent context.Context, svc fleetgrpc.FleetServiceCl
 	stream, err := svc.GitHostKeys(ctx)
 	if err == nil {
 		err = stream.Send(&fleetgrpc.GitHostKeyAnswer{})
+		if errors.Is(err, io.EOF) {
+			// The server ended the stream before reading (a refusal, say):
+			// its status comes with the next Recv.
+			if _, rerr := stream.Recv(); rerr != nil {
+				err = rerr
+			}
+		}
 	}
 	if err == nil {
 		var ready *fleetgrpc.GitHostKeyPrompt
