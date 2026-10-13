@@ -13,7 +13,9 @@ jobs:
   integration-shard:
     name: integration ${{ matrix.range }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The longest shards take ~17 minutes; a retried test (FLEET_ITEST_RETRIES)
+    # can add a few more.
+    timeout-minutes: 30
     strategy:
       # Run every shard to completion even if one fails — we want the full
       # pass/fail picture across the suite, not a first-failure abort.
