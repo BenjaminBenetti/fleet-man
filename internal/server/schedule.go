@@ -209,6 +209,62 @@ type triggerFire struct {
 	plan *firingPlan
 }
 
+// handFires hands a batch of fires to the scheduler, waiting while ctx
+// lasts and, with a timeout above zero, at most that long. It reports
+// whether the scheduler has the batch: false when the wait ran out, or once
+// the scheduler stopped taking fires (closeFires).
+func (s *service) handFires(ctx context.Context, fires []triggerFire, timeout time.Duration) bool {
+	s.firesMu.RLock()
+	defer s.firesMu.RUnlock()
+	if s.firesClosed {
+		return false
+	}
+	var expired <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		expired = timer.C
+	}
+	select {
+	case s.triggerFires <- fires:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-expired:
+		return false
+	}
+}
+
+// closeFires stops the hand-over of fires and returns the batches handed
+// over that the scheduler has not taken. It takes them while the senders
+// in the middle of handFires finish, so none of them waits on a full
+// buffer: each batch is either returned here or refused to its sender.
+func (s *service) closeFires() [][]triggerFire {
+	closed := make(chan struct{})
+	go func() {
+		s.firesMu.Lock()
+		s.firesClosed = true
+		s.firesMu.Unlock()
+		close(closed)
+	}()
+	var left [][]triggerFire
+	for {
+		select {
+		case batch := <-s.triggerFires:
+			left = append(left, batch)
+		case <-closed:
+			for {
+				select {
+				case batch := <-s.triggerFires:
+					left = append(left, batch)
+				default:
+					return left
+				}
+			}
+		}
+	}
+}
+
 // bashProbeTimeout bounds how long a bash trigger's command may run before it is
 // killed (and treated as not-fired). A polling command that hangs must not leak a
 // process/goroutine or stall the next poll. Overridable via
@@ -255,6 +311,9 @@ var bashProbeSem = make(chan struct{}, maxBashProbeConcurrency)
 // Besides its ticks, it looks again when a queued run's fire interval ends
 // (so a queue drains at the pace of its interval, not of the tick) and when
 // a settings change wakes it (wakeScheduler).
+//
+// As it stops it takes no more fires, and keeps the ones handed over and
+// not taken yet for the next daemon (holdFires).
 func (s *service) runScheduler(ctx context.Context) {
 	sched := newScheduler()
 	sched.lim = s.limiter()
@@ -272,13 +331,25 @@ func (s *service) runScheduler(ctx context.Context) {
 		if !next.IsZero() {
 			due.Reset(max(time.Until(next), 0))
 		}
+		var batch []triggerFire
 		select {
 		case <-ctx.Done():
-			return
 		case <-ticker.C:
 		case <-due.C:
 		case <-s.schedulerWake:
-		case batch := <-s.triggerFires:
+		case batch = <-s.triggerFires:
+		}
+		// A select picks any ready case, so a stopping scheduler can come
+		// out of it with a batch: it waits for the next daemon too.
+		if ctx.Err() != nil {
+			left := s.closeFires()
+			if batch != nil {
+				left = append([][]triggerFire{batch}, left...)
+			}
+			s.holdFires(sched, left, time.Now())
+			return
+		}
+		if batch != nil {
 			s.fireTriggerBatch(sched, batch, time.Now())
 			sched.persist()
 		}
@@ -300,6 +371,36 @@ func (s *service) fireTriggerBatch(sched *scheduler, batch []triggerFire, now ti
 	if len(batch) == 0 {
 		return
 	}
+	s.planFires(sched, batch, now)
+	for _, f := range batch {
+		s.runFiring(sched, f.plan, f.body, now)
+	}
+}
+
+// holdFires keeps for the next daemon the batches the scheduler did not
+// take before it stopped (closeFires): their senders were told the firings
+// were taken (a webhook's 200 or 202), so a stop must not lose them. Each
+// firing is recorded in its trigger's log, and the runs it would start now
+// wait in its trigger's queue, which the watch list keeps. A daemon killed
+// outright still loses what was in its buffer.
+func (s *service) holdFires(sched *scheduler, batches [][]triggerFire, now time.Time) {
+	if len(batches) == 0 {
+		return
+	}
+	firings := 0
+	for _, batch := range batches {
+		s.planFires(sched, batch, now)
+		for _, f := range batch {
+			s.holdFiring(sched, f.plan, f.body, now)
+		}
+		firings += len(batch)
+	}
+	sched.persist()
+	flog.Info("automation: firings kept for the next start", "firings", firings)
+}
+
+// planFires plans the fires of batch that come unplanned (a bash probe's).
+func (s *service) planFires(sched *scheduler, batch []triggerFire, now time.Time) {
 	var unplanned []firingItem
 	var at []int
 	for i, f := range batch {
@@ -312,9 +413,6 @@ func (s *service) fireTriggerBatch(sched *scheduler, batch []triggerFire, now ti
 		for i, p := range sched.lim.plan(s.runChecks(), loadScheduleState, unplanned, now) {
 			batch[at[i]].plan = p
 		}
-	}
-	for _, f := range batch {
-		s.runFiring(sched, f.plan, f.body, now)
 	}
 }
 
@@ -427,12 +525,54 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 // it happens: the instance it got, or why it got none (refused, queued,
 // dropped, not created). It returns whether it created an instance.
 func (s *service) runFiring(sched *scheduler, p *firingPlan, body []byte, now time.Time) bool {
-	if p == nil {
+	ev, eventLog := s.recordFiring(sched, p, body, now)
+	if ev == nil || p.dropped != "" {
 		return false
+	}
+	fired := false
+	for _, ag := range p.direct {
+		if s.startRun(sched, p.fleet, ag, p.trigger.Prompt, ev, eventLog, nil, now) {
+			fired = true
+		}
+	}
+	for _, r := range p.start {
+		if s.startRun(sched, p.fleet, r.def, r.prompt, ev, eventLog, r, now) {
+			fired = true
+		}
+	}
+	if fired {
+		// Persist the new runs at once: their CREATING records already exist.
+		sched.persist()
+	}
+	return fired
+}
+
+// holdFiring records a firing the scheduler takes as it stops (holdFires)
+// as runFiring does, but the runs it would start now wait in its trigger's
+// queue instead, for the next daemon to start.
+func (s *service) holdFiring(sched *scheduler, p *firingPlan, body []byte, now time.Time) {
+	ev, eventLog := s.recordFiring(sched, p, body, now)
+	if ev == nil || p.dropped != "" {
+		return
+	}
+	for _, r := range sched.lim.postpone(p, ev, eventLog, "the daemon stopped before it started the run; the next one starts it", now) {
+		flog.Info("automation: run queued", "fleet", p.fleet, "trigger", p.trigger.Name, "agent", r.agent, "why", r.why)
+		appendTriggerOutcome(p.fleet, p.trigger.Name, eventLog, now, r.agent, "queued: "+r.why)
+	}
+}
+
+// recordFiring records a planned firing in its trigger's event log
+// (logTriggerEvent) with the outcomes of the runs it does not start: all of
+// them when it was dropped, else the refused and the queued ones. It
+// returns the firing's event and log, or a nil event when the plan has
+// nothing to record.
+func (s *service) recordFiring(sched *scheduler, p *firingPlan, body []byte, now time.Time) (*triggerEvent, string) {
+	if p == nil {
+		return nil, ""
 	}
 	if p.dropped == "" && len(p.direct)+len(p.start)+len(p.queued)+len(p.refused) == 0 {
 		flog.Warn("automation: fired trigger has no live agents", "fleet", p.fleet, "trigger", p.trigger.Name)
-		return false
+		return nil, ""
 	}
 	// One event describes this firing; it's shared (read-only) by every agent the
 	// trigger spawns and recorded once to the trigger's on-host event log so the
@@ -452,7 +592,7 @@ func (s *service) runFiring(sched *scheduler, p *firingPlan, body []byte, now ti
 	if p.dropped != "" {
 		flog.Warn("automation: firing dropped", "fleet", p.fleet, "trigger", p.trigger.Name, "why", p.dropped)
 		outcome(strings.Join(p.trigger.AgentNames, ","), "dropped: "+p.dropped)
-		return false
+		return ev, eventLog
 	}
 	for _, r := range p.refused {
 		flog.Warn("automation: run refused", "fleet", p.fleet, "trigger", p.trigger.Name, "agent", r.agent, "why", r.why)
@@ -462,22 +602,7 @@ func (s *service) runFiring(sched *scheduler, p *firingPlan, body []byte, now ti
 		flog.Info("automation: run queued", "fleet", p.fleet, "trigger", p.trigger.Name, "agent", r.agent, "why", r.why)
 		outcome(r.agent, "queued: "+r.why)
 	}
-	fired := false
-	for _, ag := range p.direct {
-		if s.startRun(sched, p.fleet, ag, p.trigger.Prompt, ev, eventLog, nil, now) {
-			fired = true
-		}
-	}
-	for _, r := range p.start {
-		if s.startRun(sched, p.fleet, r.def, r.prompt, ev, eventLog, r, now) {
-			fired = true
-		}
-	}
-	if fired {
-		// Persist the new runs at once: their CREATING records already exist.
-		sched.persist()
-	}
-	return fired
+	return ev, eventLog
 }
 
 // startRun creates the instance of one agent run and watches it, appending
@@ -1086,10 +1211,10 @@ var startBashProbe = func(s *service, fleetName string, trigger fleet.Trigger) {
 		flog.Info("automation: bash trigger fired", "fleet", fleetName, "trigger", trigger.Name, "bytes", len(stdout))
 		// Deliver as a single-fire batch on the shared channel (drained by
 		// runScheduler → fireTriggerBatch on the scheduler goroutine). Best-effort:
-		// give up if the daemon is shutting down rather than leaking this goroutine.
-		select {
-		case s.triggerFires <- []triggerFire{{fleet: fleetName, trigger: trigger, body: stdout}}:
-		case <-s.bgCtx.Done():
+		// give up if the daemon is shutting down rather than leaking this goroutine;
+		// the trigger polls again when the next daemon starts.
+		if !s.handFires(s.bgCtx, []triggerFire{{fleet: fleetName, trigger: trigger, body: stdout}}, 0) {
+			flog.Warn("automation: bash trigger fired as the daemon stopped; its agents were not started", "fleet", fleetName, "trigger", trigger.Name)
 		}
 	}()
 }

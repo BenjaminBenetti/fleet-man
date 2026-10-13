@@ -581,6 +581,42 @@ func TestStartBashProbe(t *testing.T) {
 	}
 }
 
+// Once the scheduler stops taking fires, every batch is either the
+// scheduler's or refused to its sender: closeFires returns the ones handed
+// over (a sender still waiting on a full buffer too), and a later hand-over
+// is refused.
+func TestCloseFiresKeepsEveryBatchHandedOver(t *testing.T) {
+	ctx := context.Background()
+	batch := func(name string) []triggerFire {
+		return []triggerFire{{fleet: "alpha", trigger: fleet.Trigger{Name: name}}}
+	}
+
+	s := &service{triggerFires: make(chan []triggerFire, 2)}
+	for _, name := range []string{"a", "b"} {
+		if !s.handFires(ctx, batch(name), time.Second) {
+			t.Fatalf("batch %s was not taken into the buffer", name)
+		}
+	}
+	if left := s.closeFires(); len(left) != 2 || left[0][0].trigger.Name != "a" || left[1][0].trigger.Name != "b" {
+		t.Fatalf("closeFires = %+v, want batches a and b in order", left)
+	}
+	if s.handFires(ctx, batch("c"), 0) {
+		t.Fatal("a batch was handed over after closeFires")
+	}
+
+	// A sender racing the close, on an unbuffered channel: it is told the
+	// scheduler has its batch exactly when closeFires returns it.
+	for i := range 200 {
+		s := &service{triggerFires: make(chan []triggerFire)}
+		took := make(chan bool, 1)
+		go func() { took <- s.handFires(ctx, batch("racer"), 0) }()
+		left := s.closeFires()
+		if got := <-took; got != (len(left) == 1) {
+			t.Fatalf("round %d: the sender was told %v, closeFires returned %d batches", i, got, len(left))
+		}
+	}
+}
+
 // TestRunBashScript exercises the real exec seam: stdout is captured as the
 // payload IN ISOLATION from stderr, and a non-zero exit reports failure with the
 // stderr tail folded into the error.
