@@ -247,6 +247,13 @@ func TestAcceptedChangesAreOnDiskBeforeTheAck(t *testing.T) {
 	r := newRig(t, "host", "c1")
 	r.write("c1", "user", "f", "acked")
 	r.sync()
+	// What the hub acked: f at its last rev. The write can reach the hub as
+	// one change or two (the file empty, then written), so the rev is the
+	// hub's own, not a fixed 1.
+	before := r.hub.roots["user"]
+	before.mu.Lock()
+	ackedRev, ackedRoot := before.entries[key{path: "f"}].Rev, before.rev
+	before.mu.Unlock()
 	r.crashHub()
 	h, err := OpenHub(filepath.Join(r.base, "hub"), r.table, r.roots, r.hopts)
 	if err != nil {
@@ -255,8 +262,8 @@ func TestAcceptedChangesAreOnDiskBeforeTheAck(t *testing.T) {
 	defer h.Close()
 	root := h.roots["user"]
 	e := root.entries[key{path: "f"}]
-	if e == nil || e.Entry.Hash != sum("acked") || e.Rev != 1 || root.rev != 1 {
-		t.Fatalf("after a crash the hub holds %+v at rev %d, want f at rev 1", e, root.rev)
+	if e == nil || e.Entry.Hash != sum("acked") || e.Rev != ackedRev || root.rev != ackedRoot {
+		t.Fatalf("after a crash the hub holds %+v at rev %d, want f at rev %d (root rev %d)", e, root.rev, ackedRev, ackedRoot)
 	}
 	r.hub = h
 	for _, id := range r.order {
