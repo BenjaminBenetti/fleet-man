@@ -101,6 +101,11 @@ func newRecoveryFixture(t *testing.T) *recoveryFixture {
 	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
 	pool := &fakeRecoveryPool{scope: kubernetes.Scope{Client: f.apis["minikube"], Namespace: "fleet", Owner: testIdentity.Owner()}}
 	f.svc.kubeRecovery.pool = func() kubeRecoveryPool { return pool }
+	// A fleet teardown a destroy leaves owed is kubert's to run, over the
+	// default pool, which reaches no fake cluster: nothing is owed here.
+	oldFleets := runPendingFleetTeardowns
+	runPendingFleetTeardowns = func(context.Context, string) int { return 0 }
+	t.Cleanup(func() { runPendingFleetTeardowns = oldFleets })
 	oldPoll, oldAttempts, oldRetry := kubeUndoPoll, kubeUndoAttempts, kubeUndoRetry
 	kubeUndoPoll, kubeUndoAttempts, kubeUndoRetry = 10*time.Millisecond, 2, 10*time.Millisecond
 	t.Cleanup(func() { kubeUndoPoll, kubeUndoAttempts, kubeUndoRetry = oldPoll, oldAttempts, oldRetry })
@@ -676,7 +681,7 @@ func TestDestroyTombstonesTheKey(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("tombstones %+v", fp.Tombstones)
+			t.Fatalf("tombstones %+v, pending teardowns %d", fp.Tombstones, r.svc.kubeRecovery.pendingTeardowns(r.id))
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

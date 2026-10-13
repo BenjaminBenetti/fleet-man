@@ -308,6 +308,10 @@ func (r *kubeRecovery) want(clusterID string) {
 
 // pendingTeardowns is the connection's known garbage not yet gone (its
 // KubeCapabilities.pending_teardowns).
+// runPendingFleetTeardowns runs the fleet teardowns owed on a connection and
+// counts those still owed (kubert's; a package var for tests).
+var runPendingFleetTeardowns = kubert.RunPendingTeardowns
+
 func (r *kubeRecovery) pendingTeardowns(clusterID string) int32 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -382,7 +386,7 @@ func (r *kubeRecovery) pass(ctx context.Context, clusterID string) {
 	pendingKeys, deletedKeys, waiting := r.passTombstones(ctx, scope, st, fp)
 	// The fleet teardowns owed here (a fleet that left the cluster while it
 	// could not be reached).
-	pendingFleets := kubert.RunPendingTeardowns(ctx, clusterID)
+	pendingFleets := runPendingFleetTeardowns(ctx, clusterID)
 	pending := pendingJournals + pendingKeys + pendingFleets
 	r.mu.Lock()
 	changed := r.pending[clusterID] != pending
