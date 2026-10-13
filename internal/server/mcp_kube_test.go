@@ -159,6 +159,11 @@ func TestMCPUpOnACluster(t *testing.T) {
 
 	var out FleetJobOutput
 	callJSON(t, cs, "fleet_up", map[string]any{"fleet": "alpha", "instance": "k1", "cluster": "dev"}, &out)
+	// The create runs on as a job, writing its logs into the test's home:
+	// it ends before the test does.
+	if j := f.svc.jobs.get(out.JobID); j != nil {
+		t.Cleanup(func() { <-j.exited })
+	}
 	if out.Target == nil || out.Target.Backend != string(fleet.BackendKubernetes) || out.Target.Cluster != dev.GetId() || out.Target.Defaulted {
 		t.Fatalf("target %+v", out.Target)
 	}

@@ -113,6 +113,10 @@ func caseCloneConsistent(c *C) {
 	waitStatus(c, dest, dest.ID(), backend.LiveStatusRunning, lifecycleTimeout)
 	c.Sh(src, `touch "$HOME/churn.stop"`)
 	checkState(c, dest, marker, "a clone of an instance that wrote throughout")
+	// The copy is of one point in time, as a crash leaves the disk: a commit
+	// cut mid-way leaves its lock (refs/heads/master.lock), which git says
+	// to remove after a crash, and newer git's fsck counts as a bad ref.
+	c.Sh(dest, `find "$HOME/churn-repo/.git" -name '*.lock' -type f -delete`)
 	if r := c.Exec(dest, ShArgv(`git -C "$HOME/churn-repo" fsck --full --no-progress`), nil); r.Err != nil {
 		c.Errorf("git fsck of the repo the source committed to throughout the clone: %s", r)
 	}
