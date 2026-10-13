@@ -408,6 +408,35 @@ func (l *automationLimiter) commit(p *firingPlan, ev *triggerEvent, eventLog str
 	}
 }
 
+// postpone puts the runs a committed plan would start now, its cluster runs
+// reserved to start and its other agents' runs, in its trigger's queue
+// instead, waiting with why, their reservations given back; it returns them.
+// For a firing the scheduler takes as it stops (holdFiring): the watch list
+// keeps them for the next daemon, which starts them as its queue drains (an
+// agent off a cluster at once, see due).
+func (l *automationLimiter) postpone(p *firingPlan, ev *triggerEvent, eventLog, why string, now time.Time) []*queuedRun {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	runs := make([]*queuedRun, 0, len(p.start)+len(p.direct))
+	for _, r := range p.start {
+		l.releaseLocked(r.reservation())
+		l.creatingDoneLocked(r.cluster)
+		runs = append(runs, r)
+	}
+	for _, ag := range p.direct {
+		l.seq++
+		runs = append(runs, &queuedRun{
+			id: l.seq, firing: p.firing, fleet: p.fleet, trigger: p.trigger.Name, agent: ag.Name,
+			prompt: p.trigger.Prompt, queuedAt: now, event: ev, eventLog: eventLog, def: ag,
+		})
+	}
+	for _, r := range runs {
+		r.why, r.pending = why, false
+		l.insertLocked(r)
+	}
+	return runs
+}
+
 // discard undoes the plans of a delivery that never reached the scheduler:
 // their queued runs leave the queue, the reserved ones give their slots and
 // start marks back.

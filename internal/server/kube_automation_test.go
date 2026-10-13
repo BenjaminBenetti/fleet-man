@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,97 @@ func TestWebhookRepliesSayWhatBecameOfTheDelivery(t *testing.T) {
 	}
 	if after, _ := s.limiter().counts(); after[agentKey("alpha", "k")] != before[agentKey("alpha", "k")] {
 		t.Fatalf("a shed delivery left runs queued: %v -> %v", before, after)
+	}
+}
+
+// A delivery the sender was told fired, but that the scheduler had not
+// taken when it stopped, is not lost: its firing is logged, its runs (a
+// cluster agent's and a devcontainer agent's) wait in the trigger's queue,
+// and the next daemon starts them with the delivery's payload. A delivery
+// after the stop is refused (503), for the sender to retry.
+func TestStoppingSchedulerKeepsTheFiresItHadNotTaken(t *testing.T) {
+	trig := fleet.Trigger{Name: "hook", Type: fleet.TriggerWebhook, AgentNames: []string{"k", "d"}, WebhookName: "gh",
+		FilterType: fleet.WebhookFilterRegex, Regex: ".*", Prompt: "P"}
+	direct := fleet.Agent{Name: "d", Command: "true"}
+	st := seedAutomationCluster(t, "0", 0, []fleet.Agent{keyedAgent("k", autoCluster), direct}, []fleet.Trigger{trig})
+	stubScheduleState(t, st)
+	stubAutomationSeams(t)
+	created := stubClusterCreates(t, st)
+	s := newService()
+	sched := persistedScheduler()
+	sched.lim = s.limiter()
+	t0 := time.Now().Truncate(time.Second)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		s.serveWebhook(w, httptest.NewRequest(http.MethodPost, "/gh", strings.NewReader(body)))
+		return w
+	}
+	if w := post(`{"n":1}`); w.Code != http.StatusOK {
+		t.Fatalf("delivery = %d %q", w.Code, w.Body.String())
+	}
+	s.holdFires(sched, s.closeFires(), t0)
+	if len(*created) != 0 {
+		t.Fatalf("a stopping scheduler created %v", *created)
+	}
+	if w := post(`{"n":2}`); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("delivery after the stop = %d %q", w.Code, w.Body.String())
+	}
+	logs := triggerLog(t, "alpha", "hook")
+	if n := strings.Count(logs, "===== event-"); n != 1 {
+		t.Fatalf("%d firings logged, want the one delivered before the stop:\n%s", n, logs)
+	}
+	why := "queued: the daemon stopped before it started the run; the next one starts it"
+	assertLogHas(t, logs, "k: "+why, "d: "+why)
+	if q := readPersistedWatch(t).Queued; len(q) != 2 {
+		t.Fatalf("watch.json keeps %+v, want both runs queued", q)
+	}
+
+	// The next daemon.
+	s2 := newService()
+	next := persistedScheduler()
+	next.lim = s2.limiter()
+	next.restore(t0.Add(time.Second))
+	s2.schedulerTick(context.Background(), next, t0.Add(time.Second))
+	if len(*created) != 2 {
+		t.Fatalf("the next daemon created %v, want both runs", *created)
+	}
+	for _, name := range *created {
+		w := next.watched["alpha/"+name]
+		if w == nil || w.prompt != "P" || w.event == nil || string(w.event.body) != `{"n":1}` {
+			t.Fatalf("run %s started as %+v", name, w)
+		}
+	}
+}
+
+// The scheduler loop stopping with fires in its buffer keeps all of them,
+// though its select sees the stop and a ready batch at once and may take
+// either: none starts a run, every one waits in the queue on disk.
+func TestSchedulerLoopStopsWithFiresInItsBuffer(t *testing.T) {
+	trig := fleet.Trigger{Name: "hook", Type: fleet.TriggerWebhook, AgentNames: []string{"d"}, WebhookName: "gh"}
+	for round := range 10 {
+		t.Run(strconv.Itoa(round), func(t *testing.T) {
+			st := seedAutomationCluster(t, "0", 0, []fleet.Agent{{Name: "d", Command: "true"}}, []fleet.Trigger{trig})
+			stubScheduleState(t, st)
+			stubAutomationSeams(t)
+			created := stubClusterCreates(t, st)
+			s := newService()
+			s.hub = nil // no status to publish
+			for n := range 5 {
+				if !s.handFires(context.Background(), []triggerFire{{fleet: "alpha", trigger: trig, body: []byte(strconv.Itoa(n))}}, time.Second) {
+					t.Fatalf("fire %d was not handed over", n)
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			s.runScheduler(ctx)
+			if len(*created) != 0 {
+				t.Fatalf("a stopping scheduler created %v", *created)
+			}
+			if q := readPersistedWatch(t).Queued; len(q) != 5 {
+				t.Fatalf("watch.json keeps %d runs, want the 5 fires': %+v", len(q), q)
+			}
+		})
 	}
 }
 

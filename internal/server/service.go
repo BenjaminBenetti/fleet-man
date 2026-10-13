@@ -123,7 +123,12 @@ type service struct {
 	// block the producer; a full channel makes the webhook receiver shed (503)
 	// rather than block (see webhook.go). Drained only while runScheduler is
 	// running (the real serve loop); tests that use newService() read it directly.
+	// Producers send through handFires, which refuses once the stopping
+	// scheduler has closed it (closeFires, under firesMu), so no batch lands
+	// after the scheduler's last look.
 	triggerFires chan []triggerFire
+	firesMu      sync.RWMutex
+	firesClosed  bool
 
 	// automation is the automation limiter (automation_limits.go): the
 	// cluster agents' limits and their triggers' queues, shared by the

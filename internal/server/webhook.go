@@ -228,22 +228,13 @@ func bodyIsJSON(body []byte) bool {
 // enqueueWebhookFires hands a request's matched events to the scheduler goroutine
 // as ONE batch (so the enqueue is atomic — see serveWebhook), bounded by
 // webhookEnqueueTimeout and the request's own context. It returns false when the
-// scheduler can't accept the batch in time (overloaded) or the request was
-// cancelled — the caller turns that into a 503.
+// scheduler can't accept the batch in time (overloaded), has stopped, or the
+// request was cancelled — the caller turns that into a 503.
 func (s *service) enqueueWebhookFires(ctx context.Context, fires []triggerFire) bool {
 	if s.triggerFires == nil || len(fires) == 0 {
 		return false
 	}
-	timer := time.NewTimer(webhookEnqueueTimeout)
-	defer timer.Stop()
-	select {
-	case s.triggerFires <- fires:
-		return true
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return false
-	}
+	return s.handFires(ctx, fires, webhookEnqueueTimeout)
 }
 
 // clipName bounds an externally-supplied webhook name before it is written to
