@@ -52,9 +52,24 @@ type watcher struct {
 
 	mu sync.Mutex
 	// err is the last list or watch failure, nil once a list or watch
-	// succeeds again.
+	// succeeds again: whether the API server answers.
 	err error
+	// own is each informer's own last list or watch failure, nil once its
+	// own list or watch succeeds again: whether its cache follows the
+	// cluster. After an outage each comes back on a backoff of its own
+	// (client-go's, jittered: the two as much as a minute apart); until it
+	// does, it holds the cluster as it was before the outage.
+	own [informerKinds]error
 }
+
+// informerKind is one of a watcher's two informers.
+type informerKind int
+
+const (
+	podInformer informerKind = iota
+	setInformer
+	informerKinds
+)
 
 // startWatcher starts c's informers, or says why they cannot run (the
 // daemon's identity is unreadable, the client does not build).
@@ -76,10 +91,10 @@ func (p *Pool) startWatcher(c *Cluster) (*watcher, error) {
 	w := &watcher{pool: p, cluster: c, ns: c.Namespace(), match: match, cancel: cancel, done: make(chan struct{}), synced: make(chan struct{})}
 	pods := cs.CoreV1().Pods(w.ns)
 	sets := cs.AppsV1().StatefulSets(w.ns)
-	w.pods = w.informer(cs, &corev1.Pod{}, "instance pods", sel,
+	w.pods = w.informer(cs, podInformer, &corev1.Pod{}, "instance pods", sel,
 		func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) { return pods.List(ctx, o) },
 		func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) { return pods.Watch(ctx, o) })
-	w.sets = w.informer(cs, &appsv1.StatefulSet{}, "instance StatefulSets", sel,
+	w.sets = w.informer(cs, setInformer, &appsv1.StatefulSet{}, "instance StatefulSets", sel,
 		func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) { return sets.List(ctx, o) },
 		func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) { return sets.Watch(ctx, o) })
 	if _, err := w.pods.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -120,21 +135,21 @@ func (p *Pool) startWatcher(c *Cluster) (*watcher, error) {
 }
 
 // informer is one kind's informer over list and watch, both narrowed to sel,
-// recording whether the API server answers.
-func (w *watcher) informer(cs kclient.Interface, example runtime.Object, what, sel string,
+// recording whether the API server answers it.
+func (w *watcher) informer(cs kclient.Interface, kind informerKind, example runtime.Object, what, sel string,
 	list func(context.Context, metav1.ListOptions) (runtime.Object, error),
 	watchFn func(context.Context, metav1.ListOptions) (watch.Interface, error)) cache.SharedIndexInformer {
 	lw := &cache.ListWatch{
 		ListWithContextFunc: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
 			o.LabelSelector = sel
 			obj, err := list(ctx, o)
-			w.answered(ctx, err)
+			w.answered(ctx, kind, err)
 			return obj, err
 		},
 		WatchFuncWithContext: func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
 			o.LabelSelector = sel
 			wi, err := watchFn(ctx, o)
-			w.answered(ctx, err)
+			w.answered(ctx, kind, err)
 			return wi, err
 		},
 	}
@@ -149,17 +164,19 @@ func (w *watcher) informer(cs kclient.Interface, example runtime.Object, what, s
 			// reflector lists again.
 			return
 		}
-		w.answered(ctx, err)
+		w.answered(ctx, kind, err)
 	})
 	return inf
 }
 
-// answered records whether the API server answered a list or a watch.
-func (w *watcher) answered(ctx context.Context, err error) {
+// answered records whether the API server answered a list or a watch of
+// kind's informer.
+func (w *watcher) answered(ctx context.Context, kind informerKind, err error) {
 	if ctx.Err() != nil {
 		return
 	}
 	w.mu.Lock()
+	w.own[kind] = err
 	changed := (w.err == nil) != (err == nil)
 	if err != nil && w.err == nil {
 		w.pool.opts.Logger.Warn("kube watch: the API server does not answer", "cluster", w.cluster.Record.ID, "err", err)
@@ -193,6 +210,18 @@ func (w *watcher) health() error {
 }
 
 var errNotSynced = errors.New("the cluster's instances are not listed yet")
+
+// current reports whether kind's cache follows the cluster: the connection
+// is healthy and that informer's own last list or watch succeeded (the other
+// informer answering again says nothing of it).
+func (w *watcher) current(kind informerKind) bool {
+	if w.health() != nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.own[kind] == nil
+}
 
 func (w *watcher) stop() {
 	w.cancel()
@@ -247,14 +276,16 @@ func (w *watcher) cachedSet(name string) *appsv1.StatefulSet {
 
 // cacheObjects reads objects from a synced watcher's informers, falling back
 // to the API server for what they do not hold (an object made a moment ago,
-// one outside the instance labels) or while they are not current.
+// one outside the instance labels) or while the one holding the kind is not
+// current: a pod verified from a cache that missed its replacement would
+// vouch for the pod that is gone.
 type cacheObjects struct {
 	w   *watcher
 	api Objects
 }
 
 func (o cacheObjects) Pod(ctx context.Context, ns, name string) (*corev1.Pod, error) {
-	if ns == o.w.ns && o.w.health() == nil {
+	if ns == o.w.ns && o.w.current(podInformer) {
 		if pod := o.w.cachedPod(name); pod != nil {
 			return pod.DeepCopy(), nil
 		}
@@ -263,7 +294,7 @@ func (o cacheObjects) Pod(ctx context.Context, ns, name string) (*corev1.Pod, er
 }
 
 func (o cacheObjects) StatefulSet(ctx context.Context, ns, name string) (*appsv1.StatefulSet, error) {
-	if ns == o.w.ns && o.w.health() == nil {
+	if ns == o.w.ns && o.w.current(setInformer) {
 		if set := o.w.cachedSet(name); set != nil {
 			return set.DeepCopy(), nil
 		}

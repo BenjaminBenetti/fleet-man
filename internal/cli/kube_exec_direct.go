@@ -38,48 +38,70 @@ import (
 // transport is opaque here), so the -tags nok8s pod build gets a stub
 // (kube_exec_nok8s.go) — the pod never runs the shim.
 
-// redialBackoff paces re-dials after a drop.
+// redialBackoff paces re-dials after a drop, and an attach's asks while
+// fleetd cannot vouch for its pod yet.
 var redialBackoff = []time.Duration{0, time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
 
+// attachWait bounds how long an attach waits for fleetd to vouch for the pod
+// that is there now (kubeExecOpen). A var for tests.
+var attachWait = 2 * time.Minute
+
 // runKubeExecDirect attaches argv to the pod over the API server. On a TTY the
-// local terminal is put into raw mode and resizes are forwarded; raw mode (no
-// fleet binary in the pod) runs the command with the pod's own shell and does
-// not resume.
+// local terminal is put into raw mode once the command starts, and resizes
+// are forwarded; raw mode (no fleet binary in the pod) runs the command with
+// the pod's own shell and does not resume.
 func runKubeExecDirect(ctx context.Context, f kubeExecFlags, argv []string, tty bool) (int, error) {
-	t, podUID, err := kubeExecTransport(ctx, f, f.pod, false)
+	if !f.raw {
+		return runKubeExecAgent(ctx, f, argv, tty)
+	}
+	t, _, err := kubeExecTransport(ctx, f, f.pod, false)
 	if err != nil {
 		return -1, err
 	}
-	if tty {
-		if restore := kubeExecRawTerminal(); restore != nil {
-			defer restore()
-		}
-	}
-	if f.raw {
-		return runKubeExecRaw(ctx, t, f, argv, tty)
-	}
-	return runKubeExecAgent(ctx, t, f, argv, tty, podUID)
+	defer kubeExecTerminal(tty)()
+	return runKubeExecRaw(ctx, t, f, argv, tty)
 }
 
 // runKubeExecAgent attaches through `pod-agent exec --stdio`, so the command
 // is held and re-attached after a dropped connection.
-func runKubeExecAgent(ctx context.Context, t *kubeexec.Transport, f kubeExecFlags, argv []string, tty bool, podUID string) (int, error) {
+func runKubeExecAgent(ctx context.Context, f kubeExecFlags, argv []string, tty bool) (int, error) {
 	rows, cols := kubeExecSize()
 	header := podwire.ExecHeader{
 		Request:   execas.Request{Class: execas.Class(f.class), User: f.user, Cwd: f.cwd, Argv: argv, TTY: tty, Rows: rows, Cols: cols},
 		Resumable: true,
-		PodUID:    podUID,
 		ProtoMin:  podwire.ProtoMin,
 		ProtoMax:  podwire.ProtoMax,
 	}
-	stream := t.Stream(ctx, podAgentStdioReq(f))
-	e, err := podwire.OpenExec(ctx, stream, header, podwire.ExecOptions{Heartbeat: true})
-	if err != nil {
-		_ = stream.Close()
-		if isAgentMissing(err) {
-			// The pod has no fleet binary: run with its own shell instead.
-			return runKubeExecRaw(ctx, t, f, argv, tty)
+	var t *kubeexec.Transport
+	var stream io.ReadWriteCloser
+	// agentErr is the agent's answer to the last open; nil when fleetd's
+	// answer ended it before the agent was reached.
+	var agentErr error
+	e, err := kubeExecOpen(ctx, func(ctx context.Context) (*podwire.Exec, error) {
+		agentErr = nil
+		fresh, podUID, err := kubeExecTransport(ctx, f, f.pod, false)
+		if err != nil {
+			return nil, err
 		}
+		t, stream = fresh, fresh.Stream(ctx, podAgentStdioReq(f))
+		h := header
+		h.PodUID = podUID
+		e, err := podwire.OpenExec(ctx, stream, h, podwire.ExecOptions{Heartbeat: true})
+		if err != nil {
+			_ = stream.Close()
+			agentErr = err
+		}
+		return e, err
+	})
+	switch {
+	case err == nil:
+	case agentErr == nil:
+		return -1, err
+	case isAgentMissing(err):
+		// The pod has no fleet binary: run with its own shell instead.
+		defer kubeExecTerminal(tty)()
+		return runKubeExecRaw(ctx, t, f, argv, tty)
+	default:
 		var se *podwire.StartError
 		if errors.As(err, &se) {
 			fmt.Fprintln(os.Stderr, se.Message)
@@ -87,6 +109,9 @@ func runKubeExecAgent(ctx context.Context, t *kubeexec.Transport, f kubeExecFlag
 		}
 		return -1, kubeerr.Unreached(err)
 	}
+	// Raw only now: until the command started, the terminal stays the
+	// user's (a wait for the pod can be interrupted).
+	defer kubeExecTerminal(tty)()
 	go bridgeStdin(e)
 	if tty {
 		go kubeExecResizes(e)
@@ -112,6 +137,59 @@ func runKubeExecAgent(ctx context.Context, t *kubeexec.Transport, f kubeExecFlag
 	drained()
 	_ = stream.Close()
 	return attachExit(code, werr)
+}
+
+// kubeExecOpen starts an attach's command with open, one ask of fleetd for
+// the pod (a fresh verification, and the uid it vouches for) and the start of
+// the command in the pod the API server reaches by name. The two can disagree
+// for a while after the pod was replaced: fleetd's view of the cluster
+// catches up on its own (its watch; after an API server outage, as much as a
+// minute later), and until it does it vouches for the pod that is gone (whose
+// uid the new pod's agent refuses, podwire.RefusedOtherPod) or sees the new
+// pod not running yet (errKubeExecNotNow). A replaced pod's pane rejoins
+// through exactly this attach, so it asks again (redialBackoff) for up to
+// attachWait; fleetd refusing the pod, and any other failure, ends it at once.
+// Each ask is verified afresh, so the command only ever starts in a pod
+// fleetd vouched for, by its uid.
+func kubeExecOpen(ctx context.Context, open func(context.Context) (*podwire.Exec, error)) (*podwire.Exec, error) {
+	deadline := time.Now().Add(attachWait)
+	for attempt := 1; ; attempt++ {
+		e, err := open(ctx)
+		if err == nil || !attachAgain(err) {
+			return e, err
+		}
+		wait := redialBackoff[min(attempt, len(redialBackoff)-1)]
+		if time.Now().Add(wait).After(deadline) {
+			return nil, err
+		}
+		if attempt == 1 {
+			fmt.Fprintf(os.Stderr, "fleet kube-exec: waiting for fleetd to vouch for the instance's pod (%v)\n", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(wait):
+		}
+	}
+}
+
+// attachAgain reports whether an attach's start failed only because fleetd
+// cannot vouch for the pod that is there yet: it answered not now, or the
+// pod's agent refused the uid fleetd vouched for (it replaced that pod).
+func attachAgain(err error) bool {
+	var refused *podwire.StreamRefusedError
+	return errors.Is(err, errKubeExecNotNow) || errors.As(err, &refused) && refused.Reason == podwire.RefusedOtherPod
+}
+
+// kubeExecTerminal puts a terminal attach's stdin into raw mode; the func it
+// returns restores it.
+func kubeExecTerminal(tty bool) func() {
+	if tty {
+		if restore := kubeExecRawTerminal(); restore != nil {
+			return restore
+		}
+	}
+	return func() {}
 }
 
 // attachExit is the shim's exit for an attach that ended with code and werr:
@@ -279,7 +357,7 @@ func kubeExecTransport(ctx context.Context, f kubeExecFlags, pod string, refresh
 		case !fleetdUnavailable(err):
 			// fleetd answered, but not now (the pod is not running yet, the
 			// API server is away): the caller may try again, never around it.
-			return nil, "", errors.New(status.Convert(err).Message())
+			return nil, "", fleetdAnswer(err)
 		}
 	}
 	// fleetd will not issue (down, or no Kubernetes support): load the
@@ -290,6 +368,31 @@ func kubeExecTransport(ctx context.Context, f kubeExecFlags, pod string, refresh
 	}
 	return conn.Transport(), "", nil
 }
+
+// errKubeExecNotNow is fleetd unable to vouch for the pod now: it is not
+// running yet as fleetd sees it, or fleetd could not check it (the API server
+// away or slow).
+var errKubeExecNotNow = errors.New("fleetd cannot vouch for the pod now")
+
+// fleetdAnswer is fleetd's answer err to an issue that is neither a refusal
+// nor fleetd being away, with fleetd's message: errKubeExecNotNow when it
+// could not vouch for the pod now (FailedPrecondition, DeadlineExceeded).
+func fleetdAnswer(err error) error {
+	msg := status.Convert(err).Message()
+	switch status.Code(err) {
+	case codes.FailedPrecondition, codes.DeadlineExceeded:
+		return &notNowError{msg}
+	}
+	return errors.New(msg)
+}
+
+// notNowError is errKubeExecNotNow with fleetd's message as is (it leads
+// with its kubernetes: code).
+type notNowError struct{ msg string }
+
+func (e *notNowError) Error() string { return e.msg }
+
+func (e *notNowError) Is(target error) bool { return target == errKubeExecNotNow }
 
 // fleetdUnavailable reports whether err is fleetd not answering an issue (the
 // daemon went away mid-call, or is a build without the RPC), as opposed to it
