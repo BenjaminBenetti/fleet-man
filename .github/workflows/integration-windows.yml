@@ -133,6 +133,9 @@ jobs:
           # budget by 3 so legitimately-passing tests aren't killed by the
           # default polling deadlines. Linux job is unaffected.
           export FLEET_TUI_WAIT_SCALE=3
+          # A failed test runs once more; one that passes only then is named
+          # flaky in the summary.
+          export FLEET_ITEST_RETRIES=1
           ./integration/run.sh
 
       - name: Dump dockerd log on failure

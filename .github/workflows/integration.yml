@@ -63,6 +63,9 @@ jobs:
         env:
           FLEET_BIN: /usr/local/bin/fleet
           FLEET_ITEST_RANGE: ${{ matrix.range }}
+          # A failed test runs once more (a download or runner blip fails one
+          # attempt); one that passes only then is named flaky in the summary.
+          FLEET_ITEST_RETRIES: "1"
         run: ./integration/run.sh
 
   # The backend conformance suite (internal/backend/backendtest) against the

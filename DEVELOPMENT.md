@@ -79,6 +79,8 @@ docker run --rm --privileged --name "fleet-itest-$RANDOM" \
 - `FLEET_ITEST_RANGE=START-END` keeps the tests whose numeric prefix is in
   `[START, END)` (drop it to run everything); `FLEET_ITEST_SKIP` is a
   comma-separated list of test basenames to skip.
+- `FLEET_ITEST_RETRIES=N` runs a failed test up to N more times; one that
+  passes only on a retry passes, and the summary names it flaky. CI sets 1.
 - Shard a full run by starting several containers at once, each with its own
   range and `--name`.
 - The image tag is `qa:latest` on main and `qa:feat-kubernetes` for work on that

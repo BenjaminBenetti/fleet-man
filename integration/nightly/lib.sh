@@ -75,7 +75,7 @@ nightly_itests() {
   # The jobs run with pipefail: the pipeline fails with run.sh.
   if ! (
     cd "${REPO_ROOT}"
-    env "$@" FLEET_ITEST_BACKEND=kubernetes FLEET_ITEST_CLUSTER="${ctx}" FLEET_ITEST_RANGE="${range}" \
+    env FLEET_ITEST_RETRIES="${FLEET_ITEST_RETRIES:-1}" "$@" FLEET_ITEST_BACKEND=kubernetes FLEET_ITEST_CLUSTER="${ctx}" FLEET_ITEST_RANGE="${range}" \
       FLEET_ITEST_ARTIFACTS="${NIGHTLY_OUT}/artifacts" ./integration/run.sh
   ) 2>&1 | tee "${log}"; then
     rc=1

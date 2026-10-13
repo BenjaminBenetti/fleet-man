@@ -251,6 +251,15 @@ _restore_claude_json() {
 
 trap 'rm -f "${FLEET_ITEST_RESULTS}"; _restore_claude_json' EXIT
 
+# FLEET_ITEST_RETRIES=<n> — run a failed test again, up to n more times (CI
+# sets 1: a download or runner blip fails one attempt). A test that passes
+# only on a retry passes, and the summary names it as flaky.
+itest_retries="${FLEET_ITEST_RETRIES:-0}"
+case "${itest_retries}" in
+  '' | *[!0-9]*) itest_retries=0 ;;
+esac
+flaky_tests=()
+
 # FLEET_ITEST_SKIP — comma-separated list of test basenames to skip
 # (without the .sh suffix). Skipped tests emit a "skip" row and never
 # run; the suite does not fail on them. Used by the WSL CI job to
@@ -296,21 +305,39 @@ for test_file in "${tests[@]}"; do
       >> "${FLEET_ITEST_RESULTS}"
     continue
   fi
-  say "${BOLD}RUN${RESET}  ${test_name}"
-  rc=0
-  bash "${test_file}" || rc=$?
-  # FLEET_ITEST_ARTIFACTS=<dir>: a failed test leaves its daemon's log and
-  # the backend's state (_be_dump) there, before the teardown wipes them.
-  if [ "${rc}" -ne 0 ] && [ -n "${FLEET_ITEST_ARTIFACTS:-}" ]; then
-    artifacts="${FLEET_ITEST_ARTIFACTS}/${test_name}"
-    mkdir -p "${artifacts}"
-    cp "${HOME}/.fleet/fleet.log" "${artifacts}/fleet.log" 2>/dev/null || true
-    cp "${HOME}/.fleet/state.json" "${artifacts}/state.json" 2>/dev/null || true
-    _be_dump "${artifacts}" || true
-    say "artifacts of ${test_name}: ${artifacts}"
+  attempt=0
+  while :; do
+    if [ "${attempt}" -eq 0 ]; then
+      say "${BOLD}RUN${RESET}  ${test_name}"
+    else
+      say "${YELLOW}RETRY${RESET} ${test_name} (attempt $((attempt + 1)) of $((itest_retries + 1)))"
+    fi
+    rc=0
+    bash "${test_file}" || rc=$?
+    # FLEET_ITEST_ARTIFACTS=<dir>: a failed test leaves its daemon's log and
+    # the backend's state (_be_dump) there, before the teardown wipes them.
+    if [ "${rc}" -ne 0 ] && [ -n "${FLEET_ITEST_ARTIFACTS:-}" ]; then
+      artifacts="${FLEET_ITEST_ARTIFACTS}/${test_name}"
+      [ "${attempt}" -gt 0 ] && artifacts="${artifacts}.retry${attempt}"
+      mkdir -p "${artifacts}"
+      cp "${HOME}/.fleet/fleet.log" "${artifacts}/fleet.log" 2>/dev/null || true
+      cp "${HOME}/.fleet/state.json" "${artifacts}/state.json" 2>/dev/null || true
+      _be_dump "${artifacts}" || true
+      say "artifacts of ${test_name}: ${artifacts}"
+    fi
+    say "teardown ${test_name}"
+    teardown_test || true
+    if [ "${rc}" -eq 0 ] || [ "${attempt}" -ge "${itest_retries}" ]; then
+      break
+    fi
+    # The retry writes its own row: drop the failed attempt's.
+    grep -v "^${test_name}|" "${FLEET_ITEST_RESULTS}" > "${FLEET_ITEST_RESULTS}.retry" || true
+    mv "${FLEET_ITEST_RESULTS}.retry" "${FLEET_ITEST_RESULTS}"
+    attempt=$((attempt + 1))
+  done
+  if [ "${rc}" -eq 0 ] && [ "${attempt}" -gt 0 ]; then
+    flaky_tests+=("${test_name}")
   fi
-  say "teardown ${test_name}"
-  teardown_test || true
 done
 
 # Aggregate the per-test rows.
@@ -364,6 +391,10 @@ else
     "${RED}"   "${failed}" "${RESET}"
 fi
 
+if [ "${#flaky_tests[@]}" -gt 0 ]; then
+  printf "%b==>%b %bFlaky%b (passed on a retry): %s\n" "${BOLD}" "${RESET}" "${YELLOW}" "${RESET}" "${flaky_tests[*]}"
+fi
+
 # Kubernetes parity of the selected tests (counted before the kubernetes run's
 # own selection), then each devcontainer-only exemption with its reason.
 parity_line="k8s parity of ${parity_total} test(s): ${parity_k8s} marked k8s, ${parity_exempt} devcontainer-only, ${parity_pending} not ported yet, ${parity_host} host-only"
@@ -407,6 +438,9 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     done
     if [ "${failed}" -gt 0 ]; then
       printf '\n**Failed:** %s\n' "${failed_tests[*]}"
+    fi
+    if [ "${#flaky_tests[@]}" -gt 0 ]; then
+      printf '\n⚠️ **Flaky** (failed, then passed on a retry): %s\n' "${flaky_tests[*]}"
     fi
     if [ "${#exemptions[@]}" -gt 0 ]; then
       printf '\n<details><summary>devcontainer-only exemptions (%d)</summary>\n\n' "${#exemptions[@]}"

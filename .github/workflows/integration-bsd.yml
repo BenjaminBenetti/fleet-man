@@ -82,6 +82,9 @@ jobs:
           FLEET_BIN: /usr/local/bin/fleet
           FLEET_ITEST_RANGE: ${{ matrix.range }}
           FLEET_ITEST_BSD_SHIMS: "1"
+          # A failed test runs once more (a download or runner blip fails one
+          # attempt); one that passes only then is named flaky in the summary.
+          FLEET_ITEST_RETRIES: "1"
         run: ./integration/run.sh
 
   integration-bsd:

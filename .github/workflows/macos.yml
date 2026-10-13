@@ -81,4 +81,7 @@ jobs:
           # Hosted mac runners are slower than the Linux jobs; give the TUI
           # polling deadlines the same headroom trick the WSL job uses.
           FLEET_TUI_WAIT_SCALE: "2"
+          # A failed test runs once more (a download or runner blip fails one
+          # attempt); one that passes only then is named flaky in the summary.
+          FLEET_ITEST_RETRIES: "1"
         run: ./integration/run.sh

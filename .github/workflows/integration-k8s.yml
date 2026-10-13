@@ -114,6 +114,9 @@ jobs:
           # Each failed test's fleet.log and cluster state, before its
           # teardown: the failure artifact below.
           FLEET_ITEST_ARTIFACTS: ${{ runner.temp }}/k8s-dump/tests
+          # A failed test runs once more (a download or runner blip fails one
+          # attempt); one that passes only then is named flaky in the summary.
+          FLEET_ITEST_RETRIES: "1"
         run: ./integration/run.sh
 
       - name: Dump the cluster
