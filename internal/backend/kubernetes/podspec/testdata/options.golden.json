@@ -1,0 +1,2949 @@
+{
+  "add-host": {
+    "args": [
+      "--add-host=db:10.0.0.5",
+      "--add-host",
+      "cache=10.0.0.5",
+      "--add-host=v6=[::1]"
+    ],
+    "outcomes": {
+      "add-host": "map"
+    },
+    "changes": {
+      "/hostAliases/0/hostnames/0": "db",
+      "/hostAliases/0/hostnames/1": "cache",
+      "/hostAliases/0/ip": "10.0.0.5",
+      "/hostAliases/1/hostnames/0": "v6",
+      "/hostAliases/1/ip": "::1"
+    }
+  },
+  "add-host/host-gateway": {
+    "args": [
+      "--add-host=host.docker.internal:host-gateway"
+    ],
+    "outcomes": {
+      "add-host": "map"
+    },
+    "changes": {
+      "/hostAliases/0/hostnames/0": "host.docker.internal",
+      "/hostAliases/0/ip": "127.0.0.2",
+      "/hostGateway": true
+    },
+    "warnings": [
+      "host-gateway: host.docker.internal is 127.0.0.2 in the pod, where fleet mirrors every TCP port the daemon host listens on, loopback-only ones too; a pod process cannot listen on 0.0.0.0 at a mirrored port (the devcontainer's forwardPorts and published ports are not mirrored)"
+    ]
+  },
+  "add-host/host-gateway-off": {
+    "args": [
+      "--add-host=host.docker.internal:host-gateway"
+    ],
+    "outcomes": {
+      "add-host": "map"
+    },
+    "changes": {
+      "/hostAliases/0/hostnames/0": "host.docker.internal",
+      "/hostAliases/0/ip": "127.0.0.2"
+    },
+    "warnings": [
+      "--add-host host.docker.internal:host-gateway: host.docker.internal resolves to 127.0.0.2, but host_gateway is off on prod-eu, so no daemon-host port is mirrored there"
+    ]
+  },
+  "add-host/host-gateway-other-name": {
+    "args": [
+      "--add-host=gw:host-gateway"
+    ],
+    "outcomes": {
+      "add-host": "map"
+    },
+    "changes": {
+      "/hostAliases/0/hostnames/0": "gw",
+      "/hostAliases/0/hostnames/1": "host.docker.internal",
+      "/hostAliases/0/ip": "127.0.0.2",
+      "/hostGateway": true
+    },
+    "warnings": [
+      "host-gateway: host.docker.internal is 127.0.0.2 in the pod, where fleet mirrors every TCP port the daemon host listens on, loopback-only ones too; a pod process cannot listen on 0.0.0.0 at a mirrored port (the devcontainer's forwardPorts and published ports are not mirrored)"
+    ]
+  },
+  "add-host/host-gateway-own-address": {
+    "args": [
+      "--add-host=gw:host-gateway",
+      "--add-host=host.docker.internal:10.0.0.9"
+    ],
+    "outcomes": {
+      "add-host": "map"
+    },
+    "changes": {
+      "/hostAliases/0/hostnames/0": "gw",
+      "/hostAliases/0/ip": "127.0.0.2",
+      "/hostAliases/1/hostnames/0": "host.docker.internal",
+      "/hostAliases/1/ip": "10.0.0.9",
+      "/hostGateway": true
+    },
+    "warnings": [
+      "host-gateway: host.docker.internal is 127.0.0.2 in the pod, where fleet mirrors every TCP port the daemon host listens on, loopback-only ones too; a pod process cannot listen on 0.0.0.0 at a mirrored port (the devcontainer's forwardPorts and published ports are not mirrored)"
+    ]
+  },
+  "add-host/invalid": {
+    "args": [
+      "--add-host=db:not-an-ip"
+    ],
+    "outcomes": {
+      "add-host": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:add-host: invalid IP address in --add-host \"db:not-an-ip\""
+  },
+  "annotation": {
+    "args": [
+      "--annotation",
+      "com.example.key=the-value"
+    ],
+    "outcomes": {
+      "annotation": "delta"
+    },
+    "warnings": [
+      "--annotation com.example.key: OCI runtime annotations have no pod field; they are not passed on"
+    ]
+  },
+  "attach": {
+    "args": [
+      "-a",
+      "STDIN"
+    ],
+    "outcomes": {
+      "attach": "ignore"
+    }
+  },
+  "blkio-weight": {
+    "args": [
+      "--blkio-weight",
+      "300"
+    ],
+    "outcomes": {
+      "blkio-weight": "delta"
+    },
+    "warnings": [
+      "--blkio-weight 300: Kubernetes has no per-pod block IO weight"
+    ]
+  },
+  "blkio-weight-device": {
+    "args": [
+      "--blkio-weight-device",
+      "/dev/sda:200"
+    ],
+    "outcomes": {
+      "blkio-weight-device": "delta"
+    },
+    "warnings": [
+      "--blkio-weight-device /dev/sda:200: Kubernetes has no per-pod block IO weight"
+    ]
+  },
+  "cap-add": {
+    "args": [
+      "--cap-add",
+      "NET_ADMIN",
+      "--cap-add",
+      "cap_sys_admin"
+    ],
+    "outcomes": {
+      "cap-add": "map"
+    },
+    "changes": {
+      "/security/capAdd/0": "NET_ADMIN",
+      "/security/capAdd/1": "SYS_ADMIN"
+    }
+  },
+  "cap-add/all": {
+    "args": [
+      "--cap-add",
+      "all"
+    ],
+    "outcomes": {
+      "cap-add": "map"
+    },
+    "changes": {
+      "/security/capAdd/0": "ALL"
+    }
+  },
+  "cap-add/invalid": {
+    "args": [
+      "--cap-add",
+      "not a cap"
+    ],
+    "outcomes": {
+      "cap-add": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:cap-add: invalid capability \"not a cap\""
+  },
+  "cap-add/sys-ptrace": {
+    "args": [
+      "--cap-add",
+      "CAP_SYS_PTRACE"
+    ],
+    "outcomes": {
+      "cap-add": "map"
+    },
+    "changes": {
+      "/debugGrants/0": "--cap-add CAP_SYS_PTRACE",
+      "/security/capAdd/0": "SYS_PTRACE"
+    }
+  },
+  "cap-add/sys-ptrace-dropped": {
+    "args": [
+      "--cap-add",
+      "SYS_PTRACE"
+    ],
+    "outcomes": {
+      "cap-add": "map"
+    },
+    "changes": {
+      "/debugDropped": true,
+      "/debugGrants/0": "--cap-add SYS_PTRACE"
+    },
+    "warnings": [
+      "debug capabilities dropped by admission: --cap-add SYS_PTRACE (namespace team-dev denies them); debuggers such as dlv and gdb cannot attach. Set debug_capabilities to require on prod-eu to fail the create instead"
+    ]
+  },
+  "cap-drop": {
+    "args": [
+      "--cap-drop",
+      "NET_RAW",
+      "--cap-drop",
+      "MKNOD"
+    ],
+    "outcomes": {
+      "cap-drop": "map"
+    },
+    "changes": {
+      "/security/capDrop/0": "NET_RAW",
+      "/security/capDrop/1": "MKNOD"
+    }
+  },
+  "cap-drop/added-back": {
+    "args": [
+      "--cap-drop",
+      "ALL",
+      "--cap-drop",
+      "chown",
+      "--cap-add",
+      "CHOWN"
+    ],
+    "outcomes": {
+      "cap-add": "map",
+      "cap-drop": "map"
+    },
+    "changes": {
+      "/security/capAdd/0": "CHOWN",
+      "/security/capDrop/0": "ALL"
+    }
+  },
+  "cgroup-parent": {
+    "args": [
+      "--cgroup-parent",
+      "/custom"
+    ],
+    "outcomes": {
+      "cgroup-parent": "delta"
+    },
+    "warnings": [
+      "--cgroup-parent /custom: the kubelet places every pod's cgroup itself"
+    ]
+  },
+  "cgroupns": {
+    "args": [
+      "--cgroupns",
+      "private"
+    ],
+    "outcomes": {
+      "cgroupns": "map"
+    }
+  },
+  "cgroupns/host": {
+    "args": [
+      "--cgroupns=host"
+    ],
+    "outcomes": {
+      "cgroupns": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:cgroupns: --cgroupns host: a pod cannot share the node's cgroup namespace"
+  },
+  "cidfile": {
+    "args": [
+      "--cidfile",
+      "/tmp/cid"
+    ],
+    "outcomes": {
+      "cidfile": "ignore"
+    }
+  },
+  "cpu-count": {
+    "args": [
+      "--cpu-count",
+      "2"
+    ],
+    "outcomes": {
+      "cpu-count": "ignore"
+    }
+  },
+  "cpu-percent": {
+    "args": [
+      "--cpu-percent",
+      "50"
+    ],
+    "outcomes": {
+      "cpu-percent": "ignore"
+    }
+  },
+  "cpu-period": {
+    "args": [
+      "--cpu-period",
+      "50000"
+    ],
+    "outcomes": {
+      "cpu-period": "ignore"
+    }
+  },
+  "cpu-quota": {
+    "args": [
+      "--cpu-quota",
+      "150000"
+    ],
+    "outcomes": {
+      "cpu-quota": "map"
+    },
+    "changes": {
+      "/resources/limits/cpu": "1500m"
+    }
+  },
+  "cpu-quota/unlimited": {
+    "args": [
+      "--cpu-quota",
+      "-1"
+    ],
+    "outcomes": {
+      "cpu-quota": "ignore"
+    }
+  },
+  "cpu-quota/with-period": {
+    "args": [
+      "--cpu-quota",
+      "150000",
+      "--cpu-period",
+      "50000"
+    ],
+    "outcomes": {
+      "cpu-period": "map",
+      "cpu-quota": "map"
+    },
+    "changes": {
+      "/resources/limits/cpu": "3"
+    }
+  },
+  "cpu-rt-period": {
+    "args": [
+      "--cpu-rt-period",
+      "1000000"
+    ],
+    "outcomes": {
+      "cpu-rt-period": "delta"
+    },
+    "warnings": [
+      "--cpu-rt-period 1000000: Kubernetes has no real-time CPU budget for a pod"
+    ]
+  },
+  "cpu-rt-runtime": {
+    "args": [
+      "--cpu-rt-runtime",
+      "950000"
+    ],
+    "outcomes": {
+      "cpu-rt-runtime": "delta"
+    },
+    "warnings": [
+      "--cpu-rt-runtime 950000: Kubernetes has no real-time CPU budget for a pod"
+    ]
+  },
+  "cpu-shares": {
+    "args": [
+      "-c",
+      "512"
+    ],
+    "outcomes": {
+      "cpu-shares": "delta"
+    },
+    "warnings": [
+      "--cpu-shares 512: the pod's CPU request sets its CPU weight"
+    ]
+  },
+  "cpus": {
+    "args": [
+      "--cpus",
+      "1.5"
+    ],
+    "outcomes": {
+      "cpus": "map"
+    },
+    "changes": {
+      "/resources/limits/cpu": "1500m"
+    }
+  },
+  "cpus/below-request": {
+    "args": [
+      "--cpus",
+      "0.25"
+    ],
+    "outcomes": {
+      "cpus": "map"
+    },
+    "changes": {
+      "/resources/limits/cpu": "250m",
+      "/resources/requests/cpu": "250m"
+    },
+    "warnings": [
+      "--cpus 0.25: the CPU request is lowered from 500m to the limit, 250m"
+    ]
+  },
+  "cpus/with-quota": {
+    "args": [
+      "--cpus",
+      "2",
+      "--cpu-quota",
+      "100000"
+    ],
+    "outcomes": {
+      "cpus": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:cpus: --cpus and --cpu-quota cannot both be set"
+  },
+  "cpuset-cpus": {
+    "args": [
+      "--cpuset-cpus",
+      "0-3"
+    ],
+    "outcomes": {
+      "cpuset-cpus": "delta"
+    },
+    "warnings": [
+      "--cpuset-cpus 0-3: the kubelet's CPU manager assigns CPUs and memory nodes"
+    ]
+  },
+  "cpuset-mems": {
+    "args": [
+      "--cpuset-mems",
+      "0"
+    ],
+    "outcomes": {
+      "cpuset-mems": "delta"
+    },
+    "warnings": [
+      "--cpuset-mems 0: the kubelet's CPU manager assigns CPUs and memory nodes"
+    ]
+  },
+  "detach": {
+    "args": [
+      "-d"
+    ],
+    "outcomes": {
+      "detach": "ignore"
+    }
+  },
+  "detach-keys": {
+    "args": [
+      "--detach-keys",
+      "ctrl-x"
+    ],
+    "outcomes": {
+      "detach-keys": "ignore"
+    }
+  },
+  "device": {
+    "args": [
+      "--device",
+      "/dev/kvm"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:privileged: --device /dev/kvm needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node)"
+  },
+  "device-cgroup-rule": {
+    "args": [
+      "--device-cgroup-rule",
+      "c 81:* rmw"
+    ],
+    "outcomes": {
+      "device-cgroup-rule": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:device-cgroup-rule: --device-cgroup-rule c 81:* rmw widens device access, which a pod can only get by being privileged; add --privileged (which the connection must allow)"
+  },
+  "device-cgroup-rule/privileged": {
+    "args": [
+      "--privileged",
+      "--device-cgroup-rule",
+      "c 81:* rmw"
+    ],
+    "outcomes": {
+      "device-cgroup-rule": "ignore",
+      "privileged": "map"
+    },
+    "changes": {
+      "/pid1/docker": {},
+      "/pid1/privileged": true,
+      "/security/privileged": true
+    }
+  },
+  "device-read-bps": {
+    "args": [
+      "--device-read-bps",
+      "/dev/sda:1mb"
+    ],
+    "outcomes": {
+      "device-read-bps": "delta"
+    },
+    "warnings": [
+      "--device-read-bps /dev/sda:1mb: Kubernetes has no per-pod block IO throttle"
+    ]
+  },
+  "device-read-iops": {
+    "args": [
+      "--device-read-iops",
+      "/dev/sda:1000"
+    ],
+    "outcomes": {
+      "device-read-iops": "delta"
+    },
+    "warnings": [
+      "--device-read-iops /dev/sda:1000: Kubernetes has no per-pod block IO throttle"
+    ]
+  },
+  "device-write-bps": {
+    "args": [
+      "--device-write-bps",
+      "/dev/sda:1mb"
+    ],
+    "outcomes": {
+      "device-write-bps": "delta"
+    },
+    "warnings": [
+      "--device-write-bps /dev/sda:1mb: Kubernetes has no per-pod block IO throttle"
+    ]
+  },
+  "device-write-iops": {
+    "args": [
+      "--device-write-iops",
+      "/dev/sda:1000"
+    ],
+    "outcomes": {
+      "device-write-iops": "delta"
+    },
+    "warnings": [
+      "--device-write-iops /dev/sda:1000: Kubernetes has no per-pod block IO throttle"
+    ]
+  },
+  "device/invalid": {
+    "args": [
+      "--device",
+      "kvm"
+    ],
+    "outcomes": {
+      "device": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:device: invalid device specification: kvm"
+  },
+  "device/local": {
+    "args": [
+      "--device",
+      "/dev/kvm:/dev/kvm:rw"
+    ],
+    "outcomes": {
+      "device": "map"
+    },
+    "changes": {
+      "/mounts/0/kind": "device",
+      "/mounts/0/source": "/dev/kvm",
+      "/mounts/0/target": "/dev/kvm",
+      "/mounts/1/kind": "workspace",
+      "/mounts/1/source": "/home/dev/src/app",
+      "/mounts/1/target": "/workspaces/app",
+      "/pid1/docker": {},
+      "/pid1/privileged": true,
+      "/security/privileged": true
+    },
+    "warnings": [
+      "--device /dev/kvm:/dev/kvm:rw: a privileged pod can read, write and create every device; the \"rw\" permissions are not enforced",
+      "--device /dev/kvm:/dev/kvm:rw: the pod runs privileged to reach the device (the node is the isolation boundary)"
+    ]
+  },
+  "disable-content-trust": {
+    "args": [
+      "--disable-content-trust"
+    ],
+    "outcomes": {
+      "disable-content-trust": "ignore"
+    }
+  },
+  "dns": {
+    "args": [
+      "--dns",
+      "1.1.1.1",
+      "--dns=8.8.8.8"
+    ],
+    "outcomes": {
+      "dns": "map"
+    },
+    "changes": {
+      "/dns/nameservers/0": "1.1.1.1",
+      "/dns/nameservers/1": "8.8.8.8"
+    },
+    "warnings": [
+      "--dns 1.1.1.1, 8.8.8.8: the pod asks the cluster's DNS server first, so fleet's services and sibling instances keep resolving; docker would ask only these"
+    ]
+  },
+  "dns-option": {
+    "args": [
+      "--dns-option",
+      "ndots:2",
+      "--dns-opt",
+      "edns0"
+    ],
+    "outcomes": {
+      "dns-option": "map"
+    },
+    "changes": {
+      "/dns/options/0/name": "ndots",
+      "/dns/options/0/value": "2",
+      "/dns/options/1/name": "edns0"
+    }
+  },
+  "dns-search": {
+    "args": [
+      "--dns-search",
+      "corp.example",
+      "--dns-search",
+      "."
+    ],
+    "outcomes": {
+      "dns-search": "map"
+    },
+    "changes": {
+      "/dns/searches/0": "corp.example"
+    }
+  },
+  "dns/invalid": {
+    "args": [
+      "--dns",
+      "resolver.example"
+    ],
+    "outcomes": {
+      "dns": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:dns: invalid DNS server \"resolver.example\""
+  },
+  "domainname": {
+    "args": [
+      "--domainname",
+      "corp.example"
+    ],
+    "outcomes": {
+      "domainname": "delta"
+    },
+    "warnings": [
+      "--domainname corp.example: the pod keeps its own domain name (setting another needs SYS_ADMIN)"
+    ]
+  },
+  "domainname/sys-admin": {
+    "args": [
+      "--domainname",
+      "corp.example",
+      "--cap-add",
+      "SYS_ADMIN"
+    ],
+    "outcomes": {
+      "cap-add": "map",
+      "domainname": "map"
+    },
+    "changes": {
+      "/pid1/domainname": "corp.example",
+      "/security/capAdd/0": "SYS_ADMIN"
+    }
+  },
+  "entrypoint": {
+    "args": [
+      "--entrypoint",
+      "/usr/local/bin/start.sh"
+    ],
+    "outcomes": {
+      "entrypoint": "map"
+    },
+    "changes": {
+      "/pid1/argv/0": "/usr/local/bin/start.sh"
+    }
+  },
+  "entrypoint/reset": {
+    "args": [
+      "--entrypoint="
+    ],
+    "outcomes": {
+      "entrypoint": "map"
+    },
+    "changes": {
+      "/pid1/argv/0": "-c",
+      "/pid1/argv/1": "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 \u0026 wait $!; do :; done",
+      "/pid1/argv/2": "-",
+      "/pid1/argv/3": null
+    }
+  },
+  "env": {
+    "args": [
+      "-e",
+      "API_TOKEN=s3cr3t-$(HOME)-value",
+      "--env=PLAIN=1"
+    ],
+    "outcomes": {
+      "env": "map"
+    },
+    "changes": {
+      "/env/0/key": "API_TOKEN",
+      "/env/0/name": "API_TOKEN",
+      "/env/1/key": "PLAIN",
+      "/env/1/name": "PLAIN"
+    }
+  },
+  "env-file": {
+    "args": [
+      "--env-file",
+      "/home/dev/src/app/.env"
+    ],
+    "outcomes": {
+      "env-file": "map"
+    },
+    "changes": {
+      "/env/0/key": "FROM_FILE",
+      "/env/0/name": "FROM_FILE"
+    }
+  },
+  "env/host-value": {
+    "args": [
+      "-e",
+      "FROM_HOST"
+    ],
+    "outcomes": {
+      "env": "map"
+    },
+    "changes": {
+      "/env/0/key": "FROM_HOST",
+      "/env/0/name": "FROM_HOST"
+    }
+  },
+  "env/names": {
+    "args": [
+      "-e",
+      "my.var-1=a",
+      "-e",
+      "with space=b",
+      "-e",
+      "x-key=c"
+    ],
+    "outcomes": {
+      "env": "map"
+    },
+    "changes": {
+      "/env/0/key": "my.var-1",
+      "/env/0/name": "my.var-1",
+      "/env/1/key": "x-b8b8f25a5fc711ca",
+      "/env/1/name": "with space",
+      "/env/2/key": "x-e0d7d51f1fb35b01",
+      "/env/2/name": "x-key"
+    }
+  },
+  "env/unset": {
+    "args": [
+      "-e",
+      "IMAGE_ONLY",
+      "-e",
+      "NOT_ANYWHERE"
+    ],
+    "outcomes": {
+      "env": "map"
+    },
+    "warnings": [
+      "-e IMAGE_ONLY: IMAGE_ONLY is not set on the daemon host, so docker would remove the image's IMAGE_ONLY; the pod keeps the image's value"
+    ]
+  },
+  "expose": {
+    "args": [
+      "--expose",
+      "9000"
+    ],
+    "outcomes": {
+      "expose": "map"
+    }
+  },
+  "expose/publish-all": {
+    "args": [
+      "--expose",
+      "9000-9001",
+      "--expose",
+      "53/udp",
+      "-P"
+    ],
+    "outcomes": {
+      "expose": "map",
+      "publish-all": "map"
+    },
+    "changes": {
+      "/ports/0/containerPort": 9000,
+      "/ports/0/hostIP": "127.0.0.1",
+      "/ports/0/hostPort": 0,
+      "/ports/0/protocol": "TCP",
+      "/ports/1/containerPort": 9001,
+      "/ports/1/hostIP": "127.0.0.1",
+      "/ports/1/hostPort": 0,
+      "/ports/1/protocol": "TCP",
+      "/ports/2/containerPort": 8080,
+      "/ports/2/hostIP": "127.0.0.1",
+      "/ports/2/hostPort": 0,
+      "/ports/2/protocol": "TCP"
+    },
+    "warnings": [
+      "--publish-all: only TCP is forwarded from a pod; 53/udp, 5353/udp not published"
+    ]
+  },
+  "gpus": {
+    "args": [
+      "--gpus",
+      "all"
+    ],
+    "outcomes": {
+      "gpus": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:gpus: --gpus all: prod-eu offers no GPU resource on its nodes"
+  },
+  "gpus/all": {
+    "args": [
+      "--gpus",
+      "all"
+    ],
+    "outcomes": {
+      "gpus": "map"
+    },
+    "changes": {
+      "/resources/limits/nvidia.com/gpu": "1"
+    },
+    "warnings": [
+      "--gpus all: a pod asks for a number of GPUs; it gets one"
+    ]
+  },
+  "gpus/count": {
+    "args": [
+      "--gpus",
+      "count=2,\"capabilities=compute,utility\""
+    ],
+    "outcomes": {
+      "gpus": "map"
+    },
+    "changes": {
+      "/resources/limits/nvidia.com/gpu": "2"
+    }
+  },
+  "gpus/devices": {
+    "args": [
+      "--gpus",
+      "\"device=0,1\""
+    ],
+    "outcomes": {
+      "gpus": "map"
+    },
+    "changes": {
+      "/resources/limits/nvidia.com/gpu": "2"
+    }
+  },
+  "gpus/quoted-count": {
+    "args": [
+      "--gpus",
+      "\"count=2,capabilities=compute\""
+    ],
+    "outcomes": {
+      "gpus": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:gpus: invalid GPU count \"2,capabilities=compute\""
+  },
+  "group-add": {
+    "args": [
+      "--group-add",
+      "999",
+      "--group-add",
+      "999"
+    ],
+    "outcomes": {
+      "group-add": "map"
+    },
+    "changes": {
+      "/supplementalGroups/0": 999
+    }
+  },
+  "group-add/name": {
+    "args": [
+      "--group-add",
+      "docker"
+    ],
+    "outcomes": {
+      "group-add": "map"
+    },
+    "changes": {
+      "/supplementalGroups/0": 998
+    }
+  },
+  "group-add/unknown": {
+    "args": [
+      "--group-add",
+      "nosuchgroup"
+    ],
+    "outcomes": {
+      "group-add": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:group-add: group \"nosuchgroup\" is not a number and the image's /etc/group does not name it; a pod's supplementalGroups are numeric"
+  },
+  "health-cmd": {
+    "args": [
+      "--health-cmd",
+      "curl -f localhost",
+      "--health-interval",
+      "5s",
+      "--health-retries",
+      "3",
+      "--health-start-interval",
+      "1s",
+      "--health-start-period",
+      "10s",
+      "--health-timeout",
+      "2s"
+    ],
+    "outcomes": {
+      "health-cmd": "delta",
+      "health-interval": "delta",
+      "health-retries": "delta",
+      "health-start-interval": "delta",
+      "health-start-period": "delta",
+      "health-timeout": "delta"
+    },
+    "warnings": [
+      "--health-cmd curl -f localhost, --health-interval 5s, --health-retries 3, --health-start-interval 1s, --health-start-period 10s, --health-timeout 2s: docker health checks only report status; a pod runs none"
+    ]
+  },
+  "health-interval": {
+    "args": [
+      "--health-interval",
+      "30s"
+    ],
+    "outcomes": {
+      "health-interval": "delta"
+    },
+    "warnings": [
+      "--health-interval 30s: docker health checks only report status; a pod runs none"
+    ]
+  },
+  "health-retries": {
+    "args": [
+      "--health-retries",
+      "5"
+    ],
+    "outcomes": {
+      "health-retries": "delta"
+    },
+    "warnings": [
+      "--health-retries 5: docker health checks only report status; a pod runs none"
+    ]
+  },
+  "health-start-interval": {
+    "args": [
+      "--health-start-interval",
+      "2s"
+    ],
+    "outcomes": {
+      "health-start-interval": "delta"
+    },
+    "warnings": [
+      "--health-start-interval 2s: docker health checks only report status; a pod runs none"
+    ]
+  },
+  "health-start-period": {
+    "args": [
+      "--health-start-period",
+      "20s"
+    ],
+    "outcomes": {
+      "health-start-period": "delta"
+    },
+    "warnings": [
+      "--health-start-period 20s: docker health checks only report status; a pod runs none"
+    ]
+  },
+  "health-timeout": {
+    "args": [
+      "--health-timeout",
+      "3s"
+    ],
+    "outcomes": {
+      "health-timeout": "delta"
+    },
+    "warnings": [
+      "--health-timeout 3s: docker health checks only report status; a pod runs none"
+    ]
+  },
+  "help": {
+    "args": [
+      "--help"
+    ],
+    "outcomes": {
+      "help": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:help: --help: asks docker for its help text, not a container"
+  },
+  "hostname": {
+    "args": [
+      "--hostname",
+      "devbox"
+    ],
+    "outcomes": {
+      "hostname": "delta"
+    },
+    "changes": {
+      "/hostAliases/0/hostnames/0": "devbox",
+      "/hostAliases/0/ip": "127.0.0.1"
+    },
+    "warnings": [
+      "--hostname devbox: the pod keeps the hostname its StatefulSet gives it (setting another needs SYS_ADMIN); devbox resolves to 127.0.0.1"
+    ]
+  },
+  "hostname/host-network": {
+    "args": [
+      "-h",
+      "devbox",
+      "--domainname",
+      "corp.example",
+      "--privileged",
+      "--network",
+      "host"
+    ],
+    "outcomes": {
+      "domainname": "delta",
+      "hostname": "delta",
+      "network": "map",
+      "privileged": "map"
+    },
+    "changes": {
+      "/hostAliases/0/hostnames/0": "devbox",
+      "/hostAliases/0/ip": "127.0.0.1",
+      "/hostNetwork": true,
+      "/pid1/docker": {},
+      "/pid1/privileged": true,
+      "/security/privileged": true
+    },
+    "warnings": [
+      "--hostname devbox: the pod keeps the hostname its StatefulSet gives it (a host-network pod shares the node's hostname, which fleet never changes); devbox resolves to 127.0.0.1",
+      "--domainname corp.example: the pod keeps its own domain name (a host-network pod shares the node's hostname, which fleet never changes)"
+    ]
+  },
+  "hostname/privileged": {
+    "args": [
+      "-h",
+      "devbox",
+      "--privileged"
+    ],
+    "outcomes": {
+      "hostname": "map",
+      "privileged": "map"
+    },
+    "changes": {
+      "/pid1/docker": {},
+      "/pid1/hostname": "devbox",
+      "/pid1/privileged": true,
+      "/security/privileged": true
+    }
+  },
+  "init": {
+    "args": [
+      "--init"
+    ],
+    "outcomes": {
+      "init": "map"
+    },
+    "changes": {
+      "/pid1/init": true
+    }
+  },
+  "interactive": {
+    "args": [
+      "-i"
+    ],
+    "outcomes": {
+      "interactive": "map"
+    },
+    "changes": {
+      "/stdin": true
+    }
+  },
+  "io-maxbandwidth": {
+    "args": [
+      "--io-maxbandwidth",
+      "10mb"
+    ],
+    "outcomes": {
+      "io-maxbandwidth": "ignore"
+    }
+  },
+  "io-maxiops": {
+    "args": [
+      "--io-maxiops",
+      "1000"
+    ],
+    "outcomes": {
+      "io-maxiops": "ignore"
+    }
+  },
+  "ip": {
+    "args": [
+      "--ip",
+      "172.20.0.5"
+    ],
+    "outcomes": {
+      "ip": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:ip: --ip 172.20.0.5: the cluster's network plugin assigns pod addresses"
+  },
+  "ip6": {
+    "args": [
+      "--ip6",
+      "fd00::5"
+    ],
+    "outcomes": {
+      "ip6": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:ip6: --ip6 fd00::5: the cluster's network plugin assigns pod addresses"
+  },
+  "ipc": {
+    "args": [
+      "--ipc",
+      "shareable"
+    ],
+    "outcomes": {
+      "ipc": "map"
+    }
+  },
+  "ipc/container": {
+    "args": [
+      "--ipc",
+      "container:other"
+    ],
+    "outcomes": {
+      "ipc": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:ipc: --ipc container:other: fleet runs one container per instance; there is no other container's IPC namespace to join"
+  },
+  "ipc/host": {
+    "args": [
+      "--ipc",
+      "host"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:privileged: --ipc host needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node)"
+  },
+  "ipc/host-local": {
+    "args": [
+      "--ipc",
+      "host"
+    ],
+    "outcomes": {
+      "ipc": "map"
+    },
+    "changes": {
+      "/hostIPC": true
+    }
+  },
+  "ipc/none": {
+    "args": [
+      "--ipc",
+      "none"
+    ],
+    "outcomes": {
+      "ipc": "delta"
+    },
+    "warnings": [
+      "--ipc none: the pod has its own IPC namespace with a /dev/shm; docker would mount none"
+    ]
+  },
+  "isolation": {
+    "args": [
+      "--isolation",
+      "default"
+    ],
+    "outcomes": {
+      "isolation": "ignore"
+    }
+  },
+  "isolation/hyperv": {
+    "args": [
+      "--isolation",
+      "hyperv"
+    ],
+    "outcomes": {
+      "isolation": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:isolation: --isolation hyperv: Linux containers take only default"
+  },
+  "kernel-memory": {
+    "args": [
+      "--kernel-memory",
+      "1g"
+    ],
+    "outcomes": {
+      "kernel-memory": "ignore"
+    }
+  },
+  "label": {
+    "args": [
+      "-l",
+      "com.example.team=dev"
+    ],
+    "outcomes": {
+      "label": "map"
+    }
+  },
+  "label-file": {
+    "args": [
+      "--label-file",
+      "/home/dev/src/app/labels"
+    ],
+    "outcomes": {
+      "label-file": "map"
+    }
+  },
+  "link": {
+    "args": [
+      "--link",
+      "db:database"
+    ],
+    "outcomes": {
+      "link": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:link: --link db:database: legacy container links have no pod equivalent; sibling instances resolve as <sts>-0.<fleet service> instead"
+  },
+  "link-local-ip": {
+    "args": [
+      "--link-local-ip",
+      "169.254.1.5"
+    ],
+    "outcomes": {
+      "link-local-ip": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:link-local-ip: --link-local-ip 169.254.1.5: the cluster's network plugin assigns pod addresses"
+  },
+  "log-driver": {
+    "args": [
+      "--log-driver",
+      "none"
+    ],
+    "outcomes": {
+      "log-driver": "delta"
+    },
+    "warnings": [
+      "--log-driver none: the kubelet keeps the container's log; `fleet logs` reads it"
+    ]
+  },
+  "log-opt": {
+    "args": [
+      "--log-opt",
+      "max-size=10m",
+      "--log-opt",
+      "max-file=3"
+    ],
+    "outcomes": {
+      "log-opt": "delta"
+    },
+    "warnings": [
+      "--log-opt max-size, max-file: the kubelet keeps the container's log; `fleet logs` reads it"
+    ]
+  },
+  "log-opt/credentials": {
+    "args": [
+      "--log-driver",
+      "splunk",
+      "--log-opt",
+      "splunk-token=hunter22",
+      "--log-opt",
+      "splunk-url=https://splunk.example:8088"
+    ],
+    "outcomes": {
+      "log-driver": "delta",
+      "log-opt": "delta"
+    },
+    "warnings": [
+      "--log-driver splunk, --log-opt splunk-token, splunk-url: the kubelet keeps the container's log; `fleet logs` reads it"
+    ]
+  },
+  "mac-address": {
+    "args": [
+      "--mac-address",
+      "02:42:ac:11:00:02"
+    ],
+    "outcomes": {
+      "mac-address": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mac-address: --mac-address 02:42:ac:11:00:02: the cluster's network plugin assigns pod addresses"
+  },
+  "memory": {
+    "args": [
+      "-m",
+      "4g"
+    ],
+    "outcomes": {
+      "memory": "map"
+    },
+    "changes": {
+      "/resources/limits/memory": "4Gi"
+    }
+  },
+  "memory-reservation": {
+    "args": [
+      "--memory-reservation",
+      "3g"
+    ],
+    "outcomes": {
+      "memory-reservation": "map"
+    },
+    "changes": {
+      "/resources/requests/memory": "3Gi"
+    }
+  },
+  "memory-reservation/above-limit": {
+    "args": [
+      "--memory-reservation",
+      "3g",
+      "-m",
+      "2g"
+    ],
+    "outcomes": {
+      "memory-reservation": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:memory-reservation: the memory reservation is larger than the memory limit (-m)"
+  },
+  "memory-swap": {
+    "args": [
+      "--memory-swap",
+      "8g"
+    ],
+    "outcomes": {
+      "memory-swap": "delta"
+    },
+    "warnings": [
+      "--memory-swap 8g: Kubernetes has no per-pod swap limit"
+    ]
+  },
+  "memory-swappiness": {
+    "args": [
+      "--memory-swappiness",
+      "0"
+    ],
+    "outcomes": {
+      "memory-swappiness": "delta"
+    },
+    "warnings": [
+      "--memory-swappiness 0: Kubernetes has no per-pod swappiness"
+    ]
+  },
+  "memory/autopilot": {
+    "args": null,
+    "outcomes": {},
+    "changes": {
+      "/resources/limits/cpu": "500m",
+      "/resources/limits/memory": "4Gi",
+      "/resources/requests/memory": "4Gi"
+    },
+    "warnings": [
+      "GKE Autopilot: limits equal requests (500m CPU, 4Gi memory); a process past the memory is OOM-killed, which restarts the pod"
+    ]
+  },
+  "memory/autopilot-with-limit": {
+    "args": [
+      "-m",
+      "6g",
+      "--cpus",
+      "2"
+    ],
+    "outcomes": {
+      "cpus": "map",
+      "memory": "map"
+    },
+    "changes": {
+      "/resources/limits/cpu": "2",
+      "/resources/limits/memory": "6Gi",
+      "/resources/requests/cpu": "2",
+      "/resources/requests/memory": "6Gi"
+    },
+    "warnings": [
+      "GKE Autopilot: limits equal requests (2 CPU, 6Gi memory); a process past the memory is OOM-killed, which restarts the pod"
+    ]
+  },
+  "memory/below-request": {
+    "args": [
+      "--memory",
+      "1g"
+    ],
+    "outcomes": {
+      "memory": "map"
+    },
+    "changes": {
+      "/resources/limits/memory": "1Gi",
+      "/resources/requests/memory": "1Gi"
+    },
+    "warnings": [
+      "-m 1Gi: the memory request is lowered from 2Gi to the limit"
+    ]
+  },
+  "memory/invalid": {
+    "args": [
+      "--memory",
+      "lots"
+    ],
+    "outcomes": {
+      "memory": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:memory: invalid memory limit \"lots\""
+  },
+  "memory/limitrange": {
+    "args": null,
+    "outcomes": {}
+  },
+  "memory/limitrange-high": {
+    "args": null,
+    "outcomes": {}
+  },
+  "memory/limitrange-with-limit": {
+    "args": [
+      "-m",
+      "512m"
+    ],
+    "outcomes": {
+      "memory": "map"
+    },
+    "changes": {
+      "/resources/limits/memory": "512Mi",
+      "/resources/requests/memory": "512Mi"
+    },
+    "warnings": [
+      "-m 512Mi: the memory request is lowered from 2Gi to the limit"
+    ]
+  },
+  "mount/bind-agent": {
+    "args": [
+      "--mount",
+      "type=bind,source=/home/dev/host/agent.sock,target=/run/agent.sock"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "ssh-agent",
+      "/mounts/1/source": "/home/dev/host/agent.sock",
+      "/mounts/1/target": "/run/agent.sock",
+      "/pid1/links/0/path": "/run/agent.sock",
+      "/pid1/links/0/target": "/fleet-mounts/control/ssh-agent.sock"
+    }
+  },
+  "mount/bind-device": {
+    "args": [
+      "--mount",
+      "type=bind,source=/dev/kvm,target=/dev/kvm"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:host-special-file: --mount type=bind,source=/dev/kvm,target=/dev/kvm: /dev/kvm is a device on the daemon host, which a pod cannot reach; pass it with --device to a privileged pod instead"
+  },
+  "mount/bind-dir-file": {
+    "args": [
+      "--mount",
+      "type=bind,source=/home/dev/host/aws,target=/home/vscode/.aws",
+      "--mount",
+      "type=bind,source=/home/dev/host/gitconfig,target=/home/vscode/.gitconfig,ro=true"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "host-dir",
+      "/mounts/1/mode": 448,
+      "/mounts/1/source": "/home/dev/host/aws",
+      "/mounts/1/subPath": ".hostbind/e59cefee",
+      "/mounts/1/target": "/home/vscode/.aws",
+      "/mounts/2/kind": "host-file",
+      "/mounts/2/readOnly": true,
+      "/mounts/2/source": "/home/dev/host/gitconfig",
+      "/mounts/2/subPath": ".hostbind/88857567",
+      "/mounts/2/target": "/home/vscode/.gitconfig",
+      "/pid1/links/0/path": "/home/vscode/.gitconfig",
+      "/pid1/links/0/target": "/fleet-mounts/hostbind/88857567/gitconfig"
+    }
+  },
+  "mount/bind-empty-dir": {
+    "args": [
+      "--mount",
+      "type=bind,source=/home/dev/host/empty-dir,target=/empty"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "host-dir",
+      "/mounts/1/mode": 493,
+      "/mounts/1/source": "/home/dev/host/empty-dir",
+      "/mounts/1/subPath": ".hostbind/8bf2b1bd",
+      "/mounts/1/target": "/empty"
+    }
+  },
+  "mount/bind-fifo": {
+    "args": [
+      "--mount",
+      "type=bind,source=/home/dev/host/fifo,target=/fifo"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:host-special-file: --mount type=bind,source=/home/dev/host/fifo,target=/fifo: /home/dev/host/fifo is a FIFO on the daemon host, which a pod cannot reach"
+  },
+  "mount/bind-missing": {
+    "args": [
+      "--mount",
+      "type=bind,source=/home/dev/host/nope,target=/nope"
+    ],
+    "outcomes": {
+      "mount": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mount: --mount type=bind,source=/home/dev/host/nope,target=/nope: bind source path does not exist: /home/dev/host/nope"
+  },
+  "mount/bind-socket": {
+    "args": [
+      "--mount",
+      "type=bind,source=/home/dev/host/S.gpg-agent,target=/run/gpg.sock"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/hostSockets/0/mode": 384,
+      "/hostSockets/0/source": "/home/dev/host/S.gpg-agent",
+      "/hostSockets/0/target": "/run/gpg.sock",
+      "/mounts/1/kind": "host-socket",
+      "/mounts/1/source": "/home/dev/host/S.gpg-agent",
+      "/mounts/1/target": "/run/gpg.sock"
+    }
+  },
+  "mount/bind-socket-dir": {
+    "args": [
+      "--mount",
+      "type=bind,source=/home/dev/host/x11,target=/tmp/.X11-unix"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/hostSocketDirs/0/source": "/home/dev/host/x11",
+      "/hostSocketDirs/0/target": "/tmp/.X11-unix",
+      "/mounts/1/kind": "host-socket-dir",
+      "/mounts/1/source": "/home/dev/host/x11",
+      "/mounts/1/target": "/tmp/.X11-unix"
+    }
+  },
+  "mount/bind-workspace-folder": {
+    "args": [
+      "--mount",
+      "type=bind,\"source=/home/dev/src/app/sub\",target=/sub,bind-propagation=rslave,consistency=cached"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "workspace",
+      "/mounts/1/source": "/home/dev/src/app/sub",
+      "/mounts/1/subPath": "sub",
+      "/mounts/1/target": "/sub"
+    }
+  },
+  "mount/docker-socket": {
+    "args": [
+      "--mount",
+      "type=bind,source=/var/run/docker.sock,target=/var/run/docker-host.sock"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:dood-needs-privileged: --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker-host.sock binds the docker engine's socket; on a cluster that engine is the pod's own, a sidecar that needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node), or use a cluster with a sysbox runtime class"
+  },
+  "mount/docker-socket-local": {
+    "args": [
+      "--mount",
+      "type=bind,source=/var/run/docker.sock,target=/var/run/docker-host.sock"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/dood/privileged": true,
+      "/mounts/1/kind": "docker-socket",
+      "/mounts/1/source": "/var/run/docker.sock",
+      "/mounts/1/target": "/var/run/docker-host.sock",
+      "/pid1/links/0/path": "/var/run/docker-host.sock",
+      "/pid1/links/0/target": "/opt/fleet/docker/docker.sock"
+    },
+    "warnings": [
+      "/var/run/docker-host.sock: the docker engine is the pod's own (the fleet-docker sidecar), not the daemon host's: the containers it runs are pod-local siblings, whose published ports are on the instance's localhost and whose binds see the workspace and nothing else of the instance, and its images live on the instance disk"
+    ]
+  },
+  "mount/duplicate": {
+    "args": [
+      "--mount",
+      "type=volume,target=/data",
+      "--mount",
+      "type=tmpfs,target=/data/"
+    ],
+    "outcomes": {
+      "mount": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mount: duplicate mount point: /data"
+  },
+  "mount/fleet-host-scope": {
+    "args": null,
+    "outcomes": {},
+    "error": "kubernetes:unsupported:host-mount: fleet mount /data is a daemon-host path (/srv/data), which a pod cannot bind"
+  },
+  "mount/fleet-wins": {
+    "args": [
+      "--mount",
+      "type=volume,source=mine,target=/home/vscode/.claude"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "fleet",
+      "/mounts/1/subPath": ".claude",
+      "/mounts/1/target": "/home/vscode/.claude",
+      "/mounts/2/kind": "fleet",
+      "/mounts/2/readOnly": true,
+      "/mounts/2/subPath": "files",
+      "/mounts/2/target": "/fleet-mounts/files"
+    },
+    "warnings": [
+      "the mount at /home/vscode/.claude is replaced by fleet's own mount there, as on docker"
+    ]
+  },
+  "mount/relative-target": {
+    "args": [
+      "--mount",
+      "type=volume,target=data"
+    ],
+    "outcomes": {
+      "mount": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mount: --mount type=volume,target=data: the target \"data\" is not an absolute path"
+  },
+  "mount/reserved": {
+    "args": [
+      "--mount",
+      "type=volume,target=/opt/fleet/bin",
+      "--mount",
+      "type=tmpfs,target=/fleet-mounts/control"
+    ],
+    "outcomes": {
+      "mount": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mount: fleet reserves /opt/fleet in every instance; the mount at /opt/fleet/bin cannot go there; kubernetes:unsupported:flag:mount: fleet reserves /fleet-mounts/control in every instance; the mount at /fleet-mounts/control cannot go there"
+  },
+  "mount/root": {
+    "args": [
+      "--mount",
+      "type=volume,target=/"
+    ],
+    "outcomes": {
+      "mount": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mount: --mount type=volume,target=/: a mount cannot replace the container's root"
+  },
+  "mount/tmpfs": {
+    "args": [
+      "--mount",
+      "type=tmpfs,target=/scratch,tmpfs-size=64m,tmpfs-mode=1770"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "tmpfs",
+      "/mounts/1/sizeLimit": "64Mi",
+      "/mounts/1/target": "/scratch"
+    }
+  },
+  "mount/type-image": {
+    "args": [
+      "--mount",
+      "type=image,source=alpine,target=/img"
+    ],
+    "outcomes": {
+      "mount": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mount: --mount type=image,source=alpine,target=/img: type=image mounts have no pod equivalent"
+  },
+  "mount/unknown-option": {
+    "args": [
+      "--mount",
+      "type=bind,source=/home/dev/host/aws,target=/aws,bogus=1"
+    ],
+    "outcomes": {
+      "mount": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mount: invalid --mount \"type=bind,source=/home/dev/host/aws,target=/aws,bogus=1\": unknown option bogus"
+  },
+  "mount/volume-anonymous": {
+    "args": [
+      "--mount",
+      "type=volume,target=/data"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/mounts/1/anonymous": true,
+      "/mounts/1/copyUp": true,
+      "/mounts/1/kind": "volume",
+      "/mounts/1/subPath": "vol/anon-bd47413b",
+      "/mounts/1/target": "/data"
+    }
+  },
+  "mount/volume-devcontainer-id": {
+    "args": [
+      "--mount",
+      "type=volume,src=dind-var-lib-docker-076rltrd10mnag1bqig24m9paodjikn6giv2ebuj1716scroc8lr,dst=/var/lib/docker"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/mounts/1/copyUp": true,
+      "/mounts/1/kind": "volume",
+      "/mounts/1/source": "dind-var-lib-docker-076rltrd10mnag1bqig24m9paodjikn6giv2ebuj1716scroc8lr",
+      "/mounts/1/subPath": "vol/dind-var-lib-docker-076rltrd10mnag1bqig24m9paodjikn6giv2ebuj1716scroc8lr",
+      "/mounts/1/target": "/var/lib/docker"
+    }
+  },
+  "mount/volume-driver": {
+    "args": [
+      "--mount",
+      "type=volume,source=x,target=/x,volume-driver=rexray"
+    ],
+    "outcomes": {
+      "mount": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mount: --mount type=volume,source=x,target=/x,volume-driver=rexray: volume driver rexray; volumes live on the cluster's storage, where only the local driver has a meaning"
+  },
+  "mount/volume-named": {
+    "args": [
+      "--mount",
+      "type=volume,source=cache,target=/cache"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/mounts/1/copyUp": true,
+      "/mounts/1/kind": "shared-volume",
+      "/mounts/1/source": "cache",
+      "/mounts/1/subPath": ".vol/5e1ecee0",
+      "/mounts/1/target": "/cache"
+    }
+  },
+  "mount/volume-nocopy-subpath": {
+    "args": [
+      "--mount",
+      "type=volume,source=shared,target=/shared,volume-nocopy,readonly",
+      "--mount",
+      "type=volume,source=shared,target=/part,volume-subpath=a/b"
+    ],
+    "outcomes": {
+      "mount": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "shared-volume",
+      "/mounts/1/readOnly": true,
+      "/mounts/1/source": "shared",
+      "/mounts/1/subPath": ".vol/a4d26868",
+      "/mounts/1/target": "/shared",
+      "/mounts/2/kind": "shared-volume",
+      "/mounts/2/source": "shared",
+      "/mounts/2/subPath": ".vol/a4d26868/a/b",
+      "/mounts/2/target": "/part"
+    }
+  },
+  "mount/volume-opt": {
+    "args": [
+      "--mount",
+      "type=volume,source=nfs,target=/nfs,volume-opt=type=nfs,volume-opt=device=:/export"
+    ],
+    "outcomes": {
+      "mount": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mount: --mount type=volume,source=nfs,target=/nfs,volume-opt=type=nfs,volume-opt=device=:/export: volume-opt mounts a device or a network share on the docker host, which a pod cannot"
+  },
+  "mount/volume-subpath-escape": {
+    "args": [
+      "--mount",
+      "type=volume,source=shared,target=/part,volume-subpath=../x"
+    ],
+    "outcomes": {
+      "mount": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:mount: --mount type=volume,source=shared,target=/part,volume-subpath=../x: volume-subpath \"../x\" must stay inside the volume"
+  },
+  "name": {
+    "args": [
+      "--name",
+      "mycontainer"
+    ],
+    "outcomes": {
+      "name": "ignore"
+    }
+  },
+  "network": {
+    "args": [
+      "--network",
+      "bridge"
+    ],
+    "outcomes": {
+      "network": "map"
+    }
+  },
+  "network-alias": {
+    "args": [
+      "--network-alias",
+      "api"
+    ],
+    "outcomes": {
+      "network-alias": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:network-alias: --network-alias api: network-scoped aliases need a custom network; siblings resolve through the fleet's headless Service"
+  },
+  "network/container": {
+    "args": [
+      "--network",
+      "container:other"
+    ],
+    "outcomes": {
+      "network": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:network: --network container:other: fleet runs one container per instance; there is no other container's network to join"
+  },
+  "network/custom": {
+    "args": [
+      "--network",
+      "my-net"
+    ],
+    "outcomes": {
+      "network": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:network: --network my-net: a pod has no docker networks; sibling instances reach each other as <sts>-0.<fleet service> through the fleet's headless Service"
+  },
+  "network/host": {
+    "args": [
+      "--network",
+      "host"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:privileged: --network host needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node)"
+  },
+  "network/host-local": {
+    "args": [
+      "--net",
+      "host"
+    ],
+    "outcomes": {
+      "network": "map"
+    },
+    "changes": {
+      "/hostNetwork": true
+    }
+  },
+  "network/none": {
+    "args": [
+      "--network",
+      "none"
+    ],
+    "outcomes": {
+      "network": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:network: --network none: a pod always has its network"
+  },
+  "no-healthcheck": {
+    "args": [
+      "--no-healthcheck"
+    ],
+    "outcomes": {
+      "no-healthcheck": "ignore"
+    }
+  },
+  "oom-kill-disable": {
+    "args": [
+      "--oom-kill-disable"
+    ],
+    "outcomes": {
+      "oom-kill-disable": "delta"
+    },
+    "warnings": [
+      "--oom-kill-disable: Kubernetes cannot exempt a pod from the OOM killer"
+    ]
+  },
+  "oom-kill-disable/false": {
+    "args": [
+      "--oom-kill-disable=false"
+    ],
+    "outcomes": {
+      "oom-kill-disable": "ignore"
+    }
+  },
+  "oom-score-adj": {
+    "args": [
+      "--oom-score-adj",
+      "500"
+    ],
+    "outcomes": {
+      "oom-score-adj": "map"
+    },
+    "changes": {
+      "/pid1/oom_score_adj": 500
+    }
+  },
+  "oom-score-adj/negative": {
+    "args": [
+      "--oom-score-adj",
+      "-500"
+    ],
+    "outcomes": {
+      "oom-score-adj": "map"
+    },
+    "changes": {
+      "/pid1/oom_score_adj": -500
+    },
+    "warnings": [
+      "--oom-score-adj -500: lowering the OOM score below the pod's needs CAP_SYS_RESOURCE; pod-init keeps the pod's if it cannot"
+    ]
+  },
+  "pid": {
+    "args": [
+      "--pid",
+      "host"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:privileged: --pid host needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node)"
+  },
+  "pid/container": {
+    "args": [
+      "--pid",
+      "container:other"
+    ],
+    "outcomes": {
+      "pid": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:pid: --pid container:other: fleet runs one container per instance; there is no other container's PID namespace to join"
+  },
+  "pid/host-local": {
+    "args": [
+      "--pid",
+      "host"
+    ],
+    "outcomes": {
+      "pid": "map"
+    },
+    "changes": {
+      "/hostPID": true
+    }
+  },
+  "pids-limit": {
+    "args": [
+      "--pids-limit",
+      "512"
+    ],
+    "outcomes": {
+      "pids-limit": "delta"
+    },
+    "warnings": [
+      "--pids-limit 512: only the kubelet's podPidsLimit caps a pod's processes"
+    ]
+  },
+  "platform": {
+    "args": [
+      "--platform",
+      "linux/amd64"
+    ],
+    "outcomes": {
+      "platform": "map"
+    }
+  },
+  "platform/mismatch": {
+    "args": [
+      "--platform",
+      "linux/arm64"
+    ],
+    "outcomes": {
+      "platform": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:platform: --platform linux/arm64, but the image is linux/amd64"
+  },
+  "platform/node-selector": {
+    "args": null,
+    "outcomes": {},
+    "error": "kubernetes:misconfigured: prod-eu's node_selector kubernetes.io/arch=arm64 conflicts with the image, which needs kubernetes.io/arch=amd64"
+  },
+  "privileged": {
+    "args": [
+      "--privileged"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:privileged: --privileged needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node), or use a cluster with a sysbox runtime class for --privileged"
+  },
+  "privileged/allowed": {
+    "args": [
+      "--privileged"
+    ],
+    "outcomes": {
+      "privileged": "map"
+    },
+    "changes": {
+      "/pid1/docker": {},
+      "/pid1/privileged": true,
+      "/security/privileged": true
+    }
+  },
+  "privileged/false": {
+    "args": [
+      "--privileged=false"
+    ],
+    "outcomes": {
+      "privileged": "ignore"
+    }
+  },
+  "privileged/local": {
+    "args": [
+      "--privileged"
+    ],
+    "outcomes": {
+      "privileged": "map"
+    },
+    "changes": {
+      "/pid1/docker": {},
+      "/pid1/privileged": true,
+      "/security/privileged": true
+    }
+  },
+  "privileged/refused-local": {
+    "args": [
+      "--privileged"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:privileged: --privileged needs privileged pods, which prod-eu does not allow (Allow privileged pods is off for it). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node), or use a cluster with a sysbox runtime class for --privileged"
+  },
+  "privileged/sysbox": {
+    "args": [
+      "--privileged"
+    ],
+    "outcomes": {
+      "privileged": "map"
+    },
+    "changes": {
+      "/annotations/io.kubernetes.cri-o.userns-mode": "auto:size=65536",
+      "/pid1/docker": {},
+      "/runtimeClassName": "sysbox-runc"
+    },
+    "warnings": [
+      "--privileged: the pod runs under the sysbox-runc runtime class instead of privileged, which gives docker-in-docker what it needs without privilege on the node"
+    ]
+  },
+  "privileged/sysbox-host-network": {
+    "args": [
+      "--privileged",
+      "--network",
+      "host"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:privileged: --privileged and --network host need privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node), or use a cluster with a sysbox runtime class for --privileged"
+  },
+  "privileged/sysbox-runtime-class": {
+    "args": [
+      "--privileged"
+    ],
+    "outcomes": {
+      "privileged": "map"
+    },
+    "changes": {
+      "/annotations/io.kubernetes.cri-o.userns-mode": "auto:size=65536",
+      "/pid1/docker": {},
+      "/runtimeClassName": "sysbox-runc"
+    },
+    "warnings": [
+      "--privileged: the pod runs under the sysbox-runc runtime class instead of privileged, which gives docker-in-docker what it needs without privilege on the node"
+    ]
+  },
+  "publish": {
+    "args": [
+      "-p",
+      "8080:80",
+      "-p",
+      "127.0.0.1::9000"
+    ],
+    "outcomes": {
+      "publish": "map"
+    },
+    "changes": {
+      "/ports/0/containerPort": 80,
+      "/ports/0/hostIP": "127.0.0.1",
+      "/ports/0/hostPort": 8080,
+      "/ports/0/protocol": "TCP",
+      "/ports/1/containerPort": 9000,
+      "/ports/1/hostIP": "127.0.0.1",
+      "/ports/1/hostPort": 0,
+      "/ports/1/protocol": "TCP"
+    }
+  },
+  "publish-all": {
+    "args": [
+      "-P",
+      "-p",
+      "8080:8080"
+    ],
+    "outcomes": {
+      "publish": "map",
+      "publish-all": "map"
+    },
+    "changes": {
+      "/ports/0/containerPort": 8080,
+      "/ports/0/hostIP": "127.0.0.1",
+      "/ports/0/hostPort": 8080,
+      "/ports/0/protocol": "TCP"
+    },
+    "warnings": [
+      "--publish-all: only TCP is forwarded from a pod; 5353/udp not published"
+    ]
+  },
+  "publish/address": {
+    "args": [
+      "-p",
+      "0.0.0.0:8443:443",
+      "-p",
+      "[::1]:8081:81"
+    ],
+    "outcomes": {
+      "publish": "map"
+    },
+    "changes": {
+      "/ports/0/containerPort": 443,
+      "/ports/0/hostIP": "0.0.0.0",
+      "/ports/0/hostPort": 8443,
+      "/ports/0/protocol": "TCP",
+      "/ports/1/containerPort": 81,
+      "/ports/1/hostIP": "::1",
+      "/ports/1/hostPort": 8081,
+      "/ports/1/protocol": "TCP"
+    }
+  },
+  "publish/ephemeral-range": {
+    "args": [
+      "-p",
+      "3000-3001",
+      "-p",
+      "4000-4001:5000-5001"
+    ],
+    "outcomes": {
+      "publish": "map"
+    },
+    "changes": {
+      "/ports/0/containerPort": 3000,
+      "/ports/0/hostIP": "127.0.0.1",
+      "/ports/0/hostPort": 0,
+      "/ports/0/protocol": "TCP",
+      "/ports/1/containerPort": 3001,
+      "/ports/1/hostIP": "127.0.0.1",
+      "/ports/1/hostPort": 0,
+      "/ports/1/protocol": "TCP",
+      "/ports/2/containerPort": 5000,
+      "/ports/2/hostIP": "127.0.0.1",
+      "/ports/2/hostPort": 4000,
+      "/ports/2/protocol": "TCP",
+      "/ports/3/containerPort": 5001,
+      "/ports/3/hostIP": "127.0.0.1",
+      "/ports/3/hostPort": 4001,
+      "/ports/3/protocol": "TCP"
+    }
+  },
+  "publish/host-range": {
+    "args": [
+      "-p",
+      "8000-8010:80"
+    ],
+    "outcomes": {
+      "publish": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:publish: --publish 8000-8010:80: the host and container port ranges differ in length; docker would pick one host port of the range, which fleet does not"
+  },
+  "publish/invalid": {
+    "args": [
+      "-p",
+      "http"
+    ],
+    "outcomes": {
+      "publish": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:publish: invalid container port in --publish http: invalid port \"http\""
+  },
+  "publish/udp": {
+    "args": [
+      "-p",
+      "5353:5353/udp"
+    ],
+    "outcomes": {
+      "publish": "delta"
+    },
+    "warnings": [
+      "--publish 5353:5353/udp: only TCP is forwarded from a pod; the UDP port is not published"
+    ]
+  },
+  "pull": {
+    "args": [
+      "--pull",
+      "always"
+    ],
+    "outcomes": {
+      "pull": "ignore"
+    }
+  },
+  "quiet": {
+    "args": [
+      "-q"
+    ],
+    "outcomes": {
+      "quiet": "ignore"
+    }
+  },
+  "read-only": {
+    "args": [
+      "--read-only"
+    ],
+    "outcomes": {
+      "read-only": "map"
+    },
+    "changes": {
+      "/readOnlyRoot": true,
+      "/security/readOnlyRootFilesystem": true
+    }
+  },
+  "restart": {
+    "args": [
+      "--restart",
+      "unless-stopped"
+    ],
+    "outcomes": {
+      "restart": "map"
+    }
+  },
+  "restart/invalid": {
+    "args": [
+      "--restart",
+      "sometimes"
+    ],
+    "outcomes": {
+      "restart": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:restart: invalid restart policy \"sometimes\""
+  },
+  "restart/no": {
+    "args": [
+      "--restart=no"
+    ],
+    "outcomes": {
+      "restart": "delta"
+    },
+    "warnings": [
+      "--restart no: fleet restarts a crashed pod (and parks a crash loop as stopped); a pod cannot stay stopped after it exits"
+    ]
+  },
+  "rm": {
+    "args": [
+      "--rm"
+    ],
+    "outcomes": {
+      "rm": "ignore"
+    }
+  },
+  "runtime": {
+    "args": [
+      "--runtime",
+      "gvisor"
+    ],
+    "outcomes": {
+      "runtime": "map"
+    },
+    "changes": {
+      "/runtimeClassName": "gvisor"
+    }
+  },
+  "runtime/cluster-class": {
+    "args": null,
+    "outcomes": {},
+    "changes": {
+      "/runtimeClassName": "kata"
+    }
+  },
+  "runtime/conflict": {
+    "args": [
+      "--runtime",
+      "gvisor"
+    ],
+    "outcomes": {
+      "runtime": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:runtime: --runtime gvisor asks for another runtime than prod-eu's runtime class, kata"
+  },
+  "runtime/missing": {
+    "args": [
+      "--runtime",
+      "kata"
+    ],
+    "outcomes": {
+      "runtime": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:runtime: --runtime kata: prod-eu has no RuntimeClass kata (it has gvisor)"
+  },
+  "runtime/runc": {
+    "args": [
+      "--runtime",
+      "runc"
+    ],
+    "outcomes": {
+      "runtime": "map"
+    }
+  },
+  "runtime/unknown-classes": {
+    "args": [
+      "--runtime",
+      "kata"
+    ],
+    "outcomes": {
+      "runtime": "map"
+    },
+    "changes": {
+      "/runtimeClassName": "kata"
+    }
+  },
+  "security-opt": {
+    "args": [
+      "--security-opt",
+      "no-new-privileges",
+      "--security-opt",
+      "apparmor=my-profile",
+      "--security-opt",
+      "label=type:container_t",
+      "--security-opt",
+      "label=user:system_u"
+    ],
+    "outcomes": {
+      "security-opt": "map"
+    },
+    "changes": {
+      "/security/appArmor": "localhost/my-profile",
+      "/security/noNewPrivileges": true,
+      "/security/seLinux/type": "container_t",
+      "/security/seLinux/user": "system_u"
+    }
+  },
+  "security-opt/debug-grants": {
+    "args": [
+      "--security-opt",
+      "seccomp=unconfined",
+      "--security-opt",
+      "apparmor:unconfined"
+    ],
+    "outcomes": {
+      "security-opt": "map"
+    },
+    "changes": {
+      "/debugGrants/0": "--security-opt seccomp=unconfined",
+      "/debugGrants/1": "--security-opt apparmor:unconfined",
+      "/security/appArmor": "Unconfined",
+      "/security/seccomp": "Unconfined"
+    }
+  },
+  "security-opt/debug-grants-dropped": {
+    "args": [
+      "--security-opt",
+      "seccomp=unconfined",
+      "--security-opt",
+      "apparmor=unconfined",
+      "--cap-add",
+      "SYS_PTRACE",
+      "--cap-add",
+      "NET_ADMIN"
+    ],
+    "outcomes": {
+      "cap-add": "map",
+      "security-opt": "map"
+    },
+    "changes": {
+      "/debugDropped": true,
+      "/debugGrants/0": "--cap-add SYS_PTRACE",
+      "/debugGrants/1": "--security-opt seccomp=unconfined",
+      "/debugGrants/2": "--security-opt apparmor=unconfined",
+      "/security/capAdd/0": "NET_ADMIN"
+    },
+    "warnings": [
+      "debug capabilities dropped by admission: --cap-add SYS_PTRACE, --security-opt seccomp=unconfined, --security-opt apparmor=unconfined (namespace team-dev denies them); debuggers such as dlv and gdb cannot attach. Set debug_capabilities to require on prod-eu to fail the create instead"
+    ]
+  },
+  "security-opt/defaults": {
+    "args": [
+      "--security-opt",
+      "seccomp=builtin",
+      "--security-opt",
+      "apparmor=docker-default",
+      "--security-opt",
+      "no-new-privileges=false"
+    ],
+    "outcomes": {
+      "security-opt": "map"
+    },
+    "changes": {
+      "/security/appArmor": "RuntimeDefault"
+    }
+  },
+  "security-opt/label-disable": {
+    "args": [
+      "--security-opt",
+      "label=disable"
+    ],
+    "outcomes": {
+      "security-opt": "map"
+    },
+    "changes": {
+      "/security/seLinux/type": "spc_t"
+    }
+  },
+  "security-opt/label-level": {
+    "args": [
+      "--security-opt",
+      "label=level:s0:c100,c200"
+    ],
+    "outcomes": {
+      "security-opt": "delta"
+    },
+    "warnings": [
+      "--security-opt label=level:s0:c100,c200: fleet gives every pod of a fleet's share-group one SELinux level, so they can share its files; this one is not used"
+    ]
+  },
+  "security-opt/seccomp-file": {
+    "args": [
+      "--security-opt",
+      "seccomp=/home/dev/seccomp.json"
+    ],
+    "outcomes": {
+      "security-opt": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:security-opt: seccomp profile /home/dev/seccomp.json is a file on the daemon host, which the nodes cannot read; load the profile on the nodes and give it to the pod with the connection's pod overrides"
+  },
+  "security-opt/systempaths": {
+    "args": [
+      "--security-opt",
+      "systempaths=unconfined"
+    ],
+    "outcomes": {
+      "security-opt": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:security-opt: systempaths=unconfined needs a privileged pod; add --privileged (which the connection must allow)"
+  },
+  "security-opt/systempaths-privileged": {
+    "args": [
+      "--security-opt",
+      "systempaths=unconfined",
+      "--security-opt",
+      "writable-cgroups=true",
+      "--privileged"
+    ],
+    "outcomes": {
+      "privileged": "map",
+      "security-opt": "map"
+    },
+    "changes": {
+      "/pid1/docker": {},
+      "/pid1/privileged": true,
+      "/security/privileged": true
+    }
+  },
+  "security-opt/unknown": {
+    "args": [
+      "--security-opt",
+      "bogus=1",
+      "--security-opt",
+      "seccomp"
+    ],
+    "outcomes": {
+      "security-opt": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:security-opt: unknown --security-opt \"bogus=1\"; kubernetes:unsupported:flag:security-opt: invalid --security-opt: \"seccomp\""
+  },
+  "shm-size": {
+    "args": [
+      "--shm-size",
+      "1g"
+    ],
+    "outcomes": {
+      "shm-size": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "tmpfs",
+      "/mounts/1/sizeLimit": "1Gi",
+      "/mounts/1/target": "/dev/shm"
+    }
+  },
+  "shm-size/invalid": {
+    "args": [
+      "--shm-size",
+      "big"
+    ],
+    "outcomes": {
+      "shm-size": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:shm-size: invalid --shm-size \"big\""
+  },
+  "sig-proxy": {
+    "args": [
+      "--sig-proxy=true"
+    ],
+    "outcomes": {
+      "sig-proxy": "ignore"
+    }
+  },
+  "stop-signal": {
+    "args": [
+      "--stop-signal",
+      "USR1"
+    ],
+    "outcomes": {
+      "stop-signal": "map"
+    },
+    "changes": {
+      "/pid1/stop_signal": "SIGUSR1"
+    }
+  },
+  "stop-signal/image": {
+    "args": null,
+    "outcomes": {},
+    "changes": {
+      "/pid1/stop_signal": "SIGQUIT"
+    }
+  },
+  "stop-signal/invalid": {
+    "args": [
+      "--stop-signal",
+      "SIGNOPE"
+    ],
+    "outcomes": {
+      "stop-signal": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:stop-signal: invalid signal: SIGNOPE"
+  },
+  "stop-signal/number": {
+    "args": [
+      "--stop-signal",
+      "10"
+    ],
+    "outcomes": {
+      "stop-signal": "map"
+    },
+    "changes": {
+      "/pid1/stop_signal": "SIGUSR1"
+    }
+  },
+  "stop-signal/realtime": {
+    "args": [
+      "--stop-signal",
+      "SIGRTMIN+3"
+    ],
+    "outcomes": {
+      "stop-signal": "map"
+    },
+    "changes": {
+      "/pid1/stop_signal": "SIGRTMIN+3"
+    }
+  },
+  "stop-timeout": {
+    "args": [
+      "--stop-timeout",
+      "30"
+    ],
+    "outcomes": {
+      "stop-timeout": "map"
+    },
+    "changes": {
+      "/terminationGracePeriodSeconds": 30
+    }
+  },
+  "stop-timeout/unlimited": {
+    "args": [
+      "--stop-timeout",
+      "-1"
+    ],
+    "outcomes": {
+      "stop-timeout": "delta"
+    },
+    "warnings": [
+      "--stop-timeout -1: a pod's grace period cannot be unlimited; the cluster's default applies"
+    ]
+  },
+  "storage-opt": {
+    "args": [
+      "--storage-opt",
+      "size=120G"
+    ],
+    "outcomes": {
+      "storage-opt": "delta"
+    },
+    "warnings": [
+      "--storage-opt size=120G: the instance disk is the connection's disk_size"
+    ]
+  },
+  "sysctl": {
+    "args": [
+      "--sysctl",
+      "net.ipv4.ip_unprivileged_port_start=0",
+      "--sysctl",
+      "net/ipv4/ping_group_range=0 2147483647",
+      "--sysctl",
+      "net.ipv4.ip_unprivileged_port_start=80"
+    ],
+    "outcomes": {
+      "sysctl": "map"
+    },
+    "changes": {
+      "/sysctls/0/name": "net.ipv4.ip_unprivileged_port_start",
+      "/sysctls/0/value": "80",
+      "/sysctls/1/name": "net.ipv4.ping_group_range",
+      "/sysctls/1/value": "0 2147483647"
+    }
+  },
+  "sysctl/unsafe": {
+    "args": [
+      "--sysctl",
+      "net.core.somaxconn=1024"
+    ],
+    "outcomes": {
+      "sysctl": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:sysctl: net.core.somaxconn is not one of Kubernetes' safe sysctls; any other needs the kubelet's --allowed-unsafe-sysctls on every node and a privileged-level namespace"
+  },
+  "tmpfs": {
+    "args": [
+      "--tmpfs",
+      "/run:size=64m,noexec,mode=755",
+      "--tmpfs",
+      "/cache"
+    ],
+    "outcomes": {
+      "tmpfs": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "tmpfs",
+      "/mounts/1/sizeLimit": "64Mi",
+      "/mounts/1/target": "/run",
+      "/mounts/2/kind": "tmpfs",
+      "/mounts/2/target": "/cache"
+    },
+    "warnings": [
+      "--tmpfs /run:size=64m,noexec,mode=755: a memory-backed emptyDir takes only a size; noexec,mode=755 not applied"
+    ]
+  },
+  "tmpfs/relative": {
+    "args": [
+      "--tmpfs",
+      "run"
+    ],
+    "outcomes": {
+      "tmpfs": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:tmpfs: invalid --tmpfs \"run\": the path must be absolute"
+  },
+  "tty": {
+    "args": [
+      "-t"
+    ],
+    "outcomes": {
+      "tty": "map"
+    },
+    "changes": {
+      "/tty": true
+    }
+  },
+  "ulimit": {
+    "args": [
+      "--ulimit",
+      "nofile=4096:8192",
+      "--ulimit",
+      "nproc=512",
+      "--ulimit",
+      "nofile=2048:4096"
+    ],
+    "outcomes": {
+      "ulimit": "map"
+    },
+    "changes": {
+      "/pid1/rlimits/0/hard": 4096,
+      "/pid1/rlimits/0/name": "nofile",
+      "/pid1/rlimits/0/soft": 2048,
+      "/pid1/rlimits/1/hard": 512,
+      "/pid1/rlimits/1/name": "nproc",
+      "/pid1/rlimits/1/soft": 512
+    },
+    "warnings": [
+      "--ulimit nofile, nproc: pod-init sets these limits, but cannot raise a hard limit above the pod's own without CAP_SYS_RESOURCE"
+    ]
+  },
+  "ulimit/invalid": {
+    "args": [
+      "--ulimit",
+      "nofile=10:5",
+      "--ulimit",
+      "bogus=1"
+    ],
+    "outcomes": {
+      "ulimit": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:ulimit: ulimit soft limit must be less than or equal to hard limit: nofile=10:5; kubernetes:unsupported:flag:ulimit: invalid ulimit type: bogus"
+  },
+  "ulimit/sys-resource": {
+    "args": [
+      "--ulimit",
+      "memlock=unlimited:unlimited",
+      "--cap-add",
+      "SYS_RESOURCE"
+    ],
+    "outcomes": {
+      "cap-add": "map",
+      "ulimit": "map"
+    },
+    "changes": {
+      "/pid1/rlimits/0/hard": -1,
+      "/pid1/rlimits/0/name": "memlock",
+      "/pid1/rlimits/0/soft": -1,
+      "/security/capAdd/0": "SYS_RESOURCE"
+    }
+  },
+  "umask": {
+    "args": [
+      "--umask",
+      "0027"
+    ],
+    "outcomes": {
+      "umask": "map"
+    },
+    "changes": {
+      "/pid1/umask": "0027"
+    }
+  },
+  "umask/invalid": {
+    "args": [
+      "--umask",
+      "999"
+    ],
+    "outcomes": {
+      "umask": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:umask: invalid umask \"999\": an octal mode such as 0022"
+  },
+  "use-api-socket": {
+    "args": [
+      "--use-api-socket"
+    ],
+    "outcomes": {},
+    "error": "kubernetes:unsupported:dood-needs-privileged: --use-api-socket binds the docker engine's socket; on a cluster that engine is the pod's own, a sidecar that needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node), or use a cluster with a sysbox runtime class"
+  },
+  "use-api-socket/local": {
+    "args": [
+      "--use-api-socket"
+    ],
+    "outcomes": {
+      "use-api-socket": "map"
+    },
+    "changes": {
+      "/dood/privileged": true,
+      "/mounts/1/kind": "docker-socket",
+      "/mounts/1/target": "/var/run/docker.sock",
+      "/pid1/links/0/path": "/var/run/docker.sock",
+      "/pid1/links/0/target": "/opt/fleet/docker/docker.sock"
+    },
+    "warnings": [
+      "/var/run/docker.sock: the docker engine is the pod's own (the fleet-docker sidecar), not the daemon host's: the containers it runs are pod-local siblings, whose published ports are on the instance's localhost and whose binds see the workspace and nothing else of the instance, and its images live on the instance disk"
+    ]
+  },
+  "user": {
+    "args": [
+      "-u",
+      "vscode:vscode"
+    ],
+    "outcomes": {
+      "user": "map"
+    },
+    "changes": {
+      "/pid1/user": "vscode:vscode"
+    }
+  },
+  "userns": {
+    "args": [
+      "--userns",
+      "host"
+    ],
+    "outcomes": {
+      "userns": "map"
+    }
+  },
+  "userns/remap": {
+    "args": [
+      "--userns",
+      "keep-id"
+    ],
+    "outcomes": {
+      "userns": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:userns: --userns keep-id: a pod has no user namespace mode docker's maps to"
+  },
+  "uts": {
+    "args": [
+      "--uts",
+      "host"
+    ],
+    "outcomes": {
+      "uts": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:uts: --uts host: a pod cannot share the node's UTS namespace without its network"
+  },
+  "volume": {
+    "args": [
+      "-v",
+      "/home/dev/host/aws:/home/vscode/.aws:ro,z"
+    ],
+    "outcomes": {
+      "volume": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "host-dir",
+      "/mounts/1/mode": 448,
+      "/mounts/1/readOnly": true,
+      "/mounts/1/source": "/home/dev/host/aws",
+      "/mounts/1/subPath": ".hostbind/e59cefee",
+      "/mounts/1/target": "/home/vscode/.aws"
+    }
+  },
+  "volume-driver": {
+    "args": [
+      "--volume-driver",
+      "local"
+    ],
+    "outcomes": {
+      "volume-driver": "map"
+    }
+  },
+  "volume-driver/plugin": {
+    "args": [
+      "--volume-driver",
+      "rexray"
+    ],
+    "outcomes": {
+      "volume-driver": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:volume-driver: --volume-driver rexray: volumes live on the cluster's storage; only the local driver has a meaning there"
+  },
+  "volume/anonymous": {
+    "args": [
+      "-v",
+      "/data"
+    ],
+    "outcomes": {
+      "volume": "map"
+    },
+    "changes": {
+      "/mounts/1/anonymous": true,
+      "/mounts/1/copyUp": true,
+      "/mounts/1/kind": "volume",
+      "/mounts/1/subPath": "vol/anon-bd47413b",
+      "/mounts/1/target": "/data"
+    }
+  },
+  "volume/invalid": {
+    "args": [
+      "-v",
+      "/data:rw"
+    ],
+    "outcomes": {
+      "volume": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:volume: invalid volume specification: \"/data:rw\": an anonymous volume takes no mode"
+  },
+  "volume/missing-source": {
+    "args": [
+      "-v",
+      "/home/dev/host/new:/new"
+    ],
+    "outcomes": {
+      "volume": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "host-dir",
+      "/mounts/1/mode": 493,
+      "/mounts/1/source": "/home/dev/host/new",
+      "/mounts/1/subPath": ".hostbind/0d72ff2f",
+      "/mounts/1/target": "/new"
+    }
+  },
+  "volume/named": {
+    "args": [
+      "-v",
+      "cache:/cache:nocopy"
+    ],
+    "outcomes": {
+      "volume": "map"
+    },
+    "changes": {
+      "/mounts/1/kind": "shared-volume",
+      "/mounts/1/source": "cache",
+      "/mounts/1/subPath": ".vol/5e1ecee0",
+      "/mounts/1/target": "/cache"
+    }
+  },
+  "volume/relative": {
+    "args": [
+      "-v",
+      "./data:/data"
+    ],
+    "outcomes": {
+      "volume": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:volume: -v ./data:/data: a relative bind source cannot be resolved; use an absolute path"
+  },
+  "volumes-from": {
+    "args": [
+      "--volumes-from",
+      "other"
+    ],
+    "outcomes": {
+      "volumes-from": "refuse"
+    },
+    "error": "kubernetes:unsupported:flag:volumes-from: --volumes-from other: fleet runs one container per instance; there is no other container's volumes to take"
+  },
+  "workdir": {
+    "args": [
+      "-w",
+      "/srv/app"
+    ],
+    "outcomes": {
+      "workdir": "map"
+    },
+    "changes": {
+      "/pid1/working_dir": "/srv/app"
+    }
+  }
+}

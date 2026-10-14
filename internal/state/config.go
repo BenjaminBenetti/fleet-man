@@ -23,6 +23,10 @@ type Config struct {
 	ThemeSettings      ThemeSettings      `json:"theme_settings"`
 	ClaudeCodeSettings ClaudeCodeSettings `json:"claude_code_settings"`
 	DefaultBackend     string             `json:"default_backend,omitempty"` // "devcontainer", "coder", or "codespaces"
+	// DefaultKubeCluster is the cluster connection (fleet.KubeCluster.ID) a
+	// "kubernetes" DefaultBackend deploys to; empty otherwise. Like
+	// DefaultBackend, only a create's remember_default writes it.
+	DefaultKubeCluster string `json:"default_kube_cluster,omitempty"`
 }
 
 // DefaultConfig returns a config with default values applied.

@@ -1,6 +1,7 @@
 package create
 
 import (
+	"context"
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -15,13 +16,13 @@ import (
 // the container. Output is captured to ~/.fleet/startup/<name>.log
 // inside the instance; per-script failures are aggregated into a
 // warning file so the TUI can surface them without marking the
-// instance as failed.
+// instance as failed (and into ctx's provisioning log).
 //
 // State load failures are silently tolerated: if state cannot be read,
 // no scripts are run. The caller proceeds to mark the instance running
 // regardless — install can be re-attempted by the user via shell after
 // the instance comes up.
-func runStartupScripts(instanceBackend backend.Backend, wsDir, fleetName, instanceName string) {
+func runStartupScripts(ctx context.Context, instanceBackend backend.Backend, wsDir, fleetName, instanceName string) {
 	st, err := state.Load()
 	if err != nil {
 		return
@@ -43,16 +44,19 @@ func runStartupScripts(instanceBackend backend.Backend, wsDir, fleetName, instan
 	for _, failure := range failures {
 		lines = append(lines, failure.Error())
 	}
-	state.WriteWarn(fleetName, instanceName, strings.Join(lines, "\n"))
+	provisionWarning(ctx, fleetName, instanceName, strings.Join(lines, "\n"))
 }
 
 // scriptsForInstance adds the audio stack when either global audio setting is
 // enabled and supported by the backend. Provision at creation so applications
 // can discover their virtual devices before a playback client attaches.
 // These global settings are not part of startup.ScriptsFor's per-fleet toggles.
+// An instance its backend says can have no audio (backend.AudioGate: a
+// cluster without root, on an image without the audio stack) gets none; the
+// backend's create has already said why on the instance's banner.
 func scriptsForInstance(instanceBackend backend.Backend, settings fleet.FleetSettings, config *state.Config) []startup.Script {
 	scripts := startup.ScriptsFor(settings)
-	if config != nil {
+	if config != nil && backend.AudioUnavailable(instanceBackend) == "" {
 		_, supportsOutput := instanceBackend.(backend.OutputBackend)
 		mic := config.MicSettings.Enabled && instanceBackend.SupportsMicSink()
 		output := config.OutputSettings.Enabled && supportsOutput

@@ -51,6 +51,12 @@ message ShutdownRequest {
 message ShutdownReply {
   bool accepted = 1;
   int32 draining_jobs = 2;
+  // hard_limit_ms is how long the daemon's own shutdown may take, cleanup
+  // included, before it exits whatever it was still doing (its hard limit). A
+  // restarting client waits that long plus 2s for the process to go before it
+  // kills it, so a shutdown still flushing is never killed; 0 (an older
+  // daemon) means it reports none, and the client keeps its fixed 8s.
+  int64 hard_limit_ms = 3;
 }
 
 // FleetTUIConnectedRequest signals that a TUI client has just opened (sent once
@@ -102,11 +108,54 @@ message DeleteImageCacheRequest {
 // DeleteImageCacheReply is empty: success is signalled by a nil error.
 message DeleteImageCacheReply {}
 
-message GetStateRequest {}
+message GetCacheUsageRequest {
+  string fleet = 1;
+}
+
+// GetCacheUsageReply is each of the fleet's cache volumes on the runtimes
+// whose volumes have a fixed size (its clusters; the daemon host's docker
+// caches grow with its disk and are not listed).
+message GetCacheUsageReply {
+  repeated CacheUsage caches = 1;
+  // unavailable names each runtime that could not report, with why
+  // ("kubernetes:<id>: not reachable now").
+  repeated string unavailable = 2;
+}
+
+// CacheUsage is how full one cache volume is.
+message CacheUsage {
+  // service is the shared service: "buildkit", "debcache" or "imagecache".
+  string service = 1;
+  // cluster is the connection the volume is on, location its display name.
+  string cluster = 2;
+  string location = 3;
+  int64 used_bytes = 4;
+  int64 capacity_bytes = 5;
+  // expandable: the volume grows by half when it is nearly full.
+  bool expandable = 6;
+  // state is the service's server: "ready", "starting", or why it is
+  // neither.
+  string state = 7;
+  // warning is the line the Caching row shows ("93% full; its StorageClass
+  // cannot grow it"); empty when all is well.
+  string warning = 8;
+}
+
+message GetStateRequest {
+  // fresh_branches asks the server to read every instance's checked-out branch
+  // through its backend's workspace reader (bounded concurrency; reads made
+  // inside an instance are cached ~10s, host checkout reads never are) and
+  // return them as GetStateReply.runtime entries carrying
+  // current_branch. Callers without a Watch subscription (fleet ls, the MCP
+  // fleet_list tool) set it: the runtime pollers only run while a TUI watches.
+  bool fresh_branches = 1;
+}
 
 // GetStateReply is the one-stop snapshot of EVERYTHING the TUI renders:
 //   state   — persisted: what fleets/instances exist + their recorded status
 //   runtime — live: agent running?/stats/sessions/ports/live container status
+//             (filled only with current_branch, and only when the request set
+//             fresh_branches; the full live sidecar streams over Watch)
 //   active_jobs — in-flight jobs (for progress + re-attach)
 message GetStateReply {
   State state = 1;
@@ -179,6 +228,10 @@ message SetLastSeenVersionRequest {
 }
 
 // Generic reply for the synchronous mutations: the post-mutation State.
+// warnings are what the mutation accepted but the caller should know
+// (SetFleetSettings: an automation agent whose firings the login check will
+// refuse).
 message MutationReply {
   State state = 1;
+  repeated string warnings = 2;
 }

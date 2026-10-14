@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet up --branch <branch>` clones that branch and `fleet ls` reports it in the BRANCH column.
 set -euo pipefail
 
@@ -31,14 +32,15 @@ info "fleet up alpha --branch feature/x"
 "${FLEET_BIN}" up alpha --repo "${FIXTURE_REPO_URL}" --branch feature/x
 
 # Workspace clone must be on feature/x — git rev-parse is the source of truth.
-ws_dir="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/${FIXTURE_REPO_NAME}"
-assert_file_exists "${ws_dir}"
-checked_branch=$(git -C "${ws_dir}" rev-parse --abbrev-ref HEAD)
+inst="${FIXTURE_REPO_NAME}/alpha"
+assert_workspace_exists "${inst}"
+checked_branch=$(itest_workspace_git "${inst}" rev-parse --abbrev-ref HEAD)
 assert_equals "feature/x" "${checked_branch}" "workspace should be on the requested branch"
 
 # Branch content arrived too — sentinel file present with expected body.
-assert_file_exists "${ws_dir}/${sentinel_file}"
-contents=$(cat "${ws_dir}/${sentinel_file}")
+itest_workspace_test "${inst}" -e "${sentinel_file}" \
+  || fail "workspace is missing the branch sentinel ${sentinel_file}"
+contents=$(itest_workspace_read "${inst}" "${sentinel_file}")
 assert_equals "${sentinel_text}" "${contents}" "branch sentinel content should match"
 
 # ===========================================

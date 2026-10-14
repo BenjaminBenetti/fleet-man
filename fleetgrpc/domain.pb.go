@@ -17,6 +17,7 @@
 //   control.proto   — Hello/Shutdown/GetState + synchronous state mutations
 //   config.proto    — server-owned config.json
 //   exec.proto      — interactive backend ops (Exec/Logs/PortForward)
+//   kube.proto      — Kubernetes cluster connections, their health, pod runtime
 //   service.proto   — the FleetService that ties them together
 
 package fleetgrpc
@@ -130,6 +131,9 @@ const (
 	BackendType_BACKEND_TYPE_DEVCONTAINER BackendType = 1
 	BackendType_BACKEND_TYPE_CODER        BackendType = 2
 	BackendType_BACKEND_TYPE_CODESPACES   BackendType = 3
+	// KUBERNETES runs the instance as a pod on a cluster connection
+	// (KubeCluster, kube.proto) that Instance.kube_cluster names.
+	BackendType_BACKEND_TYPE_KUBERNETES BackendType = 4
 )
 
 // Enum value maps for BackendType.
@@ -139,12 +143,14 @@ var (
 		1: "BACKEND_TYPE_DEVCONTAINER",
 		2: "BACKEND_TYPE_CODER",
 		3: "BACKEND_TYPE_CODESPACES",
+		4: "BACKEND_TYPE_KUBERNETES",
 	}
 	BackendType_value = map[string]int32{
 		"BACKEND_TYPE_UNSPECIFIED":  0,
 		"BACKEND_TYPE_DEVCONTAINER": 1,
 		"BACKEND_TYPE_CODER":        2,
 		"BACKEND_TYPE_CODESPACES":   3,
+		"BACKEND_TYPE_KUBERNETES":   4,
 	}
 )
 
@@ -233,7 +239,23 @@ type Instance struct {
 	// (issue #188). Plain bool: false == "not automated" == user-created, like the
 	// FleetSettings *Mount flags — the zero value carries the common case, so no
 	// optional is needed.
-	Automated     bool `protobuf:"varint,31,opt,name=automated,proto3" json:"automated,omitempty"`
+	Automated bool `protobuf:"varint,31,opt,name=automated,proto3" json:"automated,omitempty"`
+	// The cluster connection (KubeCluster.id) a KUBERNETES instance runs on
+	// (JSON kube_cluster,omitempty). Empty for every other backend — optional.
+	KubeCluster *string `protobuf:"bytes,33,opt,name=kube_cluster,json=kubeCluster,proto3,oneof" json:"kube_cluster,omitempty"`
+	// The instance's key on its cluster (JSON kube_key,omitempty): it labels
+	// every object the instance owns and is written on the CREATING/CLONING
+	// record before any object exists, so a create that failed or was
+	// interrupted can still be torn down by key. Empty for every other backend,
+	// and until the cluster backend assigns it — optional.
+	KubeKey *string `protobuf:"bytes,34,opt,name=kube_key,json=kubeKey,proto3,oneof" json:"kube_key,omitempty"`
+	// The last branch a live workspace read saw checked out (JSON
+	// last_branch,omitempty): written whenever a read reports a different named
+	// branch and again just before Stop. It is the fallback, ahead of the
+	// REQUESTED branch above, for a caller that gets no live read
+	// (InstanceRuntime.current_branch absent), e.g. an instance whose workspace
+	// only exists inside its stopped runtime. Empty == never seen — optional.
+	LastBranch    *string `protobuf:"bytes,35,opt,name=last_branch,json=lastBranch,proto3,oneof" json:"last_branch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -366,6 +388,27 @@ func (x *Instance) GetAutomated() bool {
 	return false
 }
 
+func (x *Instance) GetKubeCluster() string {
+	if x != nil && x.KubeCluster != nil {
+		return *x.KubeCluster
+	}
+	return ""
+}
+
+func (x *Instance) GetKubeKey() string {
+	if x != nil && x.KubeKey != nil {
+		return *x.KubeKey
+	}
+	return ""
+}
+
+func (x *Instance) GetLastBranch() string {
+	if x != nil && x.LastBranch != nil {
+		return *x.LastBranch
+	}
+	return ""
+}
+
 // FleetSettings mirrors internal/fleet.FleetSettings. The three *Mount flags are
 // plain bool: their Go JSON tags are `...,omitempty`, so an explicit-false mount
 // is OMITTED from state.json and reads back false — on disk false == "never
@@ -384,8 +427,8 @@ type FleetSettings struct {
 	// whose unix socket (under ~/.fleet/workspaces/<fleet>/.buildkit/) is
 	// bind-mounted into every instance, giving all instances one shared build
 	// cache. Plain bool (default off): false == "never set" == disabled, like
-	// the *Mount flags. Honored only on backends that SupportsCustomMounts()
-	// (devcontainer); cloud backends silently skip it.
+	// the *Mount flags. Honored only for instances whose fleet services run on
+	// the daemon host's docker (devcontainer); cloud backends silently skip it.
 	BuildkitServer bool `protobuf:"varint,6,opt,name=buildkit_server,json=buildkitServer,proto3" json:"buildkit_server,omitempty"`
 	// custom_mounts is the list of user-defined shared directory mounts for the
 	// fleet. Each entry is an ABSOLUTE in-container path (e.g. "/opt/data"); the
@@ -393,12 +436,12 @@ type FleetSettings struct {
 	// bind-mounted into every instance, so the directory is shared across all
 	// instances exactly like the *Mount toggles. repeated string: an empty list
 	// (the default) means no custom mounts. Honored only on backends that
-	// SupportsCustomMounts() (devcontainer); cloud backends silently skip them.
+	// SupportsSharedMounts() (devcontainer); cloud backends silently skip them.
 	CustomMounts []string `protobuf:"bytes,7,rep,name=custom_mounts,json=customMounts,proto3" json:"custom_mounts,omitempty"`
 	// deb_cache_server enables a shared apt-cacher-ng container for the fleet so
 	// repeated `apt install` reuse cached .deb packages. Instances reach it over
 	// a shared per-fleet docker network and get an apt http-proxy drop-in. Plain
-	// bool (default off), honored only on SupportsCustomMounts() backends.
+	// bool (default off), honored only where buildkit_server is.
 	DebCacheServer bool `protobuf:"varint,8,opt,name=deb_cache_server,json=debCacheServer,proto3" json:"deb_cache_server,omitempty"`
 	// image_cache_server enables a shared registry pull-through cache (a
 	// registry:2 mirror of Docker Hub) for the fleet so repeated `docker pull`
@@ -442,9 +485,17 @@ type FleetSettings struct {
 	// fleet_mcp provides the fleet MCP server and the Fleet Admiral skill to the
 	// coding agents in this fleet's instances (issue #219). Plain bool like the
 	// *Mount flags: false == off, the default.
-	FleetMcp      bool `protobuf:"varint,18,opt,name=fleet_mcp,json=fleetMcp,proto3" json:"fleet_mcp,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	FleetMcp bool `protobuf:"varint,18,opt,name=fleet_mcp,json=fleetMcp,proto3" json:"fleet_mcp,omitempty"`
+	// custom_mount_host_folders gives a custom mount (keyed by its
+	// custom_mounts path) an absolute folder on the daemon host instead of its
+	// ~/.fleet/workspaces/<fleet>/.mnt/<path> folder. Docker binds it as it
+	// is, never making it nor changing its mode; a cluster keeps a copy on the
+	// fleet's share in step with it, both ways. A mount without an entry
+	// keeps its .mnt folder. Any caller that may set the fleet's settings sets
+	// it, local or remote, like a cluster's kubeconfig paths.
+	CustomMountHostFolders map[string]string `protobuf:"bytes,19,rep,name=custom_mount_host_folders,json=customMountHostFolders,proto3" json:"custom_mount_host_folders,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *FleetSettings) Reset() {
@@ -601,6 +652,13 @@ func (x *FleetSettings) GetFleetMcp() bool {
 		return x.FleetMcp
 	}
 	return false
+}
+
+func (x *FleetSettings) GetCustomMountHostFolders() map[string]string {
+	if x != nil {
+		return x.CustomMountHostFolders
+	}
+	return nil
 }
 
 // CoderParameter mirrors internal/fleet.CoderParameter — one Coder template
@@ -768,11 +826,14 @@ func (x *LayoutPreset) GetPaneCommands() []string {
 // and it is always persisted explicitly). backend reuses Instance.backend's enum
 // (UNSPECIFIED -> devcontainer at normalization).
 type Agent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Command       string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
-	SystemPrompt  string                 `protobuf:"bytes,4,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
-	Backend       BackendType            `protobuf:"varint,5,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Command      string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
+	SystemPrompt string                 `protobuf:"bytes,4,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
+	Backend      BackendType            `protobuf:"varint,5,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
+	// kube_cluster names the cluster connection (KubeCluster.id) a KUBERNETES
+	// agent's instances are created on. Empty for every other backend.
+	KubeCluster   string `protobuf:"bytes,7,opt,name=kube_cluster,json=kubeCluster,proto3" json:"kube_cluster,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -833,6 +894,13 @@ func (x *Agent) GetBackend() BackendType {
 		return x.Backend
 	}
 	return BackendType_BACKEND_TYPE_UNSPECIFIED
+}
+
+func (x *Agent) GetKubeCluster() string {
+	if x != nil {
+		return x.KubeCluster
+	}
+	return ""
 }
 
 // Trigger mirrors internal/fleet.Trigger — an automation trigger (issue #188).
@@ -1206,7 +1274,7 @@ var File_domain_proto protoreflect.FileDescriptor
 
 const file_domain_proto_rawDesc = "" +
 	"\n" +
-	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\xeb\x04\n" +
+	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\x87\x06\n" +
 	"\bInstance\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
 	"\fdisplay_name\x18\x02 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12&\n" +
@@ -1223,7 +1291,12 @@ const file_domain_proto_rawDesc = "" +
 	"\x05color\x18\v \x01(\tH\x06R\x05color\x88\x01\x01\x12\x1b\n" +
 	"\x06branch\x18\f \x01(\tH\aR\x06branch\x88\x01\x01\x12\x1a\n" +
 	"\bwarnings\x18\r \x03(\tR\bwarnings\x12\x1c\n" +
-	"\tautomated\x18\x1f \x01(\bR\tautomatedB\x0f\n" +
+	"\tautomated\x18\x1f \x01(\bR\tautomated\x12&\n" +
+	"\fkube_cluster\x18! \x01(\tH\bR\vkubeCluster\x88\x01\x01\x12\x1e\n" +
+	"\bkube_key\x18\" \x01(\tH\tR\akubeKey\x88\x01\x01\x12$\n" +
+	"\vlast_branch\x18# \x01(\tH\n" +
+	"R\n" +
+	"lastBranch\x88\x01\x01B\x0f\n" +
 	"\r_display_nameB\x0f\n" +
 	"\r_container_idB\t\n" +
 	"\a_configB\x10\n" +
@@ -1231,7 +1304,10 @@ const file_domain_proto_rawDesc = "" +
 	"\x06_errorB\x06\n" +
 	"\x04_tagB\b\n" +
 	"\x06_colorB\t\n" +
-	"\a_branchJ\x04\b\x0e\x10\x1fJ\x04\b \x10!\"\xff\x06\n" +
+	"\a_branchB\x0f\n" +
+	"\r_kube_clusterB\v\n" +
+	"\t_kube_keyB\x0e\n" +
+	"\f_last_branchJ\x04\b\x0e\x10\x1fJ\x04\b \x10!\"\xbb\b\n" +
 	"\rFleetSettings\x12*\n" +
 	"\x11claude_code_mount\x18\x01 \x01(\bR\x0fclaudeCodeMount\x12\x1f\n" +
 	"\vcodex_mount\x18\x02 \x01(\bR\n" +
@@ -1252,7 +1328,11 @@ const file_domain_proto_rawDesc = "" +
 	"\fcoder_preset\x18\x0f \x01(\tH\x03R\vcoderPreset\x88\x01\x01\x125\n" +
 	"\x14coder_workspace_name\x18\x10 \x01(\tH\x04R\x12coderWorkspaceName\x88\x01\x01\x12D\n" +
 	"\x10coder_parameters\x18\x11 \x03(\v2\x19.fleetgrpc.CoderParameterR\x0fcoderParameters\x12\x1b\n" +
-	"\tfleet_mcp\x18\x12 \x01(\bR\bfleetMcpB\v\n" +
+	"\tfleet_mcp\x18\x12 \x01(\bR\bfleetMcp\x12o\n" +
+	"\x19custom_mount_host_folders\x18\x13 \x03(\v24.fleetgrpc.FleetSettings.CustomMountHostFoldersEntryR\x16customMountHostFolders\x1aI\n" +
+	"\x1bCustomMountHostFoldersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\v\n" +
 	"\t_home_dirB\x16\n" +
 	"\x14_prefer_fleet_launchB\x11\n" +
 	"\x0f_coder_templateB\x0f\n" +
@@ -1272,12 +1352,13 @@ const file_domain_proto_rawDesc = "" +
 	"\fLayoutPreset\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06layout\x18\x02 \x01(\tR\x06layout\x12#\n" +
-	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\x98\x01\n" +
+	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\xbb\x01\n" +
 	"\x05Agent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12#\n" +
 	"\rsystem_prompt\x18\x04 \x01(\tR\fsystemPrompt\x120\n" +
-	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackendJ\x04\b\x03\x10\x04J\x04\b\x06\x10\a\"\xc8\x02\n" +
+	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackend\x12!\n" +
+	"\fkube_cluster\x18\a \x01(\tR\vkubeClusterJ\x04\b\x03\x10\x04J\x04\b\x06\x10\a\"\xc8\x02\n" +
 	"\aTrigger\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +
@@ -1330,12 +1411,13 @@ const file_domain_proto_rawDesc = "" +
 	"\x18INSTANCE_STATUS_STOPPING\x10\x06\x12\x1c\n" +
 	"\x18INSTANCE_STATUS_STARTING\x10\a\x12\x1c\n" +
 	"\x18INSTANCE_STATUS_DELETING\x10\b\x12\x1e\n" +
-	"\x1aINSTANCE_STATUS_REBUILDING\x10\t*\x7f\n" +
+	"\x1aINSTANCE_STATUS_REBUILDING\x10\t*\x9c\x01\n" +
 	"\vBackendType\x12\x1c\n" +
 	"\x18BACKEND_TYPE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19BACKEND_TYPE_DEVCONTAINER\x10\x01\x12\x16\n" +
 	"\x12BACKEND_TYPE_CODER\x10\x02\x12\x1b\n" +
-	"\x17BACKEND_TYPE_CODESPACES\x10\x03B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"\x17BACKEND_TYPE_CODESPACES\x10\x03\x12\x1b\n" +
+	"\x17BACKEND_TYPE_KUBERNETES\x10\x04B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_domain_proto_rawDescOnce sync.Once
@@ -1350,7 +1432,7 @@ func file_domain_proto_rawDescGZIP() []byte {
 }
 
 var file_domain_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_domain_proto_goTypes = []any{
 	(InstanceStatus)(0),           // 0: fleetgrpc.InstanceStatus
 	(BackendType)(0),              // 1: fleetgrpc.BackendType
@@ -1363,30 +1445,32 @@ var file_domain_proto_goTypes = []any{
 	(*Fleet)(nil),                 // 8: fleetgrpc.Fleet
 	(*GroupLayout)(nil),           // 9: fleetgrpc.GroupLayout
 	(*State)(nil),                 // 10: fleetgrpc.State
-	nil,                           // 11: fleetgrpc.State.FleetsEntry
-	nil,                           // 12: fleetgrpc.State.GroupLayoutsEntry
-	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
+	nil,                           // 11: fleetgrpc.FleetSettings.CustomMountHostFoldersEntry
+	nil,                           // 12: fleetgrpc.State.FleetsEntry
+	nil,                           // 13: fleetgrpc.State.GroupLayoutsEntry
+	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
 }
 var file_domain_proto_depIdxs = []int32{
-	13, // 0: fleetgrpc.Instance.created_at:type_name -> google.protobuf.Timestamp
+	14, // 0: fleetgrpc.Instance.created_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: fleetgrpc.Instance.status:type_name -> fleetgrpc.InstanceStatus
 	1,  // 2: fleetgrpc.Instance.backend:type_name -> fleetgrpc.BackendType
 	5,  // 3: fleetgrpc.FleetSettings.layout_presets:type_name -> fleetgrpc.LayoutPreset
 	6,  // 4: fleetgrpc.FleetSettings.agents:type_name -> fleetgrpc.Agent
 	7,  // 5: fleetgrpc.FleetSettings.triggers:type_name -> fleetgrpc.Trigger
 	4,  // 6: fleetgrpc.FleetSettings.coder_parameters:type_name -> fleetgrpc.CoderParameter
-	1,  // 7: fleetgrpc.Agent.backend:type_name -> fleetgrpc.BackendType
-	3,  // 8: fleetgrpc.Fleet.settings:type_name -> fleetgrpc.FleetSettings
-	2,  // 9: fleetgrpc.Fleet.instances:type_name -> fleetgrpc.Instance
-	11, // 10: fleetgrpc.State.fleets:type_name -> fleetgrpc.State.FleetsEntry
-	12, // 11: fleetgrpc.State.group_layouts:type_name -> fleetgrpc.State.GroupLayoutsEntry
-	8,  // 12: fleetgrpc.State.FleetsEntry.value:type_name -> fleetgrpc.Fleet
-	9,  // 13: fleetgrpc.State.GroupLayoutsEntry.value:type_name -> fleetgrpc.GroupLayout
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	11, // 7: fleetgrpc.FleetSettings.custom_mount_host_folders:type_name -> fleetgrpc.FleetSettings.CustomMountHostFoldersEntry
+	1,  // 8: fleetgrpc.Agent.backend:type_name -> fleetgrpc.BackendType
+	3,  // 9: fleetgrpc.Fleet.settings:type_name -> fleetgrpc.FleetSettings
+	2,  // 10: fleetgrpc.Fleet.instances:type_name -> fleetgrpc.Instance
+	12, // 11: fleetgrpc.State.fleets:type_name -> fleetgrpc.State.FleetsEntry
+	13, // 12: fleetgrpc.State.group_layouts:type_name -> fleetgrpc.State.GroupLayoutsEntry
+	8,  // 13: fleetgrpc.State.FleetsEntry.value:type_name -> fleetgrpc.Fleet
+	9,  // 14: fleetgrpc.State.GroupLayoutsEntry.value:type_name -> fleetgrpc.GroupLayout
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_domain_proto_init() }
@@ -1404,7 +1488,7 @@ func file_domain_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_domain_proto_rawDesc), len(file_domain_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

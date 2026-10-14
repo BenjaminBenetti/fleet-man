@@ -11,7 +11,9 @@
 # (.github/workflows/{unit,integration}.yml) so QA runs match what a PR sees:
 #   Go (pinned to go.mod), Docker engine + buildx + compose, Node + the
 #   devcontainer CLI, tmux (TUI tests), golangci-lint (import-boundary lint),
-#   buf + protoc plugins (proto contract), git, and gh.
+#   buf + protoc plugins (proto contract), git, gh, an sshd (the TUI tests
+#   over Armada SSH), and the Kubernetes tools for the kubernetes backend
+#   (kubectl, minikube, kind, k3s).
 #
 # Published to GitHub Container Registry by .github/workflows/qa-image.yml.
 
@@ -28,6 +30,16 @@ ARG GOLANGCI_LINT_VERSION=v2.11.4
 ARG PROTOC_GEN_GO_VERSION=v1.36.11
 ARG PROTOC_GEN_GO_GRPC_VERSION=v1.5.1
 ARG DEVCONTAINER_CLI_VERSION=latest
+# Kubernetes tooling. kubectl and minikube pin what .devcontainer/k8s-tools.sh
+# (which installs the latest releases) resolved when last bumped, so QA and the
+# devcontainer drive the same releases. kind and k3s, which the devcontainer
+# doesn't ship, sit on the same Kubernetes minor: minikube v1.39.0 defaults to
+# v1.37.0, kind v0.33.0's default node image is v1.37.0, and k3s is v1.37.1,
+# keeping kubectl within one minor of each.
+ARG KUBECTL_VERSION=v1.37.1
+ARG MINIKUBE_VERSION=v1.39.0
+ARG KIND_VERSION=v0.33.0
+ARG K3S_VERSION=v1.37.1+k3s1
 # buildx-provided; selects the right arch for Go / buf downloads (amd64|arm64).
 ARG TARGETARCH
 
@@ -46,7 +58,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl wget gnupg lsb-release apt-transport-https \
-        git openssh-client \
+        git openssh-client openssh-server \
         build-essential make pkg-config \
         tmux \
         jq ripgrep unzip zip xz-utils \
@@ -54,6 +66,9 @@ RUN set -eux; \
         sudo less vim nano bash-completion \
         procps iproute2 iptables uidmap kmod \
         iputils-ping netcat-openbsd dnsutils; \
+    # No sshd runs by default; a test that needs one starts it. Its host keys
+    # are made per container (ssh-keygen -A), never shipped in the image.
+    rm -f /etc/ssh/ssh_host_*; \
     rm -rf /var/lib/apt/lists/*
 
 # --- Docker engine (CE) + buildx + compose --------------------------------
@@ -127,6 +142,41 @@ RUN set -eux; \
     go clean -cache -modcache; \
     rm -rf /root/.cache /root/go
 
+# --- Kubernetes tooling ---------------------------------------------------
+# kubectl, minikube, kind and k3s, each checked against the sha256 its release
+# publishes. minikube and kind run their clusters as containers on the bundled
+# daemon; k3s is the bare binary (`sudo k3s server`). No cluster starts unless
+# FLEET_QA_START_MINIKUBE=1 (see entrypoint.sh).
+RUN set -eux; \
+    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "${arch}" in \
+        amd64) k3s_asset=k3s ;; \
+        arm64) k3s_asset=k3s-arm64 ;; \
+        *) echo "unsupported arch: ${arch}" >&2; exit 1 ;; \
+    esac; \
+    tmp="$(mktemp -d)"; \
+    fetch() { curl -fsSL --retry 3 -o "${tmp}/$2" "$1"; }; \
+    # check FILE HASH: an empty HASH (asset missing from the sums) fails too.
+    check() { printf '%s  %s\n' "$2" "${tmp}/$1" >"${tmp}/$1.check"; sha256sum -c "${tmp}/$1.check"; }; \
+    url="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl"; \
+    fetch "${url}" kubectl; \
+    fetch "${url}.sha256" kubectl.sha256; \
+    check kubectl "$(cat "${tmp}/kubectl.sha256")"; \
+    url="https://storage.googleapis.com/minikube/releases/${MINIKUBE_VERSION}/minikube-linux-${arch}"; \
+    fetch "${url}" minikube; \
+    fetch "${url}.sha256" minikube.sha256; \
+    check minikube "$(cat "${tmp}/minikube.sha256")"; \
+    url="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-${arch}"; \
+    fetch "${url}" kind; \
+    fetch "${url}.sha256sum" kind.sha256sum; \
+    check kind "$(awk '{print $1}' "${tmp}/kind.sha256sum")"; \
+    url="https://github.com/k3s-io/k3s/releases/download/$(awk -v v="${K3S_VERSION}" 'BEGIN { gsub(/\+/, "%2B", v); print v }')"; \
+    fetch "${url}/${k3s_asset}" k3s; \
+    fetch "${url}/sha256sum-${arch}.txt" k3s.sha256sum; \
+    check k3s "$(awk -v f="${k3s_asset}" '$2 == f {print $1}' "${tmp}/k3s.sha256sum")"; \
+    install -m 0755 "${tmp}/kubectl" "${tmp}/minikube" "${tmp}/kind" "${tmp}/k3s" /usr/local/bin/; \
+    rm -rf "${tmp}"
+
 # --- QA user --------------------------------------------------------------
 # Ubuntu 26.04 ships a default 'ubuntu' user/group at uid/gid 1000; reclaim that
 # id for the qa user (cloud platforms commonly assume uid 1000).
@@ -138,7 +188,10 @@ RUN set -eux; \
     echo "${QA_USER} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${QA_USER}"; \
     chmod 0440 "/etc/sudoers.d/${QA_USER}"; \
     groupadd -f docker; \
-    usermod -aG docker "${QA_USER}"
+    usermod -aG docker "${QA_USER}"; \
+    # Pre-create minikube's download cache so a named volume mounted there
+    # (README: Kubernetes) starts out owned by the qa user, not root.
+    install -d -o "${QA_UID}" -g "${QA_GID}" "/home/${QA_USER}/.minikube" "/home/${QA_USER}/.minikube/cache"
 
 # --- entrypoint + verification --------------------------------------------
 COPY entrypoint.sh /usr/local/bin/qa-entrypoint
@@ -151,16 +204,20 @@ RUN set -eux; \
 
 LABEL org.opencontainers.image.source="https://github.com/BenjaminBenetti/fleet-man" \
       org.opencontainers.image.title="fleet-man QA environment" \
-      org.opencontainers.image.description="Toolchain image for automated QA of fleet PRs: Go, Docker (DinD), devcontainer CLI, tmux, golangci-lint, buf, gh."
+      org.opencontainers.image.description="Toolchain image for automated QA of fleet PRs: Go, Docker (DinD), devcontainer CLI, tmux, golangci-lint, buf, gh, kubectl, minikube, kind, k3s."
 
 # Bundled daemon stores layers here; a volume avoids overlay-on-overlay churn.
-VOLUME /var/lib/docker
+# k3s's containerd needs the same: its overlayfs snapshotter can't mount on the
+# container's own overlay root.
+VOLUME /var/lib/docker /var/lib/rancher/k3s
 
 # GOTOOLCHAIN=auto lets `go` fetch a newer toolchain if a PR bumps go.mod past
 # the pinned version, so the QA env can still build it.
 ENV PATH="/home/${QA_USER}/go/bin:${PATH}" \
     GOTOOLCHAIN=auto \
-    FLEET_QA_START_DOCKER=1
+    FLEET_QA_START_DOCKER=1 \
+    FLEET_QA_START_MINIKUBE=0 \
+    MINIKUBE_WANTUPDATENOTIFICATION=false
 
 USER ${QA_USER}
 WORKDIR /home/${QA_USER}

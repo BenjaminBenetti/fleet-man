@@ -136,22 +136,46 @@ func awaitJobDone(open func(context.Context, fleetgrpc.FleetServiceClient) (jobS
 }
 
 // createInstanceRemote dispatches a CreateInstance job and returns once it has
-// started (record pre-created server-side).
-var createInstanceRemote = func(fleetName, instanceName, remote, branch string, backendType fleet.BackendType) error {
+// started (record pre-created server-side). The picked target becomes the
+// daemon's remembered default (remember_default), which is what the next
+// unspecified create anywhere — fleet up, MCP, this dialog — starts from.
+var createInstanceRemote = func(fleetName, instanceName, remote, branch string, target fleet.DeployTarget) error {
 	return awaitJobStart(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
-		req := &fleetgrpc.CreateInstanceRequest{
-			Fleet:    fleetName,
-			Instance: instanceName,
-			Backend:  protoconv.BackendToProto(backendType),
-		}
-		if remote != "" {
-			req.Remote = &remote
-		}
-		if branch != "" {
-			req.Branch = &branch
-		}
-		return svc.CreateInstance(ctx, req)
+		return svc.CreateInstance(ctx, newCreateInstanceRequest(fleetName, instanceName, remote, branch, target))
 	})
+}
+
+// newCreateInstanceRequest is the New instance dialog's create request. It
+// carries the whole target: the backend and, for a cluster target, its
+// connection.
+func newCreateInstanceRequest(fleetName, instanceName, remote, branch string, target fleet.DeployTarget) *fleetgrpc.CreateInstanceRequest {
+	req := &fleetgrpc.CreateInstanceRequest{
+		Fleet:           fleetName,
+		Instance:        instanceName,
+		Backend:         protoconv.BackendToProto(target.Backend),
+		KubeCluster:     target.KubeCluster,
+		RememberDefault: true,
+	}
+	if remote != "" {
+		req.Remote = &remote
+	}
+	if branch != "" {
+		req.Branch = &branch
+	}
+	return req
+}
+
+// listDeployTargetsRemote asks the daemon where a create in fleetName can go,
+// judged on the daemon's host, plus its remembered default and its build
+// tools. Package var so tests can stub it.
+var listDeployTargetsRemote = func(fleetName string) (*fleetgrpc.ListDeployTargetsReply, error) {
+	var reply *fleetgrpc.ListDeployTargetsReply
+	err := mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
+		var err error
+		reply, err = svc.ListDeployTargets(ctx, &fleetgrpc.ListDeployTargetsRequest{Fleet: fleetName})
+		return err
+	})
+	return reply, err
 }
 
 // cloneInstanceRemote dispatches a CloneInstance job (the server copies the
@@ -194,15 +218,14 @@ var rebuildInstanceRemote = func(fleetName, instanceName string) error {
 
 // destroyInstanceRemote tears down one instance (destroyFleet=false) or the
 // whole fleet (destroyFleet=true), to completion.
-var destroyInstanceRemote = func(fleetName, instanceName string, destroyFleet bool) error {
-	_, err := awaitJobDone(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
+var destroyInstanceRemote = func(fleetName, instanceName string, destroyFleet bool) ([]string, error) {
+	return awaitJobDone(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
 		req := &fleetgrpc.DestroyInstanceRequest{Fleet: fleetName, DestroyFleet: destroyFleet}
 		if instanceName != "" {
 			req.Instance = &instanceName
 		}
 		return svc.DestroyInstance(ctx, req)
 	})
-	return err
 }
 
 // closeMutationConn tears down the mutation connection. Called from Run() after
@@ -226,20 +249,30 @@ var createFleetRemote = func(name, remote string) error {
 	})
 }
 
-// destroyFleetRemote removes an (empty) fleet record.
-var destroyFleetRemote = func(name string) error {
-	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
-		_, err := svc.DestroyFleet(ctx, &fleetgrpc.DestroyFleetRequest{Name: name})
-		return err
-	})
-}
+// deleteCacheTimeout bounds the cache-wipe RPCs. It is much longer than the
+// ordinary mutationTimeout because the server stops each server, removes the
+// cache, and restarts the server — which on first run may pull its image and
+// then waits up to ~15s for the new socket — and on a cluster scales the
+// server down, deletes and remakes its volume and waits for the new pod
+// (the daemon bounds that at 270s). 300s keeps those from timing out before
+// the server reports how it went.
+const deleteCacheTimeout = 300 * time.Second
 
-// deleteCacheTimeout bounds the buildkit cache-wipe RPC. It is much longer than
-// the ordinary mutationTimeout because the server stops the container, removes
-// the cache, and restarts the server — which on first run may pull the
-// moby/buildkit image and then waits up to ~15s for the new socket. 120s keeps
-// the common case from timing out before the server reports success.
-const deleteCacheTimeout = 120 * time.Second
+// cacheUsageTimeout bounds the cache usage report (the daemon measures each
+// cluster cache in its server's pod, within 30s).
+const cacheUsageTimeout = 35 * time.Second
+
+// getCacheUsageRemote asks the server how full the fleet's cache volumes are
+// on its clusters.
+var getCacheUsageRemote = func(fleetName string) (*fleetgrpc.GetCacheUsageReply, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), cacheUsageTimeout)
+	defer cancel()
+	conn, err := dialMutation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return conn.Service().GetCacheUsage(ctx, &fleetgrpc.GetCacheUsageRequest{Fleet: fleetName})
+}
 
 // deleteBuildkitCacheRemote asks the server to wipe a fleet's shared build cache
 // and restart the (empty) buildkit server. Uses its own longer deadline.
@@ -321,15 +354,20 @@ var notifyTUIConnectedRemote = func() error {
 }
 
 // setFleetSettingsRemote replaces a fleet's settings (full FleetSettings,
-// preserving tri-state presence).
-var setFleetSettingsRemote = func(fleetName string, s fleet.FleetSettings) error {
-	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
-		_, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
+// preserving tri-state presence), returning what the daemon saved them with
+// but warns about: a custom mount's host folder missing on the daemon host,
+// an agent whose firings the login check will refuse.
+var setFleetSettingsRemote = func(fleetName string, s fleet.FleetSettings) ([]string, error) {
+	var warnings []string
+	err := mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
+		reply, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
 			Fleet:    fleetName,
 			Settings: protoconv.FleetSettingsToProto(s),
 		})
+		warnings = reply.GetWarnings()
 		return err
 	})
+	return warnings, err
 }
 
 // triggerLogsRemote fetches a trigger's recorded event logs (its recent
@@ -398,7 +436,8 @@ var setLastSeenVersionRemote = func(version string) error {
 }
 
 // setConfigRemote replaces the whole config (the settings page sends the full
-// edited Config).
+// edited Config). The daemon keeps its remembered default deploy target
+// whatever DefaultBackend this copy carries.
 var setConfigRemote = func(c *configutil.Config) error {
 	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
 		_, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: protoconv.ConfigToProto(c)})

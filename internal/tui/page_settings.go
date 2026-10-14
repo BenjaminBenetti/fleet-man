@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/agent"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/theme"
@@ -61,6 +62,7 @@ const (
 	settingsItemRemoteWebhookEnabled   = 708 // expose the automation webhook endpoint through the gateway
 	settingsItemRemoteWebhookPublicURL = 709 // copy the gateway-assigned public webhook base URL
 	settingsItemRemoteFleetMode        = 710 // "Remote Fleet via" [Gateway] [SSH] segmented selector
+	settingsItemRemoteRegistryEnabled  = 711 // serve built images to Kubernetes clusters through the gateway
 
 	// Fleet armada: the "+ Remote Fleet" button has a fixed id; registered
 	// remotes get base+i. The base is placed FAR above every other block (and
@@ -71,10 +73,18 @@ const (
 	settingsItemArmadaAdd  = 800
 	settingsItemArmadaBase = 100000
 
+	// Kubernetes: the "+ Kubernetes Cluster" button has a fixed id; connected
+	// clusters get base+i, in a band of 50000 up to (not including) the armada
+	// base. Like the armada rows they are matched (isKubeClusterItem) before
+	// the `>= settingsItemToolStatusBase` catch-all.
+	settingsItemKubeAdd  = 850
+	settingsItemKubeBase = 50000
+
 	settingsItemDaemonRestart = 900 // "Restart daemon" action row (below the tool-status band)
 	settingsItemDaemonLogs    = 901 // "Logs" level selector + fleet.log stream launcher
 
-	settingsItemToolStatusBase = 1000 // tool status rows start here
+	settingsItemToolStatusBase = 1000 // tool status rows (this machine) start here
+	settingsItemDaemonToolBase = 1500 // tool status rows for the daemon host start here
 	settingsItemDoctor         = 2000 // doctor action row
 	settingsItemKeybindings    = 2001 // keybindings dialog row
 )
@@ -82,6 +92,11 @@ const (
 // isArmadaRemoteItem reports whether an item ID is one of the registered-remote
 // rows (base+i). Open-ended: nothing else lives at or above the armada base.
 func isArmadaRemoteItem(item int) bool { return item >= settingsItemArmadaBase }
+
+// isKubeClusterItem reports whether an item ID is a connected cluster's row.
+func isKubeClusterItem(item int) bool {
+	return item >= settingsItemKubeBase && item < settingsItemArmadaBase
+}
 
 // isCopyRow reports whether an item ID is a Fleet MCP copy action — a row whose
 // enter copies to the clipboard rather than editing or cycling a value. Used to
@@ -95,10 +110,6 @@ func isCopyRow(item int) bool {
 	}
 	return false
 }
-
-// toolStatusCount is the number of rows rendered in the Tool Status
-// section. Must match the length of deps.CheckTools().
-const toolStatusCount = 5
 
 // dotfilesSetupPrompt is the instruction sent to the coding agent for
 // guided dotfiles setup.
@@ -156,6 +167,13 @@ type settingsPage struct {
 	armadaDeleteFocused bool   // sub-cursor on the [ delete ] button of the current remote row
 	armadaDeleteConfirm bool   // "[ delete? ]" armed (first enter on the button)
 	armadaBusy          bool   // an add/delete persistence RPC is in flight
+
+	// Kubernetes section state: the sub-cursor of a cluster row (l/→ steps
+	// onto [ test ], then [ delete ]), and the open context picker, cluster
+	// editor or disconnect dialog, which takes over the page while open.
+	kubeTestFocused   bool
+	kubeDeleteFocused bool
+	kubeDialog        kubeDialog
 }
 
 // armadaAddStage is the "+ Remote Fleet" flow's state machine.
@@ -176,8 +194,10 @@ type remoteSettingsSnapshot struct {
 	mcpEnabled     bool
 	fleetEnabled   bool
 	webhookEnabled bool
-	gatewayURL     string
-	fleetMode      string
+	// registryEnabled is Enable Image Registry.
+	registryEnabled bool
+	gatewayURL      string
+	fleetMode       string
 }
 
 // snapshotRemoteSettings extracts the tunnel-relevant settings from config.
@@ -186,11 +206,12 @@ func snapshotRemoteSettings(config *configutil.Config) remoteSettingsSnapshot {
 		return remoteSettingsSnapshot{}
 	}
 	return remoteSettingsSnapshot{
-		mcpEnabled:     config.RemoteMcpSettings.Enabled,
-		fleetEnabled:   config.RemoteMcpSettings.FleetEnabled,
-		webhookEnabled: config.RemoteMcpSettings.WebhookEnabled,
-		gatewayURL:     config.RemoteMcpSettings.GatewayURL,
-		fleetMode:      config.RemoteMcpSettings.FleetMode,
+		mcpEnabled:      config.RemoteMcpSettings.Enabled,
+		fleetEnabled:    config.RemoteMcpSettings.FleetEnabled,
+		webhookEnabled:  config.RemoteMcpSettings.WebhookEnabled,
+		registryEnabled: config.RemoteMcpSettings.ImageRegistryEnabled,
+		gatewayURL:      config.RemoteMcpSettings.GatewayURL,
+		fleetMode:       config.RemoteMcpSettings.FleetMode,
 	}
 }
 
@@ -239,10 +260,17 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 	// Baseline for remoteSaveBounced: the page opens showing the server's
 	// config, so its remote settings are what the server currently runs with.
 	settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+	// This machine's tools feed Tool Status and gate the Codespaces section
+	// (its gh). Checked here, on every route in (the Settings row, the
+	// Codespaces "set the Machine field" dialog), now that opening the New
+	// instance dialog no longer fills them in on the way.
+	m.toolStatus = checkTools()
 	// Refresh the armada registry and start the status-sweep tick that keeps
 	// the per-remote connection indicators live while the page is open. The
 	// armed-flag guard stops a re-entered page from stacking a second loop.
-	cmds := []tea.Cmd{fetchArmadaCmd()}
+	// The fleetd rows of Tool Status are the daemon host's tools, asked fresh
+	// each visit like this machine's.
+	cmds := []tea.Cmd{fetchArmadaCmd(), loadDaemonToolsCmd(m.watchGen), loadKubePluginsCmd(m.watchGen, m.kubeStatuses())}
 	if m.config != nil && m.config.OutputSettings.Enabled {
 		syncOutputFromConfig(m.config)
 		cmds = append(cmds, relistOutputTargetsCmd())
@@ -270,6 +298,11 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 
 // Update dispatches settings page messages to the appropriate handler.
 func (settingsPage *settingsPage) Update(m *model, msg tea.Msg) tea.Cmd {
+	// The Kubernetes dialogs take every key while open, and their RPC answers
+	// come back here whichever mode the page is in.
+	if cmd, handled := settingsPage.updateKube(m, msg); handled {
+		return cmd
+	}
 	if settingsPage.showKeybindings {
 		return settingsPage.updateKeybindingsDialog(m, msg)
 	}
@@ -319,6 +352,20 @@ var settingsSections = []settingsSection{
 		Tool:  "gh",
 		Items: func(_ *model) []int {
 			return []int{settingsItemCodespacesMachine}
+		},
+	},
+	{
+		// One row per cluster connection the daemon holds (pushed over Watch
+		// with its health), then the add button, which opens the context
+		// picker on the daemon host's kubeconfig.
+		Title: "Kubernetes",
+		Items: func(m *model) []int {
+			clusters := m.kubeStatuses()
+			items := make([]int, 0, len(clusters)+1)
+			for i := range clusters {
+				items = append(items, settingsItemKubeBase+i)
+			}
+			return append(items, settingsItemKubeAdd)
 		},
 	},
 	{
@@ -381,7 +428,7 @@ var settingsSections = []settingsSection{
 			if m.config != nil && m.config.RemoteMcpSettings.FleetEnabled {
 				items = append(items, settingsItemRemoteFleetMode)
 			}
-			items = append(items, settingsItemRemoteWebhookEnabled, settingsItemRemoteMcpGatewayURL)
+			items = append(items, settingsItemRemoteWebhookEnabled, settingsItemRemoteRegistryEnabled, settingsItemRemoteMcpGatewayURL)
 			if m.config != nil && m.config.RemoteMcpSettings.Enabled {
 				items = append(items, settingsItemRemoteMcpPublicURL)
 			}
@@ -412,11 +459,16 @@ var settingsSections = []settingsSection{
 		},
 	},
 	{
+		// This machine's tools, then the daemon host's (whose rows appear once
+		// its answer arrives). The row count follows both lists.
 		Title: "Tool Status",
-		Items: func(_ *model) []int {
-			items := make([]int, toolStatusCount)
-			for i := range items {
-				items[i] = settingsItemToolStatusBase + i
+		Items: func(m *model) []int {
+			items := make([]int, 0, len(m.toolStatus)+daemonToolCount(m))
+			for i := range m.toolStatus {
+				items = append(items, settingsItemToolStatusBase+i)
+			}
+			for i := range daemonToolCount(m) {
+				items = append(items, settingsItemDaemonToolBase+i)
 			}
 			return items
 		},
@@ -767,6 +819,52 @@ func (settingsPage *settingsPage) toggleRemoteWebhookEnabled(m *model) {
 	m.message = fmt.Sprintf("Webhook set to %s", label)
 }
 
+// toggleRemoteRegistryEnabled flips "Enable Image Registry" — serving the
+// images this daemon builds for Kubernetes clusters set to Gateway delivery
+// through the gateway — and saves. Like Enable Webhook it reveals no rows, so
+// the cursor stays put; it reverts on a failed save unless the failure is the
+// expected tunnel bounce from a remote client.
+func (settingsPage *settingsPage) toggleRemoteRegistryEnabled(m *model) {
+	if m.config == nil {
+		m.config = placeholderConfig()
+	}
+	current := m.config.RemoteMcpSettings.ImageRegistryEnabled
+	next := !current
+	m.config.RemoteMcpSettings.ImageRegistryEnabled = next
+	if err := setConfigRemote(m.config); err != nil {
+		if settingsPage.remoteSaveBounced(m, err) {
+			settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+			m.message = remoteSettingsSavedMsg
+			return
+		}
+		m.config.RemoteMcpSettings.ImageRegistryEnabled = current
+		m.message = fmt.Sprintf("Failed to save settings: %v", err)
+		return
+	}
+	settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+	label := "off"
+	if next {
+		label = "on"
+	}
+	m.message = fmt.Sprintf("Image Registry set to %s", label)
+}
+
+// remoteRegistryStatusValue is the Enable Image Registry row's live line
+// while it is on: where the gateway serves this daemon's images, or why it
+// serves none.
+func remoteRegistryStatusValue(m *model) string {
+	st := m.remoteMcpStatus
+	switch {
+	case st != nil && st.GetPublicRegistry() != "":
+		host, _, _ := strings.Cut(st.GetPublicRegistry(), "/")
+		return statusRunningStyle.Render("serving") + "  " + dimStyle.Render("clusters pull from "+host)
+	case st != nil && st.GetRegistryError() != "":
+		return statusCreatingStyle.Render("not serving") + "  " + dimStyle.Render(st.GetRegistryError())
+	default:
+		return dimStyle.Render("(not connected)")
+	}
+}
+
 // toggleAutoInstall toggles the dotfiles auto-install setting.
 func (settingsPage *settingsPage) toggleAutoInstall(m *model) {
 	if m.config == nil {
@@ -1044,6 +1142,7 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			settingsPage.armadaAgentFocused = false
 			settingsPage.armadaDeleteFocused = false
 			settingsPage.armadaDeleteConfirm = false
+			settingsPage.resetKubeRowFocus()
 			return nil
 
 		case "down", "j":
@@ -1051,10 +1150,15 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			settingsPage.armadaAgentFocused = false
 			settingsPage.armadaDeleteFocused = false
 			settingsPage.armadaDeleteConfirm = false
+			settingsPage.resetKubeRowFocus()
 			return nil
 
 		case "left", "h":
 			item := settingsPage.settingsCursorItem(m)
+			if isKubeClusterItem(item) {
+				settingsPage.stepKubeRowFocus(-1)
+				return nil
+			}
 			if isArmadaRemoteItem(item) {
 				// Step back along the row: [ delete ] → [ agent ] → the row.
 				if settingsPage.armadaDeleteFocused {
@@ -1084,6 +1188,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.setRemoteFleetMode(m, configutil.FleetModeGateway)
 			} else if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
+			} else if item == settingsItemRemoteRegistryEnabled {
+				settingsPage.toggleRemoteRegistryEnabled(m)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, -1)
 			} else if item == settingsItemTheme {
@@ -1105,6 +1211,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 
 		case "right", "l":
 			item := settingsPage.settingsCursorItem(m)
+			if isKubeClusterItem(item) {
+				settingsPage.stepKubeRowFocus(1)
+				return nil
+			}
 			if isArmadaRemoteItem(item) {
 				// Step along the row: the row → [ agent ] → [ delete ]
 				// (cache-clear UX pattern for the delete button).
@@ -1134,6 +1244,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.setRemoteFleetMode(m, configutil.FleetModeSSH)
 			} else if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
+			} else if item == settingsItemRemoteRegistryEnabled {
+				settingsPage.toggleRemoteRegistryEnabled(m)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, 1)
 			} else if item == settingsItemTheme {
@@ -1157,6 +1269,12 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			item := settingsPage.settingsCursorItem(m)
 			if item == settingsItemArmadaAdd {
 				return settingsPage.beginArmadaAdd(m)
+			}
+			if item == settingsItemKubeAdd {
+				return settingsPage.openKubePicker(m, "")
+			}
+			if isKubeClusterItem(item) {
+				return settingsPage.enterKubeClusterRow(m, item-settingsItemKubeBase)
 			}
 			if isArmadaRemoteItem(item) {
 				return settingsPage.enterArmadaRemoteRow(m, item-settingsItemArmadaBase)
@@ -1199,6 +1317,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			}
 			if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
+				return nil
+			}
+			if item == settingsItemRemoteRegistryEnabled {
+				settingsPage.toggleRemoteRegistryEnabled(m)
 				return nil
 			}
 			if item == settingsItemRemoteMcpCopyLocal {
@@ -1314,6 +1436,17 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 					return nil
 				}
 				return execProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
+			}
+			if item >= settingsItemDaemonToolBase && item < settingsItemDoctor {
+				// The install page opens here, where the user reads it, even
+				// for a tool missing on the daemon host.
+				idx := item - settingsItemDaemonToolBase
+				if rows := daemonToolRows(m); idx < len(rows) {
+					url := rows[idx].InstallURL
+					openURL(url)
+					m.message = fmt.Sprintf("Opening %s", url)
+				}
+				return nil
 			}
 			if item >= settingsItemToolStatusBase {
 				idx := item - settingsItemToolStatusBase
@@ -1604,6 +1737,9 @@ func (settingsPage *settingsPage) updateSettingsEditing(m *model, msg tea.Msg) t
 
 // viewSettings renders the settings page.
 func (settingsPage *settingsPage) viewSettings(m *model) string {
+	if settingsPage.kubeDialog != nil {
+		return settingsPage.viewKubeDialog(m)
+	}
 	var b strings.Builder
 
 	b.WriteString(renderGradient(nameToBanner("Settings")))
@@ -1665,6 +1801,11 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		}
 
 		listContent.WriteString(fleetExpandedStyle.Render(section.Title))
+		if section.Title == "Kubernetes" {
+			// Contexts and kubeconfig paths are the daemon host's, even from a
+			// remote TUI: say whose.
+			listContent.WriteString("  " + dimStyle.Render("contexts from "+strings.TrimPrefix(daemonWhere(m), "on ")))
+		}
 		listContent.WriteString("\n")
 		listContent.WriteString(dimStyle.Render(strings.Repeat("─", contentWidth)))
 		listContent.WriteString("\n\n")
@@ -1740,6 +1881,20 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			}
 			recordRow(settingsItemCodespacesMachine, settingsPage.renderSettingsRow(m, currentItem == settingsItemCodespacesMachine, "Machine", machineValue))
 
+		case "Kubernetes":
+			for i, st := range m.kubeStatuses() {
+				item := settingsItemKubeBase + i
+				recordRow(item, settingsPage.renderKubeClusterRow(m, st, currentItem == item, contentWidth))
+				listContent.WriteString("\n")
+			}
+			addActive := currentItem == settingsItemKubeAdd
+			recordRow(settingsItemKubeAdd, settingsPage.renderSettingsRow(m, addActive, "+ Kubernetes Cluster",
+				dimStyle.Render("connect a kube context from fleetd's kubeconfig")))
+			listContent.WriteString("\n")
+			// Not navigable: who else can reach what a connection holds. Wrapped
+			// here like the microphone Status line, since it bypasses recordRow.
+			listContent.WriteString(kubeHangingIndent("  "+kubeTrustLine(), contentWidth, 4))
+
 		case "Browser":
 			multipleValue := "[ off ]"
 			if config.BrowserSettings.MultipleBrowsersPerFleetEnabled() {
@@ -1778,8 +1933,12 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				// the box, and an UNWRAPPED long line is drawn as two while being
 				// counted as one — which shifts the scrollbar and the mouse hit
 				// rows of everything below it.
+				status := micStatusValue(m)
+				if note := audioUnavailableNote(m); note != "" {
+					status += "\n" + strings.Repeat(" ", 21) + dimStyle.Render(note)
+				}
 				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(
-					settingsPage.renderSettingsRow(m, false, "Status", micStatusValue(m))))
+					settingsPage.renderSettingsRow(m, false, "Status", status)))
 			}
 
 		case "Claude Code":
@@ -1807,7 +1966,11 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				if status == "" {
 					status = "connecting"
 				}
-				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(settingsPage.renderSettingsRow(m, false, "This client", dimStyle.Render(status))))
+				value := dimStyle.Render(status)
+				if note := audioUnavailableNote(m); note != "" {
+					value += "\n" + strings.Repeat(" ", 21) + dimStyle.Render(note)
+				}
+				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(settingsPage.renderSettingsRow(m, false, "This client", value)))
 			}
 
 		case "Fleet MCP":
@@ -1876,6 +2039,14 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			}
 			webhookEnabledValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Expose automation webhook triggers at the gateway public url so remote systems can fire them")
 			recordRow(settingsItemRemoteWebhookEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteWebhookEnabled, "Enable Webhook", webhookEnabledValue))
+			listContent.WriteString("\n")
+
+			registryValue := "[ off ]"
+			if config.RemoteMcpSettings.ImageRegistryEnabled {
+				registryValue = "[ on ]  " + remoteRegistryStatusValue(m)
+			}
+			registryValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Serve the images this daemon builds to Kubernetes clusters set to Gateway delivery")
+			recordRow(settingsItemRemoteRegistryEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteRegistryEnabled, "Enable Image Registry", registryValue))
 			listContent.WriteString("\n")
 
 			gatewayValue := config.RemoteMcpSettings.GatewayURL
@@ -1965,15 +2136,27 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				if i > 0 {
 					listContent.WriteString("\n")
 				}
-				var badge string
-				if tool.Found {
-					badge = statusRunningStyle.Render("installed")
-				} else {
-					badge = statusCreatingStyle.Render("not found")
-				}
-				value := badge + "  " + dimStyle.Render(tool.Description)
 				itemID := settingsItemToolStatusBase + i
-				recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, tool.Name, value))
+				recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, tool.Name, toolStatusValue(tool, "this machine")))
+			}
+			if len(m.toolStatus) > 0 {
+				listContent.WriteString("\n")
+			}
+			rows := daemonToolRows(m)
+			switch {
+			case m.daemonTools == nil:
+				listContent.WriteString("  " + dimStyle.Render("checking the tools where fleetd runs…"))
+			case len(m.daemonTools.tools) == 0:
+				listContent.WriteString("  " + dimStyle.Render("fleetd tools: "+m.daemonTools.err))
+			}
+			// The daemon host's tools, then each connection's login plugin
+			// (which can show before the tools have answered).
+			for i, tool := range rows {
+				if i > 0 || m.daemonTools == nil || len(m.daemonTools.tools) == 0 {
+					listContent.WriteString("\n")
+				}
+				itemID := settingsItemDaemonToolBase + i
+				recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, tool.Name, toolStatusValue(tool, daemonWhere(m))))
 			}
 
 		case "Fleet Daemon":
@@ -2028,6 +2211,10 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 	if settingsPage.showKeybindings {
 		tail.WriteString("\n")
 		tail.WriteString(keybindingsDialogBox.Render(settingsPage.renderKeybindingsDialog()))
+		tail.WriteString("\n")
+	}
+	if hint := settingsPage.kubeRowFooter(currentItem); hint != "" {
+		tail.WriteString(dimStyle.Render(wrapToWidth(hint, m.width)))
 		tail.WriteString("\n")
 	}
 	if isArmadaRemoteItem(currentItem) && settingsPage.armadaAddStage == armadaAddNone {
@@ -2198,12 +2385,29 @@ func (settingsPage *settingsPage) renderSettingsRow(m *model, active bool, label
 	return fmt.Sprintf("%s%s %s", cursor, formattedLabel, value)
 }
 
+// daemonToolCount is the number of fleetd rows in Tool Status: the daemon
+// host's tools and the connections' login plugins.
+func daemonToolCount(m *model) int {
+	return len(daemonToolRows(m))
+}
+
+// toolStatusValue renders a Tool Status row's value: whether the tool is
+// installed, where (this machine, or the daemon host), and what it is for.
+func toolStatusValue(tool deps.ToolStatus, where string) string {
+	badge := statusCreatingStyle.Render("not found")
+	if tool.Found {
+		badge = statusRunningStyle.Render("installed")
+	}
+	return badge + "  " + dimStyle.Render(where+" · "+tool.Description)
+}
+
 // ===========================================
 // URL Helper
 // ===========================================
 
-// openURL opens the given URL in the user's default browser.
-func openURL(url string) {
+// openURL opens the given URL in the user's default browser. A package var so
+// tests can stub it.
+var openURL = func(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

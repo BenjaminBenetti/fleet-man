@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -103,8 +104,7 @@ func (s *service) CopyFile(req *fleetgrpc.CopyFileRequest, stream grpc.ServerStr
 		return s.copyDirOut(inst, req, filePath, base, stream)
 	}
 
-	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir,
-		[]string{"tar", "-chf", "-", "-C", path.Dir(filePath), base})
+	cmd := fileOutCommand(inst, []string{"tar", "-chf", "-", "-C", path.Dir(filePath), base})
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
@@ -223,8 +223,7 @@ func (s *service) copyDirOut(inst *fleet.Instance, req *fleetgrpc.CopyFileReques
 		return err
 	}
 
-	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir,
-		[]string{"tar", "-C", filePath, "-cf", "-", "."})
+	cmd := folderExecCommand(inst, []string{"tar", "-C", filePath, "-cf", "-", "."})
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
@@ -283,6 +282,41 @@ func streamRawTar(r io.Reader, send func(*fleetgrpc.CopyFileChunk) error) error 
 			return status.Errorf(codes.Internal, "read tar: %v", readErr)
 		}
 	}
+}
+
+// fileOutCommand builds the exec a single file's tar comes out of the
+// instance through: on a backend with a bulk lane (FolderExecer: the
+// Kubernetes backend's bulk session, with its larger window) that lane, as a
+// folder's tar takes, so a large file neither crawls behind the agent
+// session's window over a slow link nor holds up its audio and polls; every
+// other backend runs ExecCommand as before. A package var so tests can stub
+// the backend layer.
+var fileOutCommand = func(inst *fleet.Instance, argv []string) *backend.Cmd {
+	return fileOutCommandOf(backendutil.NewForInstance(inst, false), inst, argv)
+}
+
+// fileOutCommandOf is fileOutCommand on b.
+func fileOutCommandOf(b backend.Backend, inst *fleet.Instance, argv []string) *backend.Cmd {
+	if fe, ok := b.(backend.FolderExecer); ok {
+		return fe.FolderExecCommand(inst.WorkspaceDir, argv)
+	}
+	return b.ExecCommand(inst.WorkspaceDir, argv)
+}
+
+// folderExecCommand builds the host-side exec that moves a folder's tar in or
+// out. On a backend with a separate bulk lane (the Kubernetes backend, which
+// runs it on the pod's bulk session) it uses that lane so a large directory
+// transfer does not hold up the main channel; every other backend falls back
+// to ExecCommandQuiet. A package var so tests can stub the whole backend
+// layer. The *exec.Cmd is driven with Start/Wait and pipes, like
+// copyIntoExecCommand.
+var folderExecCommand = func(inst *fleet.Instance, argv []string) *exec.Cmd {
+	if fe, ok := backendutil.NewForInstance(inst, false).(backend.FolderExecer); ok {
+		return fe.FolderExecCommand(inst.WorkspaceDir, argv).Cmd
+	}
+	// Other backends have no separate bulk lane; the folder tar runs the same
+	// way a single-file copy's exec does (copyIntoExecCommand).
+	return copyIntoExecCommand(inst, argv)
 }
 
 // copyIntoExecCommand builds the host-side container exec used by CopyInto.
@@ -475,7 +509,7 @@ func (s *service) copyDirInto(inst *fleet.Instance, open *fleetgrpc.CopyIntoOpen
 		return err
 	}
 
-	cmd := copyIntoExecCommand(inst, []string{"tar", "-xf", "-", "-C", targetRoot})
+	cmd := folderExecCommand(inst, []string{"tar", "-xf", "-", "-C", targetRoot})
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdin, err := cmd.StdinPipe()

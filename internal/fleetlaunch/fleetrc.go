@@ -33,26 +33,67 @@ const bashrcMarker = ".fleet/fleet.rc"
 //go:embed fleet.rc
 var fleetRCContent string
 
+// PeerDomainer is a backend whose instances resolve their fleet's siblings by
+// DNS under one domain: on a cluster, each instance's pod under the fleet's
+// headless Service there. fleet.rc exports it as FLEET_PEER_DOMAIN.
+type PeerDomainer interface {
+	// PeerDomain is the fleet's peer Service and its namespace; ok is false
+	// when the instance has none.
+	PeerDomain() (service, namespace string, ok bool)
+}
+
+// peerDomain is the fleet's peer Service and namespace (empty: none).
+type peerDomain struct{ service, namespace string }
+
 // renderFleetRC returns the fleet.rc content to stage into a container:
 // the embedded base rc plus a per-instance block exporting
 // FLEET_INSTANCE_NAME, so in-container tools can tell which instance
-// they are running in. The name is single-quoted with embedded quotes
-// escaped, so any name is safe to source. An empty name skips the
-// block, leaving the rc identical to the embedded base.
-func renderFleetRC(instanceName string) string {
-	if instanceName == "" {
-		return fleetRCContent
-	}
-	quoted := shellquote.Single(instanceName)
-	return fleetRCContent + fmt.Sprintf(`
+// they are running in, and, with a peer domain, one exporting
+// FLEET_PEER_DOMAIN. The values are single-quoted with embedded quotes
+// escaped, so any name is safe to source. An empty name and no peer domain
+// leave the rc identical to the embedded base.
+func renderFleetRC(instanceName string, peer peerDomain) string {
+	out := fleetRCContent
+	if instanceName != "" {
+		out += fmt.Sprintf(`
 # FLEET_INSTANCE_NAME — the name of this fleet instance, so in-container
 # tools can tell which instance they're running in.
 export FLEET_INSTANCE_NAME=%s
-`, quoted)
+`, shellquote.Single(instanceName))
+	}
+	if peer.service != "" && peer.namespace != "" {
+		svc, ns := shellquote.Single(peer.service), shellquote.Single(peer.namespace)
+		out += fmt.Sprintf(`
+# FLEET_PEER_DOMAIN — the DNS domain this fleet's instances on this cluster
+# share: a sibling's pod resolves as <its pod>.$FLEET_PEER_DOMAIN, its pod
+# being <statefulset>-0 (the statefulset is in its container id). The cluster
+# domain comes from this pod's DNS search list.
+FLEET_PEER_DOMAIN=%[1]s.%[2]s.svc
+for _fleet_search in $(sed -n 's/^search //p' /etc/resolv.conf 2>/dev/null); do
+  case "${_fleet_search}" in
+    %[2]s.svc.?*) FLEET_PEER_DOMAIN=%[1]s."${_fleet_search}"; break ;;
+  esac
+done
+unset _fleet_search
+export FLEET_PEER_DOMAIN
+`, svc, ns)
+	}
+	return out
+}
+
+// peerDomainOf is instanceBackend's peer domain, when it has one.
+func peerDomainOf(instanceBackend backend.Backend) peerDomain {
+	if p, ok := instanceBackend.(PeerDomainer); ok {
+		if svc, ns, ok := p.PeerDomain(); ok {
+			return peerDomain{service: svc, namespace: ns}
+		}
+	}
+	return peerDomain{}
 }
 
 // EnsureFleetRC writes the rendered fleet.rc (embedded base plus the
-// FLEET_INSTANCE_NAME export for instanceName) into the container at
+// FLEET_INSTANCE_NAME export for instanceName, and the FLEET_PEER_DOMAIN
+// export of a backend that has one) into the container at
 // <homeDir>/.fleet/fleet.rc and ensures the user's ~/.bashrc sources
 // it on shell startup. homeDir is the absolute path of the in-container
 // home (from FleetSettings.HomeDir); an empty string falls back to
@@ -80,7 +121,7 @@ func EnsureFleetRC(instanceBackend backend.Backend, workspaceDir, homeDir, insta
 	// over stdin — a plain `cat > file` would hang forever on the coder backend,
 	// whose transport never delivers the stdin EOF (issue #223). It also mkdir's
 	// the parent and writes atomically.
-	if err := backend.WriteFileInline(instanceBackend, workspaceDir, target, []byte(renderFleetRC(instanceName)), 0o644); err != nil {
+	if err := backend.WriteFileInline(instanceBackend, workspaceDir, target, []byte(renderFleetRC(instanceName, peerDomainOf(instanceBackend))), 0o644); err != nil {
 		return fmt.Errorf("write fleet.rc: %w", err)
 	}
 

@@ -1,0 +1,8 @@
+{
+  "name": "fleet-man host-bind fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "mounts": [
+    "source=${localEnv:FLEET_ITEST_HOSTBIND_DIR}/aws,target=/home/vscode/.aws,type=bind",
+    "source=${localEnv:FLEET_ITEST_HOSTBIND_DIR}/gitconfig,target=/home/vscode/.gitconfig-host,type=bind,readonly"
+  ]
+}

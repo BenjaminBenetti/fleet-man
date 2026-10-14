@@ -107,6 +107,17 @@ func GatewaySessionPath() string {
 	return filepath.Join(Dir(), "gateway_session.json")
 }
 
+// ContainerLogPath is the saved runtime log of a single Kubernetes instance:
+// what its container printed across the runs the cluster has dropped (an
+// earlier pod after a restart, a crash loop before it was parked, a stop).
+// fleetd appends to it (capped) as it sees each run end and removes it with
+// the instance; `fleet kube-exec logs` prints it before the live stream, so a
+// running instance shows every run as `docker logs` does. One definition both
+// sides share (the daemon writes it, the kube-exec shim reads it).
+func ContainerLogPath(fleetName, instanceName string) string {
+	return filepath.Join(Dir(), "logs", fleetName, instanceName, "container.log")
+}
+
 // WorkspacesDir is the base directory for instance workspace clones. This is
 // the single definition — internal/state.WorkspacesDir delegates here — living
 // in this leaf so client code (which must not import internal/state) can
@@ -122,4 +133,13 @@ func WorkspacesDir() string {
 // change cannot desynchronize the two sides.
 func WarnPath(fleetName, instanceName string) string {
 	return filepath.Join(Dir(), "logs", fleetName+"-"+instanceName+".warn")
+}
+
+// InstanceCreationLogPath is the creation log of a single instance: what its
+// latest provisioning job (create, clone or rebuild) printed, with the step
+// it reached and each warning. The daemon writes it (0600) and removes it with
+// the instance; the TUI's logs view shows it. Like WarnPath this is the one
+// definition both sides use.
+func InstanceCreationLogPath(fleetName, instanceName string) string {
+	return filepath.Join(Dir(), "logs", fleetName+"-"+instanceName+".log")
 }

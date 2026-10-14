@@ -7,7 +7,8 @@ package startup
 // CODEX_HOME is overridden only for the installer: packages and install locks
 // stay container-local instead of racing on the fleet's shared ~/.codex mount.
 // Runtime config and authentication still use the normal Codex home. Provisioning
-// sets the default permissions to workspace-write with automatic approval review.
+// sets the default permissions to danger-full-access (the instance is the
+// sandbox, so Codex's own is off) with automatic approval review.
 // Existing image-provided installs are preserved; incomplete Fleet installs in
 // ~/.local/bin are repaired. Installation needs no Node.js or npm.
 func codexScript() Script {
@@ -84,7 +85,7 @@ configure_auto_mode() (
     BEGIN {
       print "approval_policy = \"on-request\""
       print "approvals_reviewer = \"auto_review\""
-      print "sandbox_mode = \"workspace-write\""
+      print "sandbox_mode = \"danger-full-access\""
       key = "(approval_policy|approvals_reviewer|sandbox_mode)"
       setting = "(" key "|\"" key "\"|\047" key "\047)"
     }

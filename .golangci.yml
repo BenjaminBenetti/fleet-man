@@ -52,9 +52,41 @@ linters:
             # (internal/cli runs it as `fleet mic sink`), so it is held to the
             # same boundary rather than being a package the linter never sees.
             - "**/internal/micsink/**"
+            # The browser proxy (`fleet browser-proxy`) runs inside instances
+            # too, from the same binary: the same boundary.
+            - "**/internal/browserproxy/**"
+            # The in-pod exec identity layer (`fleet exec-as`, the pod agent's
+            # spawner) is linked into the same binary and runs inside pods,
+            # where none of the server's internals exist: held to the boundary
+            # like micsink.
+            - "**/internal/execas/**"
+            # The in-pod Job and PID 1 halves (`fleet pod-job`, `fleet
+            # pod-init`) and the Job bootstrap protocol they share with the
+            # daemon run inside pods too: the same boundary.
+            - "**/internal/podseed/**"
+            - "**/internal/podinit/**"
+            - "**/internal/jobboot/**"
+            # The pod agent and its wire protocol run inside pods too (the
+            # protocol is fleetd's side as well, so it may not reach into the
+            # daemon either: fleetd hands it a logger).
+            - "**/internal/podagent/**"
+            - "**/internal/podwire/**"
+            # The shared-state sync engine is the daemon's hub and the pod's
+            # spoke alike, so it never reaches into the daemon either: the
+            # caller hands it its folders, state directory and logger.
+            - "**/internal/sharesync/**"
+            # The pod's half of the fleet's share (the share-layout init
+            # container, the spoke) runs inside pods too.
+            - "**/internal/podshare/**"
             # The SSH-agent provider runs where the human's ssh-agent is (TUI,
             # CLI), possibly far from the daemon: client code, like internal/mic.
             - "**/internal/agentfwd/**"
+            # The editor launch (`c`, `fleet code`, `fleet ssh-proxy`) runs on
+            # the editor's machine, the alias grammar is shared with it, and
+            # `fleet ssh-server` runs inside instances: client code, all three.
+            - "**/internal/editorlaunch/**"
+            - "**/internal/sshalias/**"
+            - "**/internal/sshserver/**"
           deny:
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/state
               desc: client code must go through the fleet server (fleetgrpc), not internal/state
@@ -64,9 +96,37 @@ linters:
               desc: provisioning is a server-side job; call fleetgrpc.CreateInstance
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/buildkit
               desc: the shared buildkit server is server-side provisioning; clients only flip FleetSettings.BuildkitServer via fleetgrpc
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/debcache
+              desc: the shared deb cache is server-side provisioning; clients only flip FleetSettings.DebCacheServer via fleetgrpc
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/imagecache
+              desc: the shared image cache is server-side provisioning; clients only flip FleetSettings.ImageCacheServer via fleetgrpc
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/fleetnet
+              desc: the fleet's shared network is server-side provisioning; clients never touch docker networks
+            # Prefix-matches dockerrt, svcruntimetest and any later runtime.
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/svcruntime
+              desc: shared services run daemon-side; clients only flip the FleetSettings service toggles via fleetgrpc
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/control
               desc: the server owns control sockets; clients receive control events over Watch
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/flog
               desc: the event log is server-owned; clients do not write fleet.log
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/server
               desc: client code must not import the server; talk to it via fleetgrpc over fleetclient
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/gitutil
+              desc: workspace checkouts live with the daemon (or inside the instance); read branches from InstanceRuntime.current_branch or GetState fresh_branches
+            # Kubernetes: every cluster call runs in fleetd, so a remote client
+            # works exactly like a local one and cluster credentials never leave
+            # the daemon host. Clients use the kube RPCs (ListKubeClusters,
+            # TestKubeCluster, ...) and Watch Event.kube_clusters. The one
+            # client-go leaf a client may link is internal/kubeexec, for the
+            # daemon-host kube-exec shim; internal/k8s/names is pure Go and
+            # allowed too.
+            - pkg: k8s.io/client-go
+              desc: cluster calls run in fleetd; use the fleetgrpc kube RPCs (internal/kubeexec is the shim's only client-go leaf)
+            - pkg: k8s.io/api
+              desc: cluster calls run in fleetd; use the fleetgrpc kube RPCs
+            - pkg: k8s.io/apimachinery
+              desc: cluster calls run in fleetd; use the fleetgrpc kube RPCs
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/k8s/owner
+              desc: cluster ownership (daemon_id, owner Leases) is the daemon's; clients see OWNER_CONFLICT in KubeClusterStatus
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight
+              desc: preflight runs in fleetd; stream it with TestKubeCluster

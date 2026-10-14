@@ -2,7 +2,9 @@
 # Integration test driver for fleet-man.
 #
 # - Builds the fleet binary to a temp location (unless FLEET_BIN is set).
-# - Runs every test in integration/tests in alphabetical order.
+# - Runs every test in integration/tests in alphabetical order, on the
+#   FLEET_ITEST_BACKEND backend (devcontainer by default; kubernetes runs only
+#   the tests marked "# itest: k8s", see common.sh "Test markers").
 # - Between tests: runs teardown to kill any leftover containers / state.
 # - Exits 0 only if every test passes.
 
@@ -30,16 +32,33 @@ if [ -n "${FLEET_ITEST_BSD_SHIMS:-}" ]; then
   say "FLEET_ITEST_BSD_SHIMS set: host PATH now fronts BSD-behavior shims"
 fi
 
-# 1. Build fleet binary unless caller provided one.
+# 1. Build fleet binary unless caller provided one. On a cluster the daemon
+#    also serves its pods the pod build of the same source; it is built beside
+#    it unless FLEET_POD_BINARY_<ARCH> names one (it must be the same build).
 if [ -z "${FLEET_BIN:-}" ]; then
   build_dir="$(mktemp -d)"
   FLEET_BIN="${build_dir}/fleet"
   say "Building fleet -> ${FLEET_BIN}"
   (cd "${REPO_ROOT}" && go build -o "${FLEET_BIN}" ./cmd/fleet)
+  if [ "${FLEET_ITEST_BACKEND:-}" = "kubernetes" ]; then
+    pod_arch=$(go env GOARCH)
+    pod_var="FLEET_POD_BINARY_$(printf '%s' "${pod_arch}" | tr '[:lower:]' '[:upper:]')"
+    if [ -z "${!pod_var:-}" ]; then
+      say "Building the pod build -> ${build_dir}/fleet-pod-linux-${pod_arch}"
+      (cd "${REPO_ROOT}" && CGO_ENABLED=0 GOOS=linux go build -tags nok8s -o "${build_dir}/fleet-pod-linux-${pod_arch}" ./cmd/fleet)
+      export "${pod_var}=${build_dir}/fleet-pod-linux-${pod_arch}"
+    fi
+  fi
 fi
 export FLEET_BIN
 say "Using fleet binary: ${FLEET_BIN}"
 "${FLEET_BIN}" --help >/dev/null || { printf "%b[fatal]%b fleet binary failed to run\n" "${RED}" "${RESET}" >&2; exit 2; }
+
+# common.sh provides teardown_test, the test-marker helpers and the backend
+# (FLEET_ITEST_BACKEND, validated there). Sourced only now: it defaults
+# FLEET_BIN, which step 1 must see unset to build.
+# shellcheck disable=SC1091
+source "${INTEGRATION_DIR}/common.sh"
 
 # 2. Preflight: docker + devcontainer CLI must be available and usable.
 #    FLEET_ITEST_NO_DOCKER=1 skips the preflight and (below) restricts the
@@ -75,6 +94,15 @@ if [ -z "${FLEET_ITEST_NO_DOCKER:-}" ]; then
   done
 else
   say "FLEET_ITEST_NO_DOCKER set: skipping docker preflight, running docker-free tests only"
+fi
+
+# Backend preflight (kubernetes: kubectl reaches FLEET_ITEST_CLUSTER, defaulted
+# to the current context). It prints its own [fatal] line.
+_be_preflight || exit 2
+if [ "${FLEET_ITEST_BACKEND}" = "kubernetes" ]; then
+  say "Backend: kubernetes (context ${FLEET_ITEST_CLUSTER})"
+else
+  say "Backend: ${FLEET_ITEST_BACKEND}"
 fi
 
 # 4. Iterate tests.
@@ -137,6 +165,67 @@ if [ -n "${FLEET_ITEST_NO_DOCKER:-}" ]; then
   tests=("${nodocker[@]}")
 fi
 
+# Kubernetes parity of the selected tests, from their "# itest:" markers (see
+# common.sh), for the summary: how many run on kubernetes, how many are
+# exempt (devcontainer-only, with the reasons), how many are not ported yet.
+parity_k8s=0
+parity_exempt=0
+parity_pending=0
+parity_host=0
+exemptions=()
+for test_file in "${tests[@]}"; do
+  case "$(itest_k8s_class "${test_file}")" in
+    k8s) parity_k8s=$((parity_k8s + 1)) ;;
+    devcontainer-only)
+      parity_exempt=$((parity_exempt + 1))
+      exemptions+=("$(basename "${test_file}" .sh)|$(itest_exemption "${test_file}")")
+      ;;
+    host-only) parity_host=$((parity_host + 1)) ;;
+    *) parity_pending=$((parity_pending + 1)) ;;
+  esac
+done
+parity_total="${#tests[@]}"
+
+# FLEET_ITEST_REQUIRE_K8S_PARITY=1 — the merge gate's parity check (the
+# integration-k8s workflow sets it): a selection holding a devcontainer-only
+# exemption or a test not ported to kubernetes fails before any test runs,
+# naming each, so the count cannot grow back from 0.
+if [ -n "${FLEET_ITEST_REQUIRE_K8S_PARITY:-}" ]; then
+  parity_gaps=$(itest_parity_gaps "${tests[@]}")
+  if [ -n "${parity_gaps}" ]; then
+    printf "%b[fatal]%b k8s parity required (FLEET_ITEST_REQUIRE_K8S_PARITY): %d devcontainer-only, %d not ported yet:\n" \
+      "${RED}" "${RESET}" "${parity_exempt}" "${parity_pending}" >&2
+    printf '%s\n' "${parity_gaps}" | sed 's/^/    /' >&2
+    printf "    mark each '# itest: k8s' once it runs on a cluster, or '# itest: no-docker' when it never makes an instance\n" >&2
+    exit 1
+  fi
+  say "k8s parity required: ${parity_k8s} marked k8s, ${parity_host} host-only, none exempt or unported"
+fi
+
+# On kubernetes, run only the "# itest: k8s" tests. devcontainer-only ones stay
+# in the list to be reported as skipped with their reason, and so do tests with
+# a malformed marker, which fail below; the rest are left out like other
+# shards' tests.
+if [ "${FLEET_ITEST_BACKEND}" = "kubernetes" ]; then
+  k8s_tests=()
+  for test_file in "${tests[@]}"; do
+    if [ -n "$(itest_marker_problem "${test_file}")" ]; then
+      k8s_tests+=("${test_file}")
+      continue
+    fi
+    case "$(itest_k8s_class "${test_file}")" in
+      k8s|devcontainer-only) k8s_tests+=("${test_file}") ;;
+    esac
+  done
+  # Same bash-3.2 constraint as above: length check before expanding.
+  say "Kubernetes subset: ${#k8s_tests[@]} test(s): marked k8s, or to report as devcontainer-only or malformed"
+  if [ "${#k8s_tests[@]}" -eq 0 ]; then
+    say "No kubernetes tests in shard — nothing to do"
+    exit 0
+  fi
+  tests=("${k8s_tests[@]}")
+fi
+
 # Shared results file — tests append one row each via common.sh helpers.
 # run.sh does NOT judge results; it only aggregates this file at the end.
 FLEET_ITEST_RESULTS="$(mktemp)"
@@ -162,9 +251,14 @@ _restore_claude_json() {
 
 trap 'rm -f "${FLEET_ITEST_RESULTS}"; _restore_claude_json' EXIT
 
-# Sourced common.sh in tests provides teardown_test — we need it here too.
-# shellcheck disable=SC1091
-source "${INTEGRATION_DIR}/common.sh"
+# FLEET_ITEST_RETRIES=<n> — run a failed test again, up to n more times (CI
+# sets 1: a download or runner blip fails one attempt). A test that passes
+# only on a retry passes, and the summary names it as flaky.
+itest_retries="${FLEET_ITEST_RETRIES:-0}"
+case "${itest_retries}" in
+  '' | *[!0-9]*) itest_retries=0 ;;
+esac
+flaky_tests=()
 
 # FLEET_ITEST_SKIP — comma-separated list of test basenames to skip
 # (without the .sh suffix). Skipped tests emit a "skip" row and never
@@ -196,10 +290,54 @@ for test_file in "${tests[@]}"; do
       >> "${FLEET_ITEST_RESULTS}"
     continue
   fi
-  say "${BOLD}RUN${RESET}  ${test_name}"
-  bash "${test_file}" || true
-  say "teardown ${test_name}"
-  teardown_test || true
+  marker_problem=$(itest_marker_problem "${test_file}")
+  if [ -n "${marker_problem}" ]; then
+    say "${RED}FAIL${RESET} ${test_name} (malformed itest marker: ${marker_problem})"
+    printf '%s|fail|0|malformed itest marker: %s\n' "${test_name}" "${marker_problem}" \
+      >> "${FLEET_ITEST_RESULTS}"
+    continue
+  fi
+  if [ "${FLEET_ITEST_BACKEND}" = "kubernetes" ] \
+    && [ "$(itest_k8s_class "${test_file}")" = "devcontainer-only" ]; then
+    reason=$(itest_exemption "${test_file}")
+    say "${YELLOW}SKIP${RESET} ${test_name} (devcontainer-only: ${reason})"
+    printf '%s|skip|0|devcontainer-only: %s\n' "${test_name}" "${reason}" \
+      >> "${FLEET_ITEST_RESULTS}"
+    continue
+  fi
+  attempt=0
+  while :; do
+    if [ "${attempt}" -eq 0 ]; then
+      say "${BOLD}RUN${RESET}  ${test_name}"
+    else
+      say "${YELLOW}RETRY${RESET} ${test_name} (attempt $((attempt + 1)) of $((itest_retries + 1)))"
+    fi
+    rc=0
+    bash "${test_file}" || rc=$?
+    # FLEET_ITEST_ARTIFACTS=<dir>: a failed test leaves its daemon's log and
+    # the backend's state (_be_dump) there, before the teardown wipes them.
+    if [ "${rc}" -ne 0 ] && [ -n "${FLEET_ITEST_ARTIFACTS:-}" ]; then
+      artifacts="${FLEET_ITEST_ARTIFACTS}/${test_name}"
+      [ "${attempt}" -gt 0 ] && artifacts="${artifacts}.retry${attempt}"
+      mkdir -p "${artifacts}"
+      cp "${HOME}/.fleet/fleet.log" "${artifacts}/fleet.log" 2>/dev/null || true
+      cp "${HOME}/.fleet/state.json" "${artifacts}/state.json" 2>/dev/null || true
+      _be_dump "${artifacts}" || true
+      say "artifacts of ${test_name}: ${artifacts}"
+    fi
+    say "teardown ${test_name}"
+    teardown_test || true
+    if [ "${rc}" -eq 0 ] || [ "${attempt}" -ge "${itest_retries}" ]; then
+      break
+    fi
+    # The retry writes its own row: drop the failed attempt's.
+    grep -v "^${test_name}|" "${FLEET_ITEST_RESULTS}" > "${FLEET_ITEST_RESULTS}.retry" || true
+    mv "${FLEET_ITEST_RESULTS}.retry" "${FLEET_ITEST_RESULTS}"
+    attempt=$((attempt + 1))
+  done
+  if [ "${rc}" -eq 0 ] && [ "${attempt}" -gt 0 ]; then
+    flaky_tests+=("${test_name}")
+  fi
 done
 
 # Aggregate the per-test rows.
@@ -253,6 +391,21 @@ else
     "${RED}"   "${failed}" "${RESET}"
 fi
 
+if [ "${#flaky_tests[@]}" -gt 0 ]; then
+  printf "%b==>%b %bFlaky%b (passed on a retry): %s\n" "${BOLD}" "${RESET}" "${YELLOW}" "${RESET}" "${flaky_tests[*]}"
+fi
+
+# Kubernetes parity of the selected tests (counted before the kubernetes run's
+# own selection), then each devcontainer-only exemption with its reason.
+parity_line="k8s parity of ${parity_total} test(s): ${parity_k8s} marked k8s, ${parity_exempt} devcontainer-only, ${parity_pending} not ported yet, ${parity_host} host-only"
+printf "%b==>%b Backend %s; %s\n" "${BOLD}" "${RESET}" "${FLEET_ITEST_BACKEND}" "${parity_line}"
+if [ "${#exemptions[@]}" -gt 0 ]; then
+  for row in "${exemptions[@]}"; do
+    IFS='|' read -r name reason <<< "${row}"
+    printf "    devcontainer-only %s: %s\n" "${name}" "${reason}"
+  done
+fi
+
 # Emit a GitHub Actions step summary if running inside a workflow.
 # GITHUB_STEP_SUMMARY is a file path the runner publishes as markdown on
 # the job summary page. Outside Actions this env var is unset and we skip.
@@ -271,6 +424,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf '## Integration Tests — %s\n\n' "${overall}"
     printf '**%d passed**, **%d failed**, **%d skipped** out of %d.\n\n' \
       "${passed}" "${failed}" "${skipped}" "${total}"
+    printf 'Backend `%s`; %s.\n\n' "${FLEET_ITEST_BACKEND}" "${parity_line}"
     printf '| Test | Status | Duration | Description |\n'
     printf '| --- | --- | ---: | --- |\n'
     for row in "${result_rows[@]}"; do
@@ -284,6 +438,17 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     done
     if [ "${failed}" -gt 0 ]; then
       printf '\n**Failed:** %s\n' "${failed_tests[*]}"
+    fi
+    if [ "${#flaky_tests[@]}" -gt 0 ]; then
+      printf '\n⚠️ **Flaky** (failed, then passed on a retry): %s\n' "${flaky_tests[*]}"
+    fi
+    if [ "${#exemptions[@]}" -gt 0 ]; then
+      printf '\n<details><summary>devcontainer-only exemptions (%d)</summary>\n\n' "${#exemptions[@]}"
+      for row in "${exemptions[@]}"; do
+        IFS='|' read -r name reason <<< "${row}"
+        printf -- '- `%s`: %s\n' "${name}" "${reason}"
+      done
+      printf '\n</details>\n'
     fi
   } >> "${GITHUB_STEP_SUMMARY}"
 fi

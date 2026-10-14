@@ -212,3 +212,18 @@ func freshShellCommand(config *configutil.Config) []string {
 	}
 	return []string{"sh", "-c", setup + "exec bash"}
 }
+
+// kubeRejoinExit is the exit code `fleet kube-exec` (and `fleet shell` over a
+// remote daemon) ends with when an attach's pod was replaced, so its tmux
+// session is gone: the pane and full-screen attach wrappers re-run the attach,
+// which rejoins through `tmux new-session -A` (a fresh session in the new
+// pod). Any other exit code ends the wrapper. It is podwire.ExitHeldStreamGone,
+// restated here so the client package needs no pod-wire import.
+const kubeRejoinExit = 75
+
+// rejoinScript wraps an attach command line so it re-runs while it exits with
+// kubeRejoinExit (a replaced pod), leaving the final exit code in $__rc. It is
+// inert for every other backend and exit code, which never produce that code.
+func rejoinScript(cmdline string) string {
+	return fmt.Sprintf(`while :; do %s; __rc=$?; [ "$__rc" = %d ] || break; done`, cmdline, kubeRejoinExit)
+}

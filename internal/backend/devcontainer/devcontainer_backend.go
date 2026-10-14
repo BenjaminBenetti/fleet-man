@@ -2,6 +2,7 @@ package devcontainer
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,14 +15,20 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/devmeta"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/redact"
 )
 
 // DevcontainerBackend implements backend.Backend using the devcontainer
 // and docker CLIs.
 type DevcontainerBackend struct {
 	verbose bool
+
+	// workspaceDir is the workspace folder of the instance the backend was
+	// bound to (BindWorkspace); DownByKey removes what was made for it.
+	workspaceDir string
 
 	userCache   map[string]string
 	userMissAt  map[string]time.Time // last failed user resolution, to throttle re-resolves
@@ -103,20 +110,13 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 // rejected so it can't be cached and route every `docker exec -u` to a user that
 // doesn't exist — re-creating the very bug this resolves.
 func (devcontainerBackend *DevcontainerBackend) resolveContainerUser(containerID string) string {
-	if user := remoteUserFromMetadata(containerID); looksLikeUsername(user) {
+	if user := remoteUserFromMetadata(containerID); devmeta.LooksLikeUsername(user) {
 		return user
 	}
-	if user := devcontainerBackend.remoteUserViaExec(containerID); looksLikeUsername(user) {
+	if user := devcontainerBackend.remoteUserViaExec(containerID); devmeta.LooksLikeUsername(user) {
 		return user
 	}
 	return containerUserHeuristic(containerID)
-}
-
-// looksLikeUsername reports whether s is a plausible single-token Unix username:
-// non-empty, no whitespace, and free of shell-expansion leftovers like an
-// unsubstituted ${...} that a metadata template may carry.
-func looksLikeUsername(s string) bool {
-	return s != "" && !strings.ContainsAny(s, " \t\r\n") && !strings.Contains(s, "${")
 }
 
 // remoteUserViaExec asks the devcontainer CLI who it execs as. --default-user-env-probe
@@ -135,7 +135,7 @@ func (devcontainerBackend *DevcontainerBackend) remoteUserViaExec(containerID st
 	}
 	// Take the last line: with --default-user-env-probe none the username is the
 	// only stdout, but this is belt-and-suspenders against a stray banner line.
-	// resolveContainerUser validates the token via looksLikeUsername.
+	// resolveContainerUser validates the token via devmeta.LooksLikeUsername.
 	out = bytes.TrimSpace(out)
 	if i := bytes.LastIndexByte(out, '\n'); i >= 0 {
 		out = bytes.TrimSpace(out[i+1:])
@@ -161,7 +161,17 @@ func containerUserHeuristic(containerID string) string {
 
 // Up provisions a devcontainer for the given workspace folder.
 func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
-	return devcontainerBackend.up(workspaceDir, mounts, nil)
+	return devcontainerBackend.up(workspaceDir, mounts, nil, io.Discard)
+}
+
+// UpContext is Up for a provisioning job: the same `devcontainer up`, with the
+// CLI's log teed into the job's provisioning log (backend.JobLogFrom) as it
+// runs. The run is NOT tied to ctx's cancellation: killing the CLI mid
+// `docker run` could leave a container that nothing records, so a cancelled
+// job stops once up returns instead (create's stopIfCancelled tears down what
+// it made).
+func (devcontainerBackend *DevcontainerBackend) UpContext(ctx context.Context, req backend.UpRequest) (*backend.UpResult, error) {
+	return devcontainerBackend.up(req.WorkspaceDir, req.Mounts, nil, backend.JobLogFrom(ctx))
 }
 
 // Rebuild recreates the workspace's container in place by re-running
@@ -175,7 +185,14 @@ func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts [
 // belt-and-braces signal of rebuild intent. A future "full" rebuild could add
 // --build-no-cache to force a from-scratch image build.
 func (devcontainerBackend *DevcontainerBackend) Rebuild(_, workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
-	return devcontainerBackend.up(workspaceDir, mounts, []string{"--remove-existing-container"})
+	return devcontainerBackend.up(workspaceDir, mounts, []string{"--remove-existing-container"}, io.Discard)
+}
+
+// RebuildContext is Rebuild for a provisioning job, teeing the CLI's log into
+// the job's provisioning log the way UpContext does (and, like it, not
+// interrupted by ctx's cancellation).
+func (devcontainerBackend *DevcontainerBackend) RebuildContext(ctx context.Context, _ string, req backend.UpRequest) (*backend.UpResult, error) {
+	return devcontainerBackend.up(req.WorkspaceDir, req.Mounts, []string{"--remove-existing-container"}, backend.JobLogFrom(ctx))
 }
 
 // SupportsRebuild reports true: the devcontainer backend can recreate a
@@ -189,6 +206,10 @@ func (devcontainerBackend *DevcontainerBackend) SupportsRebuild() bool {
 // flags so they appear inside the container alongside the SSH agent
 // socket and the workspace itself. extraArgs are passed through verbatim to
 // the `up` subcommand (Rebuild uses it for --remove-existing-container).
+// jobLog receives the CLI's log (its stderr) as it runs: the provisioning log
+// of the job that asked, or io.Discard. Whatever reads it redacts it; the
+// failure detail this returns is redacted here (redact.EnvText), since the
+// CLI's docker run line carries every containerEnv value as -e KEY=VALUE.
 //
 // When the workspace's devcontainer.json declares its own mount at the
 // same container path as one of the fleet-supplied mounts, the user's
@@ -198,7 +219,13 @@ func (devcontainerBackend *DevcontainerBackend) SupportsRebuild() bool {
 // point" and the instance enters StatusFailed. Fleet's mount wins by
 // design — the user's per-fleet agent state should override whatever
 // the repo's devcontainer.json was pointing at.
-func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts []backend.Mount, extraArgs []string) (*backend.UpResult, error) {
+func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts []backend.Mount, extraArgs []string, jobLog io.Writer) (*backend.UpResult, error) {
+	// Refuse unsupported mounts before anything is pruned or rewritten.
+	mountArgs, err := customMountArgs(mounts)
+	if err != nil {
+		return nil, err
+	}
+
 	// Drop any docker container still labelled with this workspace
 	// folder before provisioning. The devcontainer CLI matches existing
 	// containers by `devcontainer.local_folder=<wsDir>` and silently
@@ -242,7 +269,7 @@ func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts [
 		return nil, err
 	}
 	args = append(args, sshArgs...)
-	args = append(args, customMountArgs(mounts)...)
+	args = append(args, mountArgs...)
 	cmd := exec.Command("devcontainer", args...)
 	// ${localEnv:SSH_AUTH_SOCK} in the config (a project's own agent mount)
 	// must resolve to the user's real agent, not the daemon's relay socket.
@@ -261,13 +288,14 @@ func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts [
 	var stdoutBuf bytes.Buffer
 	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
 
-	// Always tee stderr to os.Stderr so build output reaches the log
-	// file. A buffer captures it for inclusion in error messages.
+	// Always tee stderr (the CLI's log: build output, lifecycle commands) to
+	// os.Stderr and the job's provisioning log. A buffer captures it for
+	// inclusion in error messages.
 	var stderrBuf strings.Builder
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf, jobLog)
 
 	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(stderrBuf.String())
+		detail := redact.EnvText(strings.TrimSpace(stderrBuf.String()))
 		if detail != "" {
 			return nil, fmt.Errorf("devcontainer up failed: %w\n%s", err, detail)
 		}
@@ -671,27 +699,39 @@ func (devcontainerBackend *DevcontainerBackend) AgentToolProbe(containerID strin
 	return backend.ParseToolProbeOutput(string(out))
 }
 
-// SupportsCustomMounts reports that the devcontainer backend honors
-// caller-supplied bind mounts via `devcontainer up --mount` flags.
-func (devcontainerBackend *DevcontainerBackend) SupportsCustomMounts() bool {
+// SupportsSharedMounts reports that the devcontainer backend honors
+// caller-supplied mounts, binding each one's host LocalPath via
+// `devcontainer up --mount` flags.
+func (devcontainerBackend *DevcontainerBackend) SupportsSharedMounts() bool {
 	return true
 }
 
 // customMountArgs translates a slice of backend.Mount values into the
 // `--mount type=bind,...` flag pairs accepted by `devcontainer up`.
 // Returns nil for an empty input so callers can append unconditionally.
-func customMountArgs(mounts []backend.Mount) []string {
+// Every scope binds its LocalPath: docker shares the daemon host's
+// filesystem.
+//
+// A ReadOnly mount is refused: `devcontainer up --mount` only accepts
+// type, source, target and external, so it cannot be made read-only, and
+// mounting it writable would silently drop the request. Clone's `docker
+// run` refuses it too, so an instance gets the same mounts however it was
+// made.
+func customMountArgs(mounts []backend.Mount) ([]string, error) {
 	if len(mounts) == 0 {
-		return nil
+		return nil, nil
 	}
 	args := make([]string, 0, len(mounts)*2)
 	for _, mount := range mounts {
 		if mount.LocalPath == "" || mount.ContainerPath == "" {
 			continue
 		}
+		if mount.ReadOnly {
+			return nil, fmt.Errorf("mount %s: the devcontainer backend cannot mount read-only", mount.ContainerPath)
+		}
 		args = append(args, "--mount", "type=bind,source="+mount.LocalPath+",target="+mount.ContainerPath)
 	}
-	return args
+	return args, nil
 }
 
 // EditorURI returns a VS Code devcontainer remote URI.
@@ -739,7 +779,7 @@ func (devcontainerBackend *DevcontainerBackend) MicSinkCommand(containerID strin
 	if user := devcontainerBackend.containerUser(containerID); user != "" {
 		args = append(args, "-u", user)
 	}
-	args = append(args, containerID, fleetlaunch.RemotePath, "mic", "sink")
+	args = append(append(args, containerID), fleetlaunch.MicSinkArgv()...)
 	return exec.Command("docker", args...), true
 }
 
@@ -748,31 +788,41 @@ func (devcontainerBackend *DevcontainerBackend) OutputSourceCommand(containerID 
 	if user := devcontainerBackend.containerUser(containerID); user != "" {
 		args = append(args, "-u", user)
 	}
-	args = append(args, containerID, fleetlaunch.RemotePath, "output", "source")
+	args = append(append(args, containerID), fleetlaunch.OutputSourceArgv()...)
 	return exec.Command("docker", args...), true
 }
 
 // Status reports the live state of a docker container by reading
-// `docker inspect --format {{.State.Status}}`. Maps docker's
-// fine-grained states into the coarser backend.LiveStatus enum:
-// running/restarting → running; exited/paused/dead/created → stopped;
-// "No such container" → missing; everything else (and probe errors)
-// → unknown so callers preserve whatever was persisted.
+// `docker inspect --format {{.State.Status}}` (see inspectLiveStatus).
 func (devcontainerBackend *DevcontainerBackend) Status(containerID string) backend.LiveStatus {
 	if containerID == "" {
 		return backend.LiveStatusUnknown
 	}
 	cmd := exec.Command("docker", "inspect", "--format", "{{.State.Status}}", containerID)
 	out, err := cmd.Output()
+	var stderr []byte
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		stderr = exitErr.Stderr
+	}
+	return inspectLiveStatus(string(out), string(stderr), err)
+}
+
+// inspectLiveStatus maps a `docker inspect --format {{.State.Status}}` run
+// into the coarser backend.LiveStatus enum: running/restarting → running;
+// exited/paused/dead/created → stopped; removing, or no such container →
+// missing; everything else (and probe errors) → unknown so callers preserve
+// whatever was persisted. A gone container fails the inspect with "No such
+// object" (docker inspect names no object type) or "No such container",
+// capitalized or not depending on the docker version.
+func inspectLiveStatus(stdout, stderr string, err error) backend.LiveStatus {
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if strings.Contains(string(exitErr.Stderr), "No such container") {
-				return backend.LiveStatusMissing
-			}
+		lower := strings.ToLower(stderr)
+		if strings.Contains(lower, "no such container") || strings.Contains(lower, "no such object") {
+			return backend.LiveStatusMissing
 		}
 		return backend.LiveStatusUnknown
 	}
-	switch strings.TrimSpace(string(out)) {
+	switch strings.TrimSpace(stdout) {
 	case "running", "restarting":
 		return backend.LiveStatusRunning
 	case "exited", "paused", "dead", "created":

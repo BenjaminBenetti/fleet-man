@@ -1,0 +1,31 @@
+{
+  // Every devcontainer.json property that becomes a docker run option, for
+  // the capture signature: each new option the CLI emits for them shows up.
+  "name": "kubeshim run-options fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "containerUser": "vscode",
+  "remoteUser": "vscode",
+  "init": true,
+  "privileged": true,
+  "capAdd": ["SYS_PTRACE"],
+  "securityOpt": ["seccomp=unconfined"],
+  "containerEnv": { "KUBESHIM_A": "a", "KUBESHIM_SPACES": "x y" },
+  "appPort": [3000, "127.0.0.1:4000:4000"],
+  "mounts": [
+    "source=kubeshim-fixture-volume,target=/kubeshim-volume,type=volume",
+    { "source": "${localWorkspaceFolder}/.devcontainer", "target": "/kubeshim-bind", "type": "bind" }
+  ],
+  "runArgs": [
+    "--hostname=kubeshim-host",
+    "--shm-size=256m",
+    "--ulimit", "nofile=4096:8192",
+    "--add-host=host.docker.internal:host-gateway",
+    "--label", "kubeshim.fixture=runargs",
+    "--env-file", "${localWorkspaceFolder}/.devcontainer/kubeshim.env",
+    "-e", "KUBESHIM_FROM_HOST"
+  ],
+  "hostRequirements": { "cpus": 2, "memory": "4gb", "gpu": "optional" },
+  "overrideCommand": true,
+  "workspaceMount": "source=${localWorkspaceFolder},target=/work/kubeshim,type=bind",
+  "workspaceFolder": "/work/kubeshim"
+}

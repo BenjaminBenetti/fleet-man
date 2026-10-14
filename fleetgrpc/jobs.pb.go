@@ -87,7 +87,10 @@ func (JobKind) EnumDescriptor() ([]byte, []int) {
 
 // JobStep enumerates the discrete provisioning/lifecycle steps (create.Run /
 // instanceops / destroy). A typed enum lets the TUI render a stable progress
-// checklist; DONE marks terminal success.
+// checklist; DONE marks terminal success. A provisioning job (create, clone,
+// rebuild) reports each step it enters as a JobProgress and records it as its
+// JobSummary.current_step, which is what an instance row shows while the job
+// runs. The domain mirror is fleet.JobStep (same numbers; protoconv converts).
 type JobStep int32
 
 const (
@@ -104,13 +107,31 @@ const (
 	JobStep_JOB_STEP_INSTALL_DOTFILES     JobStep = 10
 	JobStep_JOB_STEP_RUN_STARTUP_SCRIPTS  JobStep = 11
 	JobStep_JOB_STEP_INSTALL_CLAUDE_HOOKS JobStep = 12
-	JobStep_JOB_STEP_COPY_WORKSPACE       JobStep = 13 // clone-only
+	JobStep_JOB_STEP_COPY_WORKSPACE       JobStep = 13 // clone, and a file:// template's copy
 	JobStep_JOB_STEP_BACKEND_CLONE        JobStep = 14 // clone-only
 	JobStep_JOB_STEP_BACKEND_DOWN         JobStep = 15 // destroy / stop
 	JobStep_JOB_STEP_REMOVE_WORKSPACE     JobStep = 16 // destroy (os.RemoveAll workspaceDir)
 	JobStep_JOB_STEP_BACKEND_START        JobStep = 17 // start
 	JobStep_JOB_STEP_MARK_RUNNING         JobStep = 18
 	JobStep_JOB_STEP_DONE                 JobStep = 19
+	// 20-27 are the Kubernetes backend's provisioning steps (reported from its
+	// UpContext / rebuild). Nothing emits them yet; they are declared now so a
+	// client can already name them.
+	JobStep_JOB_STEP_IMAGE_BUILD      JobStep = 20
+	JobStep_JOB_STEP_IMAGE_DELIVER    JobStep = 21
+	JobStep_JOB_STEP_APPLY_MANIFESTS  JobStep = 22
+	JobStep_JOB_STEP_WAIT_POD         JobStep = 23
+	JobStep_JOB_STEP_SEED             JobStep = 24
+	JobStep_JOB_STEP_LIFECYCLE_HOOKS  JobStep = 25
+	JobStep_JOB_STEP_EXPORT_WORKSPACE JobStep = 26
+	JobStep_JOB_STEP_ROLLBACK         JobStep = 27
+	// Wiring the instance into the fleet's shared buildkit server and deb/image
+	// caches (create, clone, rebuild).
+	JobStep_JOB_STEP_CONFIGURE_CACHES JobStep = 28
+	// The cluster's deep test, which the create of the first fleet share on a
+	// Kubernetes connection waits for: its two-pod probe decides the share's
+	// mode.
+	JobStep_JOB_STEP_TEST_CLUSTER JobStep = 29
 )
 
 // Enum value maps for JobStep.
@@ -136,6 +157,16 @@ var (
 		17: "JOB_STEP_BACKEND_START",
 		18: "JOB_STEP_MARK_RUNNING",
 		19: "JOB_STEP_DONE",
+		20: "JOB_STEP_IMAGE_BUILD",
+		21: "JOB_STEP_IMAGE_DELIVER",
+		22: "JOB_STEP_APPLY_MANIFESTS",
+		23: "JOB_STEP_WAIT_POD",
+		24: "JOB_STEP_SEED",
+		25: "JOB_STEP_LIFECYCLE_HOOKS",
+		26: "JOB_STEP_EXPORT_WORKSPACE",
+		27: "JOB_STEP_ROLLBACK",
+		28: "JOB_STEP_CONFIGURE_CACHES",
+		29: "JOB_STEP_TEST_CLUSTER",
 	}
 	JobStep_value = map[string]int32{
 		"JOB_STEP_UNSPECIFIED":          0,
@@ -158,6 +189,16 @@ var (
 		"JOB_STEP_BACKEND_START":        17,
 		"JOB_STEP_MARK_RUNNING":         18,
 		"JOB_STEP_DONE":                 19,
+		"JOB_STEP_IMAGE_BUILD":          20,
+		"JOB_STEP_IMAGE_DELIVER":        21,
+		"JOB_STEP_APPLY_MANIFESTS":      22,
+		"JOB_STEP_WAIT_POD":             23,
+		"JOB_STEP_SEED":                 24,
+		"JOB_STEP_LIFECYCLE_HOOKS":      25,
+		"JOB_STEP_EXPORT_WORKSPACE":     26,
+		"JOB_STEP_ROLLBACK":             27,
+		"JOB_STEP_CONFIGURE_CACHES":     28,
+		"JOB_STEP_TEST_CLUSTER":         29,
 	}
 )
 
@@ -461,12 +502,16 @@ func (*JobEvent_Done) isJobEvent_Event() {}
 // self-describing when surfaced via Event (watch.proto), whose oneof has no
 // job_id envelope. Echoes kind + target + start time for labeling.
 type JobStarted struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	Kind          JobKind                `protobuf:"varint,2,opt,name=kind,proto3,enum=fleetgrpc.JobKind" json:"kind,omitempty"`
-	Fleet         string                 `protobuf:"bytes,3,opt,name=fleet,proto3" json:"fleet,omitempty"`
-	Instance      string                 `protobuf:"bytes,4,opt,name=instance,proto3" json:"instance,omitempty"`
-	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	JobId     string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Kind      JobKind                `protobuf:"varint,2,opt,name=kind,proto3,enum=fleetgrpc.JobKind" json:"kind,omitempty"`
+	Fleet     string                 `protobuf:"bytes,3,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	Instance  string                 `protobuf:"bytes,4,opt,name=instance,proto3" json:"instance,omitempty"`
+	StartedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	// target is where a create job's instance goes: the server-resolved deploy
+	// target (the remembered default when the request left it UNSPECIFIED).
+	// Unset for other job kinds.
+	Target        *DeployTarget `protobuf:"bytes,6,opt,name=target,proto3" json:"target,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -532,6 +577,13 @@ func (x *JobStarted) GetInstance() string {
 func (x *JobStarted) GetStartedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.StartedAt
+	}
+	return nil
+}
+
+func (x *JobStarted) GetTarget() *DeployTarget {
+	if x != nil {
+		return x.Target
 	}
 	return nil
 }
@@ -609,7 +661,12 @@ func (x *JobProgress) GetPercent() float32 {
 
 // JobLog carries raw log output (tee'd git clone / devcontainer up /
 // startup-script stdout). level distinguishes the non-fatal WARNING surface
-// from info/error.
+// from info/error. One event per line, already redacted: the value of every
+// docker env flag (-e KEY=VALUE) is replaced by "<redacted>". A provisioning
+// job writes the same lines (and one per JobProgress step) to the instance's
+// creation log on the daemon host (~/.fleet/logs/<fleet>-<instance>.log, 0600),
+// which the TUI's logs view shows; the job's stream keeps only the most recent
+// lines for a watcher that attaches late.
 type JobLog struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Level         LogLevel               `protobuf:"varint,1,opt,name=level,proto3,enum=fleetgrpc.LogLevel" json:"level,omitempty"`
@@ -764,10 +821,14 @@ func (x *JobDone) GetWarnings() []string {
 // state write — this is what eliminates the #63 client-write race), runs the
 // job, and streams JobEvents.
 //
-// BACKEND RESOLUTION: when backend == UNSPECIFIED the server resolves it (since
-// ParseBackendType rejects empty today): use config.json DefaultBackend if set
-// and valid, else BACKEND_TYPE_DEVCONTAINER. config.json is server-owned (see
-// config.proto), so this source is part of the contract, not hidden fs access.
+// TARGET RESOLUTION: when backend == UNSPECIFIED the server resolves it to the
+// remembered default target (config.json DefaultBackend, written only through
+// remember_default) if set and valid, else BACKEND_TYPE_DEVCONTAINER; a file://
+// template fleet narrows a remembered target it cannot use to devcontainer.
+// ListDeployTargets reports the same default, and JobStarted.target names what
+// the create resolved to. A target a new instance can't use (KUBERNETES, while
+// this daemon cannot run instances on a cluster) is refused with
+// INVALID_ARGUMENT before any record exists.
 type CreateInstanceRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Fleet    string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
@@ -776,10 +837,17 @@ type CreateInstanceRequest struct {
 	// daemon host) that is copied into each instance instead of cloned;
 	// optional — for an existing fleet the server resolves it from the fleet
 	// record.
-	Remote        *string     `protobuf:"bytes,3,opt,name=remote,proto3,oneof" json:"remote,omitempty"`
-	Backend       BackendType `protobuf:"varint,4,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
-	Branch        *string     `protobuf:"bytes,5,opt,name=branch,proto3,oneof" json:"branch,omitempty"`
-	Verbose       bool        `protobuf:"varint,6,opt,name=verbose,proto3" json:"verbose,omitempty"`
+	Remote  *string     `protobuf:"bytes,3,opt,name=remote,proto3,oneof" json:"remote,omitempty"`
+	Backend BackendType `protobuf:"varint,4,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
+	Branch  *string     `protobuf:"bytes,5,opt,name=branch,proto3,oneof" json:"branch,omitempty"`
+	Verbose bool        `protobuf:"varint,6,opt,name=verbose,proto3" json:"verbose,omitempty"`
+	// remember_default makes the resolved target the remembered default (what
+	// later UNSPECIFIED creates resolve to) once the create is accepted. The TUI
+	// New instance dialog sets it; the CLI and MCP do not.
+	RememberDefault bool `protobuf:"varint,7,opt,name=remember_default,json=rememberDefault,proto3" json:"remember_default,omitempty"`
+	// kube_cluster names the cluster connection (KubeCluster.id) a
+	// BACKEND_TYPE_KUBERNETES create goes to; ignored for every other backend.
+	KubeCluster   string `protobuf:"bytes,8,opt,name=kube_cluster,json=kubeCluster,proto3" json:"kube_cluster,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -854,6 +922,20 @@ func (x *CreateInstanceRequest) GetVerbose() bool {
 		return x.Verbose
 	}
 	return false
+}
+
+func (x *CreateInstanceRequest) GetRememberDefault() bool {
+	if x != nil {
+		return x.RememberDefault
+	}
+	return false
+}
+
+func (x *CreateInstanceRequest) GetKubeCluster() string {
+	if x != nil {
+		return x.KubeCluster
+	}
+	return ""
 }
 
 // DestroyInstanceRequest destroys a single instance, or (destroy_fleet=true)
@@ -1089,8 +1171,9 @@ func (x *StopInstanceRequest) GetInstance() string {
 // CloneInstanceRequest clones a running source instance into a new one.
 //
 // COPY CONTRACT (authoritative — reproduces cli/clone.go + tui/dialogs.go): the
-// server READS the source record and copies Config, Backend, Tag, Color, and
-// Branch into the new instance; DisplayName is set from new_display_name
+// server READS the source record and copies Config, Backend, KubeCluster, Tag,
+// Color, and Branch into the new instance (never KubeKey: a clone's key is its
+// own); DisplayName is set from new_display_name
 // (falling back to new_instance); Status starts as CLONING. The optional
 // override fields override the copied Tag/Color/Branch without clobbering the
 // rest; absent override == use the source value.
@@ -1191,7 +1274,7 @@ var File_jobs_proto protoreflect.FileDescriptor
 const file_jobs_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"jobs.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fdomain.proto\"\xef\x01\n" +
+	"jobs.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fdomain.proto\x1a\fdeploy.proto\"\xef\x01\n" +
 	"\n" +
 	"JobSummary\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12&\n" +
@@ -1207,7 +1290,7 @@ const file_jobs_proto_rawDesc = "" +
 	"\bprogress\x18\x03 \x01(\v2\x16.fleetgrpc.JobProgressH\x00R\bprogress\x12%\n" +
 	"\x03log\x18\x04 \x01(\v2\x11.fleetgrpc.JobLogH\x00R\x03log\x12(\n" +
 	"\x04done\x18\x05 \x01(\v2\x12.fleetgrpc.JobDoneH\x00R\x04doneB\a\n" +
-	"\x05event\"\xb8\x01\n" +
+	"\x05event\"\xe9\x01\n" +
 	"\n" +
 	"JobStarted\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12&\n" +
@@ -1215,7 +1298,8 @@ const file_jobs_proto_rawDesc = "" +
 	"\x05fleet\x18\x03 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x04 \x01(\tR\binstance\x129\n" +
 	"\n" +
-	"started_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\"\x97\x01\n" +
+	"started_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12/\n" +
+	"\x06target\x18\x06 \x01(\v2\x17.fleetgrpc.DeployTargetR\x06target\"\x97\x01\n" +
 	"\vJobProgress\x12&\n" +
 	"\x04step\x18\x01 \x01(\x0e2\x12.fleetgrpc.JobStepR\x04step\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1b\n" +
@@ -1233,14 +1317,16 @@ const file_jobs_proto_rawDesc = "" +
 	"\binstance\x18\x03 \x01(\v2\x13.fleetgrpc.InstanceR\binstance\x12\x0e\n" +
 	"\x02ms\x18\x04 \x01(\x03R\x02ms\x12\x1a\n" +
 	"\bwarnings\x18\x05 \x03(\tR\bwarningsB\b\n" +
-	"\x06_error\"\xe5\x01\n" +
+	"\x06_error\"\xb3\x02\n" +
 	"\x15CreateInstanceRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x1b\n" +
 	"\x06remote\x18\x03 \x01(\tH\x00R\x06remote\x88\x01\x01\x120\n" +
 	"\abackend\x18\x04 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackend\x12\x1b\n" +
 	"\x06branch\x18\x05 \x01(\tH\x01R\x06branch\x88\x01\x01\x12\x18\n" +
-	"\averbose\x18\x06 \x01(\bR\averboseB\t\n" +
+	"\averbose\x18\x06 \x01(\bR\averbose\x12)\n" +
+	"\x10remember_default\x18\a \x01(\bR\x0frememberDefault\x12!\n" +
+	"\fkube_cluster\x18\b \x01(\tR\vkubeClusterB\t\n" +
 	"\a_remoteB\t\n" +
 	"\a_branch\"\x81\x01\n" +
 	"\x16DestroyInstanceRequest\x12\x14\n" +
@@ -1276,7 +1362,7 @@ const file_jobs_proto_rawDesc = "" +
 	"\x17JOB_KIND_START_INSTANCE\x10\x03\x12\x1a\n" +
 	"\x16JOB_KIND_STOP_INSTANCE\x10\x04\x12\x1b\n" +
 	"\x17JOB_KIND_CLONE_INSTANCE\x10\x05\x12\x1d\n" +
-	"\x19JOB_KIND_REBUILD_INSTANCE\x10\x06*\xca\x04\n" +
+	"\x19JOB_KIND_REBUILD_INSTANCE\x10\x06*\xd6\x06\n" +
 	"\aJobStep\x12\x18\n" +
 	"\x14JOB_STEP_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19JOB_STEP_VALIDATE_BACKEND\x10\x01\x12\x1a\n" +
@@ -1298,7 +1384,17 @@ const file_jobs_proto_rawDesc = "" +
 	"\x19JOB_STEP_REMOVE_WORKSPACE\x10\x10\x12\x1a\n" +
 	"\x16JOB_STEP_BACKEND_START\x10\x11\x12\x19\n" +
 	"\x15JOB_STEP_MARK_RUNNING\x10\x12\x12\x11\n" +
-	"\rJOB_STEP_DONE\x10\x13*b\n" +
+	"\rJOB_STEP_DONE\x10\x13\x12\x18\n" +
+	"\x14JOB_STEP_IMAGE_BUILD\x10\x14\x12\x1a\n" +
+	"\x16JOB_STEP_IMAGE_DELIVER\x10\x15\x12\x1c\n" +
+	"\x18JOB_STEP_APPLY_MANIFESTS\x10\x16\x12\x15\n" +
+	"\x11JOB_STEP_WAIT_POD\x10\x17\x12\x11\n" +
+	"\rJOB_STEP_SEED\x10\x18\x12\x1c\n" +
+	"\x18JOB_STEP_LIFECYCLE_HOOKS\x10\x19\x12\x1d\n" +
+	"\x19JOB_STEP_EXPORT_WORKSPACE\x10\x1a\x12\x15\n" +
+	"\x11JOB_STEP_ROLLBACK\x10\x1b\x12\x1d\n" +
+	"\x19JOB_STEP_CONFIGURE_CACHES\x10\x1c\x12\x19\n" +
+	"\x15JOB_STEP_TEST_CLUSTER\x10\x1d*b\n" +
 	"\bLogLevel\x12\x19\n" +
 	"\x15LOG_LEVEL_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eLOG_LEVEL_INFO\x10\x01\x12\x12\n" +
@@ -1336,8 +1432,9 @@ var file_jobs_proto_goTypes = []any{
 	(*StopInstanceRequest)(nil),    // 13: fleetgrpc.StopInstanceRequest
 	(*CloneInstanceRequest)(nil),   // 14: fleetgrpc.CloneInstanceRequest
 	(*timestamppb.Timestamp)(nil),  // 15: google.protobuf.Timestamp
-	(*Instance)(nil),               // 16: fleetgrpc.Instance
-	(BackendType)(0),               // 17: fleetgrpc.BackendType
+	(*DeployTarget)(nil),           // 16: fleetgrpc.DeployTarget
+	(*Instance)(nil),               // 17: fleetgrpc.Instance
+	(BackendType)(0),               // 18: fleetgrpc.BackendType
 }
 var file_jobs_proto_depIdxs = []int32{
 	0,  // 0: fleetgrpc.JobSummary.kind:type_name -> fleetgrpc.JobKind
@@ -1349,16 +1446,17 @@ var file_jobs_proto_depIdxs = []int32{
 	8,  // 6: fleetgrpc.JobEvent.done:type_name -> fleetgrpc.JobDone
 	0,  // 7: fleetgrpc.JobStarted.kind:type_name -> fleetgrpc.JobKind
 	15, // 8: fleetgrpc.JobStarted.started_at:type_name -> google.protobuf.Timestamp
-	1,  // 9: fleetgrpc.JobProgress.step:type_name -> fleetgrpc.JobStep
-	2,  // 10: fleetgrpc.JobLog.level:type_name -> fleetgrpc.LogLevel
-	15, // 11: fleetgrpc.JobLog.at:type_name -> google.protobuf.Timestamp
-	16, // 12: fleetgrpc.JobDone.instance:type_name -> fleetgrpc.Instance
-	17, // 13: fleetgrpc.CreateInstanceRequest.backend:type_name -> fleetgrpc.BackendType
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	16, // 9: fleetgrpc.JobStarted.target:type_name -> fleetgrpc.DeployTarget
+	1,  // 10: fleetgrpc.JobProgress.step:type_name -> fleetgrpc.JobStep
+	2,  // 11: fleetgrpc.JobLog.level:type_name -> fleetgrpc.LogLevel
+	15, // 12: fleetgrpc.JobLog.at:type_name -> google.protobuf.Timestamp
+	17, // 13: fleetgrpc.JobDone.instance:type_name -> fleetgrpc.Instance
+	18, // 14: fleetgrpc.CreateInstanceRequest.backend:type_name -> fleetgrpc.BackendType
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_jobs_proto_init() }
@@ -1367,6 +1465,7 @@ func file_jobs_proto_init() {
 		return
 	}
 	file_domain_proto_init()
+	file_deploy_proto_init()
 	file_jobs_proto_msgTypes[1].OneofWrappers = []any{
 		(*JobEvent_Started)(nil),
 		(*JobEvent_Progress)(nil),

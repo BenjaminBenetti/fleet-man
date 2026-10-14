@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet up` rejects creating an instance with a name that already exists in the fleet.
 set -euo pipefail
 
@@ -10,8 +11,7 @@ fleet_up alpha
 
 # Snapshot the container ID so we can assert the second `up` did not
 # silently replace it with a fresh container.
-container_id_before=$(grep -oE '"container_id":\s*"[^"]+"' "${HOME}/.fleet/state.json" \
-  | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+container_id_before=$(itest_container_id "${FIXTURE_REPO_NAME}/alpha")
 [ -n "${container_id_before}" ] || fail "could not read container_id from state.json"
 info "container id before second up: ${container_id_before}"
 
@@ -37,8 +37,7 @@ assert_contains "${dup_out}" "alpha"           "duplicate up should mention inst
 # State must still reflect the original instance. The container ID must
 # not have changed and there must be exactly one alpha entry.
 # ===========================================
-container_id_after=$(grep -oE '"container_id":\s*"[^"]+"' "${HOME}/.fleet/state.json" \
-  | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+container_id_after=$(itest_container_id "${FIXTURE_REPO_NAME}/alpha")
 assert_equals "${container_id_before}" "${container_id_after}" \
   "container ID changed after rejected duplicate up"
 

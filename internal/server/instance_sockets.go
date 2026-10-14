@@ -131,19 +131,24 @@ type instanceTarget struct {
 
 // loadInstanceTarget reads an instance's target from state.json. The record
 // may still be StatusCreating (provisioning), in which case its workspace
-// folder is how the container is recognized before its ID is recorded.
-func loadInstanceTarget(fleetName, instanceName string) instanceTarget {
+// folder is how the container is recognized before its ID is recorded. An
+// instance whose backend carries the control channel itself (a Kubernetes
+// pod) has none: false.
+func loadInstanceTarget(fleetName, instanceName string) (instanceTarget, bool) {
 	t := instanceTarget{dir: state.ControlDir(fleetName, instanceName)}
 	if st, err := state.Load(); err == nil {
 		if f := st.Fleets[fleetName]; f != nil {
 			for _, inst := range f.Instances {
 				if inst.Name == instanceName {
+					if instanceHasControlChannel(inst) {
+						return instanceTarget{}, false
+					}
 					t.containerID, t.workspace = inst.ContainerID, inst.WorkspaceDir
 				}
 			}
 		}
 	}
-	return t
+	return t, true
 }
 
 // instanceListener is a per-instance socket plus what identifies its
@@ -336,8 +341,12 @@ func (s *instanceSocketSet) close() {
 }
 
 // controlDirTarget returns an instance's target when its control directory
-// exists on the host.
+// exists on the host. An instance whose backend carries the control channel
+// itself has none to serve: its sockets are the backend's.
 func controlDirTarget(fleetName string, inst *fleet.Instance) (instanceTarget, bool) {
+	if instanceHasControlChannel(inst) {
+		return instanceTarget{}, false
+	}
 	dir := state.ControlDir(fleetName, inst.Name)
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return instanceTarget{}, false

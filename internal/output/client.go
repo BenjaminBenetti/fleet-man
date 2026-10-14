@@ -206,8 +206,10 @@ func runStream(parent context.Context, svc fleetgrpc.FleetServiceClient, tool st
 				}
 				// Drain already received samples on end; mixer.next removes the
 				// instance once its bounded queue is empty.
-				if !a.GetEnd() {
-					mix.push(a.GetInstance(), a.GetPcm())
+				if a.GetEnd() {
+					mix.end(a.GetInstance())
+				} else {
+					mix.push(a.GetInstance(), a.GetPcm(), time.Now())
 				}
 			}
 		case <-playerDone:
@@ -226,7 +228,7 @@ func runStream(parent context.Context, svc fleetgrpc.FleetServiceClient, tool st
 				report(Status{"playback exited — retrying"})
 			}
 		case now := <-ticker.C:
-			pcm := mix.next()
+			pcm := mix.next(now)
 			if pcm == nil {
 				if p != nil && now.Sub(lastAudio) > time.Second {
 					stop()

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI session list resolves the devcontainer remoteUser even when a second container user holds a tmux socket (containerUser regression)
 set -euo pipefail
 
@@ -25,13 +26,12 @@ setup_twouser_test
 fleet_up alpha
 
 # The single provisioned instance's container id (same source as test 360).
-container_id=$(grep -oE '"container_id":[[:space:]]*"[^"]+"' "${HOME}/.fleet/state.json" \
-  | head -1 | grep -oE '"[^"]+"$' | tr -d '"')
+container_id=$(itest_container_id "${FIXTURE_REPO_NAME}/alpha")
 [ -n "${container_id}" ] || fail "could not read container_id from state.json"
 info "container_id = ${container_id}"
 
 info "second user (app) starts its own tmux server first — the poison"
-docker exec -u app "${container_id}" sh -c 'tmux new-session -d -s appsess sleep 600'
+itest_container_exec_as "${container_id}" app sh -c 'tmux new-session -d -s appsess sleep 600'
 
 # Let fleetd's ~1s session poll probe (and, on the old code, cache the wrong
 # user) before fleet's own session exists.

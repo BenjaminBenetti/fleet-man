@@ -326,9 +326,17 @@ type RemoteMcpSettings struct {
 	// serves the token-gated gRPC server on a loopback port that a remote client
 	// reaches over an SSH tunnel (no gateway involved). Mirrors
 	// state.FleetModeGateway / state.FleetModeSSH; an unknown value is gateway.
-	FleetMode     string `protobuf:"bytes,5,opt,name=fleet_mode,json=fleetMode,proto3" json:"fleet_mode,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	FleetMode string `protobuf:"bytes,5,opt,name=fleet_mode,json=fleetMode,proto3" json:"fleet_mode,omitempty"`
+	// image_registry_enabled gates gateway image delivery ("Enable Image
+	// Registry"): fleetd serves the images it builds for Kubernetes clusters
+	// set to Gateway delivery through the gateway's /v2/ route, negotiating
+	// the registry tunnel feature. Off by default; on its own it brings the
+	// tunnel up. optional: a client built before the field sends the group
+	// without it, which must read as "unchanged", not as turning delivery off
+	// under every cluster that uses it when that client saves another setting.
+	ImageRegistryEnabled *bool `protobuf:"varint,6,opt,name=image_registry_enabled,json=imageRegistryEnabled,proto3,oneof" json:"image_registry_enabled,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *RemoteMcpSettings) Reset() {
@@ -394,6 +402,13 @@ func (x *RemoteMcpSettings) GetFleetMode() string {
 		return x.FleetMode
 	}
 	return ""
+}
+
+func (x *RemoteMcpSettings) GetImageRegistryEnabled() bool {
+	if x != nil && x.ImageRegistryEnabled != nil {
+		return *x.ImageRegistryEnabled
+	}
+	return false
 }
 
 // MicSettings mirrors internal/state.MicSettings — the virtual microphone.
@@ -635,16 +650,24 @@ type Config struct {
 	Dotfiles   *DotfilesSettings      `protobuf:"bytes,3,opt,name=dotfiles,proto3" json:"dotfiles,omitempty"`
 	Codespaces *CodespacesSettings    `protobuf:"bytes,5,opt,name=codespaces,proto3" json:"codespaces,omitempty"`
 	Browser    *BrowserSettings       `protobuf:"bytes,6,opt,name=browser,proto3" json:"browser,omitempty"`
-	// Feeds CreateInstanceRequest's UNSPECIFIED-backend resolution. UNSPECIFIED
-	// means "no default recorded" (-> DEVCONTAINER).
+	// The remembered default deploy target: feeds CreateInstanceRequest's
+	// UNSPECIFIED-backend resolution. UNSPECIFIED means "no default recorded"
+	// (-> DEVCONTAINER). Server-owned: written by
+	// CreateInstanceRequest.remember_default, and SetConfig keeps the stored value
+	// whatever the request carries, so a client's stale copy can't undo it.
 	DefaultBackend BackendType         `protobuf:"varint,7,opt,name=default_backend,json=defaultBackend,proto3,enum=fleetgrpc.BackendType" json:"default_backend,omitempty"`
 	RemoteMcp      *RemoteMcpSettings  `protobuf:"bytes,8,opt,name=remote_mcp,json=remoteMcp,proto3" json:"remote_mcp,omitempty"`
 	Mic            *MicSettings        `protobuf:"bytes,21,opt,name=mic,proto3" json:"mic,omitempty"`
 	Theme          *ThemeSettings      `protobuf:"bytes,22,opt,name=theme,proto3" json:"theme,omitempty"`
 	ClaudeCode     *ClaudeCodeSettings `protobuf:"bytes,23,opt,name=claude_code,json=claudeCode,proto3" json:"claude_code,omitempty"`
 	Output         *OutputSettings     `protobuf:"bytes,24,opt,name=output,proto3" json:"output,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The remembered default cluster connection (KubeCluster.id): the cluster a
+	// KUBERNETES default_backend deploys to. Empty unless default_backend is
+	// KUBERNETES. Server-owned like default_backend: only
+	// CreateInstanceRequest.remember_default writes it.
+	DefaultKubeCluster string `protobuf:"bytes,25,opt,name=default_kube_cluster,json=defaultKubeCluster,proto3" json:"default_kube_cluster,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *Config) Reset() {
@@ -754,6 +777,13 @@ func (x *Config) GetOutput() *OutputSettings {
 	return nil
 }
 
+func (x *Config) GetDefaultKubeCluster() string {
+	if x != nil {
+		return x.DefaultKubeCluster
+	}
+	return ""
+}
+
 type GetConfigRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -835,7 +865,9 @@ func (x *GetConfigReply) GetConfig() *Config {
 }
 
 // SetConfig replaces the whole Config (the settings page sends the full edited
-// Config). Returns the post-mutation Config so the caller stays consistent.
+// Config), except default_backend and default_kube_cluster, which only
+// remember_default writes. Returns
+// the post-mutation Config so the caller stays consistent.
 type SetConfigRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Config        *Config                `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
@@ -964,7 +996,7 @@ const file_config_proto_rawDesc = "" +
 	"\vauto_switch\x18\x02 \x01(\bH\x01R\n" +
 	"autoSwitch\x88\x01\x01B\x1e\n" +
 	"\x1c_multiple_browsers_per_fleetB\x0e\n" +
-	"\f_auto_switch\"\xbb\x01\n" +
+	"\f_auto_switch\"\x91\x02\n" +
 	"\x11RemoteMcpSettings\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1f\n" +
 	"\vgateway_url\x18\x02 \x01(\tR\n" +
@@ -972,7 +1004,9 @@ const file_config_proto_rawDesc = "" +
 	"\rfleet_enabled\x18\x03 \x01(\bR\ffleetEnabled\x12'\n" +
 	"\x0fwebhook_enabled\x18\x04 \x01(\bR\x0ewebhookEnabled\x12\x1d\n" +
 	"\n" +
-	"fleet_mode\x18\x05 \x01(\tR\tfleetMode\"g\n" +
+	"fleet_mode\x18\x05 \x01(\tR\tfleetMode\x129\n" +
+	"\x16image_registry_enabled\x18\x06 \x01(\bH\x00R\x14imageRegistryEnabled\x88\x01\x01B\x19\n" +
+	"\x17_image_registry_enabled\"g\n" +
 	"\vMicSettings\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x16\n" +
 	"\x06device\x18\x02 \x01(\tR\x06device\x12\x1b\n" +
@@ -987,7 +1021,7 @@ const file_config_proto_rawDesc = "" +
 	"\x12ClaudeCodeSettings\x12\"\n" +
 	"\n" +
 	"status_mod\x18\x01 \x01(\bH\x00R\tstatusMod\x88\x01\x01B\r\n" +
-	"\v_status_mod\"\xfa\x04\n" +
+	"\v_status_mod\"\xac\x05\n" +
 	"\x06Config\x124\n" +
 	"\ageneral\x18\x01 \x01(\v2\x1a.fleetgrpc.GeneralSettingsR\ageneral\x12.\n" +
 	"\x05agent\x18\x02 \x01(\v2\x18.fleetgrpc.AgentSettingsR\x05agent\x127\n" +
@@ -1003,7 +1037,8 @@ const file_config_proto_rawDesc = "" +
 	"\x05theme\x18\x16 \x01(\v2\x18.fleetgrpc.ThemeSettingsR\x05theme\x12>\n" +
 	"\vclaude_code\x18\x17 \x01(\v2\x1d.fleetgrpc.ClaudeCodeSettingsR\n" +
 	"claudeCode\x121\n" +
-	"\x06output\x18\x18 \x01(\v2\x19.fleetgrpc.OutputSettingsR\x06outputJ\x04\b\x04\x10\x05J\x04\b\t\x10\x15R\x05coder\"\x12\n" +
+	"\x06output\x18\x18 \x01(\v2\x19.fleetgrpc.OutputSettingsR\x06output\x120\n" +
+	"\x14default_kube_cluster\x18\x19 \x01(\tR\x12defaultKubeClusterJ\x04\b\x04\x10\x05J\x04\b\t\x10\x15R\x05coder\"\x12\n" +
 	"\x10GetConfigRequest\";\n" +
 	"\x0eGetConfigReply\x12)\n" +
 	"\x06config\x18\x01 \x01(\v2\x11.fleetgrpc.ConfigR\x06config\"=\n" +
@@ -1076,6 +1111,7 @@ func file_config_proto_init() {
 	file_config_proto_msgTypes[2].OneofWrappers = []any{}
 	file_config_proto_msgTypes[3].OneofWrappers = []any{}
 	file_config_proto_msgTypes[4].OneofWrappers = []any{}
+	file_config_proto_msgTypes[5].OneofWrappers = []any{}
 	file_config_proto_msgTypes[6].OneofWrappers = []any{}
 	file_config_proto_msgTypes[9].OneofWrappers = []any{}
 	type x struct{}

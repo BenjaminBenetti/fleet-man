@@ -13,9 +13,10 @@
 // is deliberately a server-side package (it reaches for internal/state paths);
 // the client/TUI only flips the FleetSettings.BuildkitServer bool.
 //
-// The feature is gated to backends that report SupportsCustomMounts()==true
-// (devcontainer); callers must check that before invoking EnsureSharedServer /
-// the instance mount. Even then every step is best-effort: a missing
+// Callers reach it through the shared-service runtime for the daemon host's
+// docker (internal/svcruntime/dockerrt), which svcruntime.ForInstance hands
+// out only for instances on that docker (devcontainer); cloud backends cannot
+// reach a host docker daemon. Even then every step is best-effort: a missing
 // docker/buildx inside an instance is a silent no-op, not an error.
 package buildkit
 
@@ -143,7 +144,7 @@ func SharedDir(fleetName string) (string, error) {
 
 // InstanceMount returns the bind mount that exposes the fleet's buildkit socket
 // directory inside an instance. Callers append it to the mounts passed to
-// Backend.Up/Clone (only when the backend SupportsCustomMounts).
+// Backend.Up/Clone (the docker runtime's InstanceMounts for buildkit).
 func InstanceMount(fleetName string) backend.Mount {
 	return backend.Mount{
 		LocalPath:     state.BuildkitDir(fleetName),
@@ -192,8 +193,8 @@ func dockerRunArgs(fleetName string) []string {
 // mount. The permission fix-up is best-effort — a failure is logged, not
 // returned, since the socket may simply be slow to appear.
 //
-// Callers MUST only invoke this for backends that SupportsCustomMounts; cloud
-// backends cannot reach a host docker daemon.
+// Callers MUST only invoke this for instances on the daemon host's docker (see
+// the package doc); cloud backends cannot reach a host docker daemon.
 func EnsureSharedServer(fleetName string) (string, error) {
 	// Serialize per fleet so two concurrent creates in the same fleet don't both
 	// `docker run` the shared container (the loser would fail on a name conflict

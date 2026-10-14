@@ -111,10 +111,12 @@ func execWithBannerCmd(banner string, cmd *exec.Cmd) *exec.Cmd {
 	fmt.Fprintln(f)
 	f.Close()
 
-	// Build a shell command: clear, print banner, exec into container
+	// Build a shell command: clear, print the banner, then run the attach —
+	// re-running it if the pod was replaced (exit 75), so a full-screen
+	// attach rejoins a fresh session instead of dropping back to the TUI.
 	script := fmt.Sprintf(
-		`clear; cat '%s'; rm -f '%s'; exec %s`,
-		f.Name(), f.Name(), quoteArgs(cmd.Args),
+		`clear; cat '%s'; rm -f '%s'; %s; exit $__rc`,
+		f.Name(), f.Name(), rejoinScript(quoteArgs(cmd.Args)),
 	)
 
 	// Keep the wrapped command's environment (the server-supplied exec env,

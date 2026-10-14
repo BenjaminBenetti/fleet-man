@@ -33,6 +33,15 @@ type mcpAgent struct {
 	Command      string `json:"command,omitempty"`
 	SystemPrompt string `json:"system_prompt,omitempty"`
 	Backend      string `json:"backend,omitempty"`
+	// Cluster is a kubernetes agent's connection id.
+	Cluster string `json:"cluster,omitempty"`
+	// Queued and Running are how many of its runs wait in its triggers'
+	// queues and have an instance the scheduler watches; Login is why the
+	// automation login check refuses its firings (empty: it lets them run).
+	// The read tool fills them in.
+	Queued  int    `json:"queued,omitempty"`
+	Running int    `json:"running,omitempty"`
+	Login   string `json:"login,omitempty"`
 }
 
 type mcpTrigger struct {
@@ -54,6 +63,14 @@ type mcpTrigger struct {
 type AutomationOutput struct {
 	Agents   []mcpAgent   `json:"agents"`
 	Triggers []mcpTrigger `json:"triggers"`
+	// Warnings are what the change was saved with but the caller should
+	// know: an agent whose firings the login check will refuse.
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+func withWarnings(out AutomationOutput, warnings []string) AutomationOutput {
+	out.Warnings = warnings
+	return out
 }
 
 func toMCPAutomation(s fleet.FleetSettings) AutomationOutput {
@@ -64,6 +81,7 @@ func toMCPAutomation(s fleet.FleetSettings) AutomationOutput {
 			Command:      a.Command,
 			SystemPrompt: a.SystemPrompt,
 			Backend:      string(a.Backend),
+			Cluster:      a.DeployTarget().KubeCluster,
 		})
 	}
 	for _, t := range s.Triggers {
@@ -84,6 +102,40 @@ func toMCPAutomation(s fleet.FleetSettings) AutomationOutput {
 	return out
 }
 
+// agentTarget resolves an agent tool's backend and cluster reference to the
+// target the agent stores: a cluster (id, name or kube context) implies
+// kubernetes; kubernetes with no cluster keeps current (the agent's own
+// connection, on an update) or takes the only connection; no backend is
+// devcontainer, never the remembered default (agents fire unattended).
+func (s *service) agentTarget(ctx context.Context, backend fleet.BackendType, clusterRef, current string) (fleet.BackendType, string, error) {
+	if clusterRef != "" {
+		if backend != "" && backend != fleet.BackendKubernetes {
+			return "", "", fmt.Errorf("cluster runs the agent's instances on Kubernetes, not %s", backend)
+		}
+		backend = fleet.BackendKubernetes
+	}
+	if backend == "" {
+		return fleet.BackendDevcontainer, "", nil
+	}
+	if bt, err := fleet.ParseBackendType(string(backend)); err != nil {
+		return "", "", err
+	} else if bt != fleet.BackendKubernetes {
+		return bt, "", nil
+	}
+	if clusterRef == "" && current != "" {
+		return fleet.BackendKubernetes, current, nil
+	}
+	reply, err := s.ListKubeClusters(ctx, &fleetgrpc.ListKubeClustersRequest{})
+	if err != nil {
+		return "", "", mcpErr(err)
+	}
+	c, err := fleetgrpc.FindOrOnlyKubeCluster(reply.GetClusters(), clusterRef)
+	if err != nil {
+		return "", "", err
+	}
+	return fleet.BackendKubernetes, c.GetCluster().GetId(), nil
+}
+
 // --- shared read-modify-write ---
 
 // automationSettings reads the named fleet's full settings (NotFound if the
@@ -102,20 +154,21 @@ func (s *service) automationSettings(ctx context.Context, fleetName string) (fle
 
 // mutateAutomation reads the fleet's full settings, applies fn to them, and
 // writes the result back — preserving every settings field fn doesn't touch.
-// It returns the settings as persisted.
-func (s *service) mutateAutomation(ctx context.Context, fleetName string, fn func(fleet.FleetSettings) (fleet.FleetSettings, error)) (fleet.FleetSettings, error) {
+// It returns the settings as persisted, and SetFleetSettings' warnings.
+func (s *service) mutateAutomation(ctx context.Context, fleetName string, fn func(fleet.FleetSettings) (fleet.FleetSettings, error)) (fleet.FleetSettings, []string, error) {
 	settings, err := s.automationSettings(ctx, fleetName)
 	if err != nil {
-		return fleet.FleetSettings{}, err
+		return fleet.FleetSettings{}, nil, err
 	}
 	settings, err = fn(settings)
 	if err != nil {
-		return fleet.FleetSettings{}, err
+		return fleet.FleetSettings{}, nil, err
 	}
-	if _, err := s.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{Fleet: fleetName, Settings: protoconv.FleetSettingsToProto(settings)}); err != nil {
-		return fleet.FleetSettings{}, mcpErr(err)
+	reply, err := s.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{Fleet: fleetName, Settings: protoconv.FleetSettingsToProto(settings)})
+	if err != nil {
+		return fleet.FleetSettings{}, nil, mcpErr(err)
 	}
-	return settings, nil
+	return settings, reply.GetWarnings(), nil
 }
 
 // --- read ---
@@ -132,7 +185,19 @@ func (s *service) mcpAutomationList(ctx context.Context, _ *mcp.CallToolRequest,
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	out := toMCPAutomation(settings)
+	reply, err := s.GetAutomationStatus(ctx, &fleetgrpc.GetAutomationStatusRequest{Fleet: in.Fleet})
+	if err != nil {
+		return nil, AutomationOutput{}, mcpErr(err)
+	}
+	for _, st := range reply.GetStatus().GetAgents() {
+		for i := range out.Agents {
+			if out.Agents[i].Name == st.GetAgent() {
+				out.Agents[i].Queued, out.Agents[i].Running, out.Agents[i].Login = int(st.GetQueued()), int(st.GetRunning()), st.GetLogin()
+			}
+		}
+	}
+	return nil, out, nil
 }
 
 // --- agents ---
@@ -142,25 +207,31 @@ type FleetAgentCreateInput struct {
 	Name         string `json:"name" jsonschema:"agent name, unique within the fleet"`
 	Command      string `json:"command,omitempty" jsonschema:"launch command; ${PROMPT} and ${SYS_PROMPT} are substituted when a trigger fires it. Defaults to a live claude session command if omitted"`
 	SystemPrompt string `json:"system_prompt,omitempty" jsonschema:"system prompt injected into the command's ${SYS_PROMPT}"`
-	Backend      string `json:"backend,omitempty" jsonschema:"env backend the agent's instance runs on: devcontainer (default), coder, or codespaces"`
+	Backend      string `json:"backend,omitempty" jsonschema:"env backend the agent's instances run on: devcontainer (the default, also when cluster is omitted: agents fire unattended), coder, codespaces or kubernetes"`
+	Cluster      string `json:"cluster,omitempty" jsonschema:"Kubernetes connection the agent's instances run on: its id, name or kube context (see fleet_cluster_list); implies the kubernetes backend. Omitted with backend kubernetes: the only connection"`
 }
 
 func (s *service) mcpAgentCreate(ctx context.Context, _ *mcp.CallToolRequest, in FleetAgentCreateInput) (*mcp.CallToolResult, AutomationOutput, error) {
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	backend, cluster, err := s.agentTarget(ctx, fleet.BackendType(in.Backend), in.Cluster, "")
+	if err != nil {
+		return nil, AutomationOutput{}, err
+	}
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		return fleet.AddAgent(st, fleet.Agent{
 			Name:         in.Name,
 			Command:      in.Command,
 			SystemPrompt: in.SystemPrompt,
-			Backend:      fleet.BackendType(in.Backend),
+			Backend:      backend,
+			KubeCluster:  cluster,
 		})
 	})
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 type FleetAgentUpdateInput struct {
@@ -169,14 +240,15 @@ type FleetAgentUpdateInput struct {
 	NewName      string `json:"new_name,omitempty" jsonschema:"rename the agent (also rewrites triggers that reference it); omit to keep the name"`
 	Command      string `json:"command,omitempty" jsonschema:"new launch command; omit to keep the current one"`
 	SystemPrompt string `json:"system_prompt,omitempty" jsonschema:"new system prompt; omit to keep the current one"`
-	Backend      string `json:"backend,omitempty" jsonschema:"new backend (devcontainer, coder, codespaces); omit to keep the current one"`
+	Backend      string `json:"backend,omitempty" jsonschema:"new backend (devcontainer, coder, codespaces, kubernetes); omit to keep the current one"`
+	Cluster      string `json:"cluster,omitempty" jsonschema:"new Kubernetes connection (id, name or kube context; implies the kubernetes backend); omit to keep the current one"`
 }
 
 func (s *service) mcpAgentUpdate(ctx context.Context, _ *mcp.CallToolRequest, in FleetAgentUpdateInput) (*mcp.CallToolResult, AutomationOutput, error) {
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		a, ok := fleet.FindAgent(st.Agents, in.Name)
 		if !ok {
 			return st, fmt.Errorf("agent %q not found", in.Name)
@@ -192,15 +264,26 @@ func (s *service) mcpAgentUpdate(ctx context.Context, _ *mcp.CallToolRequest, in
 		if in.SystemPrompt != "" {
 			a.SystemPrompt = in.SystemPrompt
 		}
-		if in.Backend != "" {
-			a.Backend = fleet.BackendType(in.Backend)
+		if in.Backend != "" || in.Cluster != "" {
+			backend := fleet.BackendType(in.Backend)
+			if backend == "" && in.Cluster == "" {
+				backend = a.Backend
+			}
+			current := ""
+			if a.Backend == fleet.BackendKubernetes {
+				current = a.KubeCluster
+			}
+			var err error
+			if a.Backend, a.KubeCluster, err = s.agentTarget(ctx, backend, in.Cluster, current); err != nil {
+				return st, err
+			}
 		}
 		return fleet.UpdateAgent(st, in.Name, a)
 	})
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 // FleetAutomationItemInput identifies one automation item (agent or trigger) by
@@ -214,13 +297,13 @@ func (s *service) mcpAgentDelete(ctx context.Context, _ *mcp.CallToolRequest, in
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		return fleet.DeleteAgent(st, in.Name)
 	})
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 // --- triggers ---
@@ -260,13 +343,13 @@ func (s *service) mcpTriggerCreate(ctx context.Context, _ *mcp.CallToolRequest, 
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		return fleet.AddTrigger(st, triggerFromCreate(in))
 	})
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 type FleetTriggerUpdateInput struct {
@@ -289,7 +372,7 @@ func (s *service) mcpTriggerUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		t, ok := fleet.FindTrigger(st.Triggers, in.Name)
 		if !ok {
 			return st, fmt.Errorf("trigger %q not found", in.Name)
@@ -333,20 +416,20 @@ func (s *service) mcpTriggerUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 func (s *service) mcpTriggerDelete(ctx context.Context, _ *mcp.CallToolRequest, in FleetAutomationItemInput) (*mcp.CallToolResult, AutomationOutput, error) {
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		return fleet.DeleteTrigger(st, in.Name)
 	})
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 // --- trigger event logs ---

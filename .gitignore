@@ -2,3 +2,7 @@
 /main
 /fleet
 /bin/
+/dist/
+
+# integration/nightly/*.sh output when FLEET_NIGHTLY_OUT is unset
+/nightly-out/

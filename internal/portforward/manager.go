@@ -24,35 +24,36 @@ func NewManager() *Manager {
 }
 
 // Add starts a new port forward for the given instance: a local listener on
-// localPort whose connections are tunnelled to the target via dial.
-func (m *Manager) Add(key string, localPort, remotePort int, dial TargetDialer) error {
+// spec.LocalPort whose connections are tunnelled to the target via dial
+// (spec.HalfClose is recorded for display; dial carries it).
+func (m *Manager) Add(key string, spec Forward, dial TargetDialer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, fwd := range m.forwards[key] {
-		if fwd.LocalPort == localPort {
-			return fmt.Errorf("local port %d is already forwarded on %s", localPort, key)
+		if fwd.LocalPort == spec.LocalPort {
+			return fmt.Errorf("local port %d is already forwarded on %s", spec.LocalPort, key)
 		}
 	}
 
-	if err := m.addForwardLocked(key, localPort, remotePort, dial, false); err != nil {
+	spec.BrowserProxy = false
+	if err := m.addForwardLocked(key, spec, dial); err != nil {
 		return err
 	}
-	flog.Info("port-forward started", "key", key, "localPort", localPort, "remotePort", remotePort)
+	flog.Info("port-forward started", "key", key, "localPort", spec.LocalPort, "remotePort", spec.RemotePort, "halfClose", spec.HalfClose)
 	return nil
 }
 
-// addForwardLocked starts a forward on localPort and records it under key.
-// When browserProxy is true the recorded Forward is marked as a browser
-// proxy.
+// addForwardLocked starts a forward on spec.LocalPort and records it, with
+// spec's marks (BrowserProxy, HalfClose), under key.
 //
 // The caller must hold m.mu; addForwardLocked does not lock.
-func (m *Manager) addForwardLocked(key string, localPort, remotePort int, dial TargetDialer, browserProxy bool) error {
-	fwd, err := startProxy(localPort, remotePort, dial)
+func (m *Manager) addForwardLocked(key string, spec Forward, dial TargetDialer) error {
+	fwd, err := startProxy(spec.LocalPort, spec.RemotePort, dial)
 	if err != nil {
-		return fmt.Errorf("start proxy %d->%d: %w", localPort, remotePort, err)
+		return fmt.Errorf("start proxy %d->%d: %w", spec.LocalPort, spec.RemotePort, err)
 	}
-	fwd.BrowserProxy = browserProxy
+	fwd.BrowserProxy, fwd.HalfClose = spec.BrowserProxy, spec.HalfClose
 	m.forwards[key] = append(m.forwards[key], fwd)
 	return nil
 }
@@ -86,7 +87,7 @@ func (m *Manager) AddBrowserProxy(key string, remotePort int, dial TargetDialer)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := m.addForwardLocked(key, localPort, remotePort, dial, true); err != nil {
+	if err := m.addForwardLocked(key, Forward{LocalPort: localPort, RemotePort: remotePort, BrowserProxy: true}, dial); err != nil {
 		return 0, err
 	}
 	flog.Info("browser proxy started", "key", key, "localPort", localPort, "remotePort", remotePort)
@@ -136,7 +137,7 @@ func (m *Manager) List(key string) []Forward {
 	fwds := m.forwards[key]
 	result := make([]Forward, len(fwds))
 	for i, fwd := range fwds {
-		result[i] = Forward{LocalPort: fwd.LocalPort, RemotePort: fwd.RemotePort, BrowserProxy: fwd.BrowserProxy}
+		result[i] = Forward{LocalPort: fwd.LocalPort, RemotePort: fwd.RemotePort, BrowserProxy: fwd.BrowserProxy, HalfClose: fwd.HalfClose}
 	}
 	return result
 }
@@ -150,7 +151,7 @@ func (m *Manager) ListAll() map[string][]Forward {
 	for key, fwds := range m.forwards {
 		entries := make([]Forward, len(fwds))
 		for i, fwd := range fwds {
-			entries[i] = Forward{LocalPort: fwd.LocalPort, RemotePort: fwd.RemotePort, BrowserProxy: fwd.BrowserProxy}
+			entries[i] = Forward{LocalPort: fwd.LocalPort, RemotePort: fwd.RemotePort, BrowserProxy: fwd.BrowserProxy, HalfClose: fwd.HalfClose}
 		}
 		result[key] = entries
 	}

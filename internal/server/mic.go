@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
@@ -106,6 +107,12 @@ func bounded(timeout time.Duration, what string, fn func() error) error {
 // sound server up (itself bounded at ~5 s). A var so tests can shorten it.
 var micSinkReadyTimeout = 45 * time.Second
 
+// micAliveDeadline is how long a sink that has said "alive" once may go
+// without a line before its path is taken for dead and it is closed (which
+// ends its demand, and so the human's microphone). micsink.AliveDeadline; a
+// var for tests.
+var micAliveDeadline = micsink.AliveDeadline
+
 // micSinkConn is a running sink: Write feeds PCM to its stdin, Read yields its
 // stdout event lines, Close kills it.
 type micSinkConn = io.ReadWriteCloser
@@ -115,12 +122,7 @@ var (
 	// openMicSink starts the in-instance sink. ok=false means the instance's
 	// backend cannot host one.
 	openMicSink = func(inst *fleet.Instance) (conn micSinkConn, ok bool, err error) {
-		cmd, ok := backendutil.NewForInstance(inst, false).MicSinkCommand(inst.ContainerID)
-		if !ok {
-			return nil, false, nil
-		}
-		conn, err = startStdioBridge(cmd)
-		return conn, true, err
+		return startMicSink(backendutil.NewForInstance(inst, false), inst)
 	}
 
 	// prepareMicInstance makes an instance able to run a sink: a current staged
@@ -138,6 +140,13 @@ var (
 		return nil
 	}
 
+	// audioFlowFor is where the instance's audio activity goes in its backend
+	// (backend.AudioFlows: a cluster pod's bulk transfers are paced only while
+	// audio flows on it); nil for a backend without one.
+	audioFlowFor = func(inst *fleet.Instance) backend.AudioFlow {
+		return backend.AudioFlowOf(backendutil.NewForInstance(inst, false), inst.ContainerID)
+	}
+
 	// stopMicServer shuts the instance's private sound server down, so that with
 	// the feature off the instance really has no microphone.
 	stopMicServer = func(inst *fleet.Instance) error {
@@ -151,19 +160,58 @@ var (
 		}
 		return nil
 	}
-
-	// micSetting reads the global toggle. The error matters: "the config could
-	// not be read" (a config.json caught mid-write) is NOT "the microphone is
-	// off", and must neither tear the feature down nor tell the user to go and
-	// flip a toggle that is already on.
-	micSetting = func() (settings state.MicSettings, err error) {
-		config, err := state.LoadConfig()
-		if err != nil {
-			return state.MicSettings{}, err
-		}
-		return config.MicSettings, nil
-	}
 )
+
+// micSettingSeam, when set, is what micSetting reads the toggle with instead
+// of the config file: a test's stand-in. It is swapped atomically, since a
+// mic handler that a drained shutdown abandoned may still read it while the
+// next test swaps it.
+var micSettingSeam atomic.Pointer[func() (state.MicSettings, error)]
+
+// micSetting reads the global toggle. The error matters: "the config could
+// not be read" (a config.json caught mid-write) is NOT "the microphone is
+// off", and must neither tear the feature down nor tell the user to go and
+// flip a toggle that is already on.
+func micSetting() (state.MicSettings, error) {
+	if read := micSettingSeam.Load(); read != nil {
+		return (*read)()
+	}
+	return loadMicSetting()
+}
+
+// loadMicSetting is micSetting's read of the config file.
+func loadMicSetting() (state.MicSettings, error) {
+	config, err := state.LoadConfig()
+	if err != nil {
+		return state.MicSettings{}, err
+	}
+	return config.MicSettings, nil
+}
+
+// startMicSink starts inst's sink through b, its backend. A backend that runs
+// commands as streams of its own (StreamExecer) runs the sink in one, as the
+// session user; any other runs its MicSinkCommand on the daemon host.
+func startMicSink(b backend.Backend, inst *fleet.Instance) (micSinkConn, bool, error) {
+	if execer, ok := b.(backend.StreamExecer); ok {
+		if !b.SupportsMicSink() {
+			return nil, false, nil
+		}
+		conn, err := openExecStreamConn(execer, backend.ExecRequest{
+			Class:        backend.ExecClassScript,
+			WorkspaceDir: inst.WorkspaceDir,
+			ContainerID:  inst.ContainerID,
+			Argv:         fleetlaunch.MicSinkArgv(),
+			Audio:        true,
+		}, micSinkOpenTimeout)
+		return conn, true, err
+	}
+	cmd, ok := b.MicSinkCommand(inst.ContainerID)
+	if !ok {
+		return nil, false, nil
+	}
+	conn, err := startStdioBridge(cmd)
+	return conn, true, err
+}
 
 // micProvider is one attached Mic stream.
 type micProvider struct {
@@ -601,20 +649,57 @@ func (h *micHub) serve(key string, sink *micSink) (ready, supported bool, err er
 	})
 	defer readiness.Stop()
 
+	// The heartbeat: once a sink has said "alive" (an older one never does),
+	// a silence of micAliveDeadline closes it, as a dead path to it would
+	// never end the stream on its own soon enough to close the microphone.
+	var alive *time.Timer
+	var missed atomic.Bool
+	defer func() {
+		if alive != nil {
+			alive.Stop()
+		}
+	}()
+	// The instance's audio flow: demand while it records, and late frames.
+	flow := audioFlowFor(sink.inst)
+	if flow != nil {
+		defer flow.MicDemand(false)
+	}
+
 	var sinkErr error
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
+		if alive != nil {
+			alive.Reset(micAliveDeadline)
+		}
 		event, detail, _ := strings.Cut(scanner.Text(), " ")
 		switch event {
 		case micsink.EventReady:
 			ready = true
 			becameReady.Store(true)
 			flog.Info("mic sink attached", "instance", key)
+		case micsink.EventAlive:
+			if alive == nil {
+				alive = time.AfterFunc(micAliveDeadline, func() {
+					missed.Store(true)
+					_ = conn.Close()
+				})
+			}
 		case micsink.EventDemand:
-			h.setDemand(key, sink, detail == micsink.DemandOn)
+			active := detail == micsink.DemandOn
+			h.setDemand(key, sink, active)
+			if flow != nil {
+				flow.MicDemand(active)
+			}
+		case micsink.EventLate:
+			if flow != nil {
+				flow.Late()
+			}
 		case micsink.EventError:
 			sinkErr = fmt.Errorf("sink: %s", detail)
 		}
+	}
+	if sinkErr == nil && missed.Load() {
+		sinkErr = fmt.Errorf("sink said nothing for %s (missed its heartbeat)", micAliveDeadline)
 	}
 	if sinkErr == nil {
 		sinkErr = scanner.Err()

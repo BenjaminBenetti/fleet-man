@@ -32,6 +32,8 @@ message ExecIn {
     ExecStart start = 1;
     bytes stdin = 2;
     ExecResize resize = 3;
+    // pod_start is the first frame of a PodExec stream (in place of start).
+    PodExecStart pod_start = 4;
   }
 }
 
@@ -41,6 +43,42 @@ message ExecStart {
   repeated string argv = 3;
   bool tty = 4;
   map<string, string> env = 5;
+}
+
+// PodExecStart starts a PodExec stream: one command in a Kubernetes
+// instance's pod, named the way the daemon-host `fleet kube-exec` shim's argv
+// names it. The daemon runs it only in a pod of one of its own instances,
+// verified, through the pod's agent; the stream then carries stdin, resizes
+// and the command's output and exit exactly as an Exec stream does.
+message PodExecStart {
+  // cluster_id is the connection (KubeCluster.id), namespace its namespace
+  // (empty: the connection's), pod the instance's pod and container its dev
+  // container (empty: the dev container).
+  string cluster_id = 1;
+  string namespace = 2;
+  string pod = 3;
+  string container = 4;
+  // class is whom the command runs as: exec (as ExecCommand: the remote
+  // user with the devcontainer's environment, in the workspace folder),
+  // script (the session user, as `docker exec -u`), root, or explicit
+  // (user and cwd as given, as the docker shim's `docker exec -u -w`).
+  // Empty is exec.
+  string class = 5;
+  string user = 6;
+  string cwd = 7;
+  repeated string argv = 8;
+  map<string, string> env = 9;
+  bool tty = 10;
+  uint32 rows = 11;
+  uint32 cols = 12;
+  // bulk runs the command on the pod's bulk session (a folder's tar in or
+  // out), so a large transfer does not hold up the latency-sensitive traffic
+  // of the agent's main session. It is never set with tty.
+  bool bulk = 13;
+  // quiet keeps the command out of fleet.log: the shim's argv for a
+  // backend's ExecCommandQuiet (polls, probes), whose callers would
+  // otherwise flood the log.
+  bool quiet = 14;
 }
 
 message ExecResize {
@@ -68,6 +106,11 @@ message ResolveExecCommandRequest {
   string instance = 2;
   // command to run inside; empty means "interactive login shell".
   repeated string argv = 3;
+  // attach: the client attaches a terminal with the argv (a pane, a shell),
+  // not a one-shot. The instance's "sessions reset" notice
+  // (KubeInstanceRuntime.restart_cause) clears, as it does when an Exec
+  // stream opens with tty.
+  bool attach = 4;
 }
 
 message ResolveExecCommandReply {
@@ -113,6 +156,13 @@ message ForwardOpen {
   string fleet = 1;
   string instance = 2;
   int32 remote_port = 3;
+  // half_close asks for a connection that passes the client's half-close
+  // (CloseSend) on and keeps reading after it: on Kubernetes, through the pod
+  // agent instead of the cluster's port-forward, whose runtime drops the
+  // half-close (the peer reads no EOF) and ends the connection about a second
+  // later. Backends whose connections keep a true half-close anyway ignore
+  // it.
+  bool half_close = 4;
 }
 
 // Mic is the virtual-microphone DATA PLANE: one bidi stream per microphone-
@@ -458,6 +508,42 @@ message ResolveLogsCommandReply {
   repeated string argv = 1;
 }
 
+// ResolveEditorLaunch says how the caller opens VS Code on an instance (the
+// TUI's `c`, `fleet code`). The daemon picks the mode: a local caller opens a
+// local devcontainer instance through the Dev Containers URI; a remote caller
+// (gateway, Armada SSH, FLEET_SERVER) and every Kubernetes instance go through
+// VS Code Remote-SSH to the in-instance `fleet ssh-server`; Coder and
+// Codespaces keep their own CLIs.
+message ResolveEditorLaunchRequest {
+  string fleet = 1;
+  string instance = 2;
+}
+
+enum EditorLaunchMode {
+  EDITOR_LAUNCH_MODE_UNSPECIFIED = 0;
+  // DEVCONTAINER_URI: run argv (`code --folder-uri vscode-remote://dev-container+…`).
+  EDITOR_LAUNCH_MODE_DEVCONTAINER_URI = 1;
+  // CODER_CLI: run argv (`coder open vscode <workspace>`).
+  EDITOR_LAUNCH_MODE_CODER_CLI = 2;
+  // CODESPACES_CLI: run argv (`gh codespace code -c <name>`).
+  EDITOR_LAUNCH_MODE_CODESPACES_CLI = 3;
+  // REMOTE_SSH: the client opens `vscode-remote://ssh-remote+<alias><workspace_folder>`,
+  // where alias is the instance's `*.fleet` host, which ~/.ssh/fleet_config
+  // routes through `fleet ssh-proxy`. argv is empty: the alias names the
+  // daemon the client reached, which only the client knows.
+  EDITOR_LAUNCH_MODE_REMOTE_SSH = 4;
+}
+
+message ResolveEditorLaunchReply {
+  EditorLaunchMode mode = 1;
+  // argv the client runs for the DEVCONTAINER_URI, CODER_CLI and
+  // CODESPACES_CLI modes.
+  repeated string argv = 2;
+  // REMOTE_SSH: the folder VS Code opens inside the instance (the
+  // devcontainer's workspaceFolder).
+  string workspace_folder = 3;
+}
+
 // TriggerLogs reads back an automation trigger's recorded event logs. Each time
 // a trigger fires, the daemon writes the firing's payload (the webhook body, or
 // the schedule fire-time) to a per-trigger log directory, keeping the most
@@ -510,9 +596,10 @@ message GetCoderTemplateParamsReply {
 // =====================================================================
 //
 // The host browser process (Chrome) stays on the CLIENT; everything that
-// touches the container — installing/starting the privoxy proxy, reading the
-// workspace devcontainer.json customization, staging + running the Fleet Launch
-// landing-page server — is owned by the SERVER and driven through these RPCs.
+// touches the container — starting the in-instance browser proxy (`fleet
+// browser-proxy`), reading the workspace devcontainer.json customization,
+// staging + running the Fleet Launch landing-page server — is owned by the
+// SERVER and driven through these RPCs.
 
 // GetBrowserConfig reads the workspace's devcontainer.json fleet customization
 // so the TUI can decide whether to show the launch chooser (both an initial URL
@@ -530,7 +617,7 @@ message GetBrowserConfigReply {
 }
 
 // PrepareBrowser does all the container-side work for a browser open: ensure the
-// privoxy proxy is installed + running, then resolve the page to open —
+// browser proxy is running, then resolve the page to open —
 // honouring an explicit target_url, else the devcontainer.json initialUrl /
 // Fleet Launch landing page (starting the landing-page server when chosen) /
 // the default. It returns the URL the client's browser should open.

@@ -79,6 +79,9 @@ func Serve(ctx context.Context) error {
 		return fmt.Errorf("chmod socket: %w", err)
 	}
 
+	// The Kubernetes pool a daemon served before in this process (tests)
+	// ended with its shutdown: this one starts with a live one.
+	renewKubePool()
 	svc := newService()
 
 	// Start the hub (the broadcast-model owner) and the state poller (the
@@ -92,6 +95,11 @@ func Serve(ctx context.Context) error {
 	// reconcile) derives from hubCtx so it stops on shutdown. Set before Serve
 	// starts accepting RPCs, so no handler observes the zero value.
 	svc.bgCtx = hubCtx
+	// Records a previous daemon left mid-create/clone/rebuild have no job to
+	// finish them any more: fail them before any RPC or the scheduler can start
+	// a job of ours (interrupted_jobs.go), except the Kubernetes rebuilds the
+	// reconciler undoes (kube_reconcile.go), which stay REBUILDING for it.
+	svc.failInterruptedJobs()
 	// SSH-agent relay: every agent connection made on this host — the daemon's
 	// own git clones (through SSH_AUTH_SOCK, redirected to it) and processes in
 	// devcontainer instances (through a socket in each control directory) — is
@@ -119,11 +127,13 @@ func Serve(ctx context.Context) error {
 	// On the way out, let the relay and the MCP sockets go before the process
 	// exits (bounded): a socket file left behind is only replaced on the next
 	// start, and one in an instance's control dir outlives a daemon started
-	// with FLEET_SSH_AGENT_SOCK=off.
+	// with FLEET_SSH_AGENT_SOCK=off. The loops that write ~/.fleet (loops,
+	// below) end within the same bound, so none writes after Serve returns.
+	var loops []<-chan struct{}
 	defer func() {
 		cancelHub()
 		deadline := time.After(3 * time.Second)
-		for _, done := range []<-chan struct{}{agentRelayDone, instanceMCPDone} {
+		for _, done := range append([]<-chan struct{}{agentRelayDone, instanceMCPDone}, loops...) {
 			select {
 			case <-done:
 			case <-deadline:
@@ -134,6 +144,10 @@ func Serve(ctx context.Context) error {
 
 	go svc.hub.run(hubCtx)
 	go runStatePoller(hubCtx, svc.hub)
+	// The undo jobs of the interrupted Kubernetes rebuilds, and the
+	// reconciler's background passes. Both wait for their cluster to be
+	// judged usable, which happens only once fleetd serves.
+	svc.kubeRecovery.start(hubCtx)
 	// Runtime pollers (live status / stats+activity / sessions). Gated on a
 	// runtime subscriber, so they stay idle until a TUI connects with
 	// subscribe_runtime — no backend traffic for plain `fleet ls`.
@@ -144,7 +158,7 @@ func Serve(ctx context.Context) error {
 	// Automation scheduler (issue #188): fires Schedule triggers and reaps idle
 	// agents. Runs unconditionally — cron triggers must fire even when no TUI is
 	// connected — and stops on shutdown via hubCtx.
-	go svc.runScheduler(hubCtx)
+	loops = append(loops, goLoop(func() { svc.runScheduler(hubCtx) }))
 
 	// Control-socket listeners: the server owns every running instance's control
 	// socket and turns received browser.open envelopes (from an in-container
@@ -172,7 +186,12 @@ func Serve(ctx context.Context) error {
 			})
 		})
 	}, svc.hub.hasSubscribers)
+	svc.control = controlReg
 	go controlReg.run(hubCtx)
+	// The Kubernetes pods' in-pod sockets: which each pod binds, and the
+	// connections their agents relay, served by the same handlers as the host
+	// sockets' (control registry, agent relay, instance MCP).
+	go svc.podAgents.run(hubCtx)
 
 	// Virtual microphone: keeps a sink inside every running instance while a
 	// microphone provider (a TUI's Mic stream) is attached and the feature is on.
@@ -212,14 +231,14 @@ func Serve(ctx context.Context) error {
 	// shutdown via hubCtx. Launched AFTER startMCPServer so its immediate
 	// first-tick snapshot already sees the freshly-written mcp.port/token/env
 	// files instead of racing them.
-	go svc.runBackupLoop(hubCtx)
+	loops = append(loops, goLoop(func() { svc.runBackupLoop(hubCtx) }))
 
 	// Log rotation loop: at 3am local it cuts the shared event log
 	// (~/.fleet/fleet.log) into ~/.fleet/logs/fleetd/<date>.log and prunes dated
 	// logs past the retention window, so the append-only trail every fleet process
 	// writes to can't grow without bound. Unconditional and stops on shutdown via
 	// hubCtx, like the backup loop above.
-	go svc.runLogRotateLoop(hubCtx)
+	loops = append(loops, goLoop(func() { svc.runLogRotateLoop(hubCtx) }))
 
 	// Tunnel-facing servers fed by the gateway tunnel demux (no extra port/socket):
 	//   - gRPC: the SAME FleetService as the local unix socket, but gated by the
@@ -228,6 +247,9 @@ func Serve(ctx context.Context) error {
 	//   - webhook: the automation webhook receiver, UNauthenticated (the unguessable
 	//     public URL is the capability, like the MCP proxy). Tunneled whenever both
 	//     ends negotiate FeatureWebhook.
+	//   - registry: the pull-only gateway image server (each request carries a
+	//     connection's own pull credential). Tunneled whenever both ends
+	//     negotiate FeatureRegistry.
 	// Both ride the same tunnel and are only wired when MCP is up (we need its
 	// loopback port for the tunnel to come up at all). The webhook receiver, unlike
 	// gRPC, does NOT need the MCP token, so it is wired independently of it.
@@ -263,6 +285,10 @@ func Serve(ctx context.Context) error {
 			flog.Warn("remote grpc: load token", "err", err)
 		}
 	}
+	// Image delivery to the Kubernetes connections, and the gateway image
+	// server ("Enable Image Registry", the tunnel's registry listener)
+	// while the tunnel can come up at all. Serves until hubCtx ends.
+	remoteOpts = append(remoteOpts, svc.kube.startImages(hubCtx, mcpPort != 0)...)
 
 	// Remote fleet via SSH (no gateway): the token-gated server on a loopback
 	// port, converged from config like the tunnel. Independent of MCP being up
@@ -291,6 +317,7 @@ func Serve(ctx context.Context) error {
 	svc.remote = remote.NewManager(mcpPort, versionOrDev(), func(st *fleetgrpc.RemoteMcpStatus) {
 		svc.hub.post(func(h *hub) { h.broadcastRemoteMcpStatus(st) })
 	}, remoteOpts...)
+	svc.kube.attachTunnel(svc.remote)
 	go svc.remote.Run(hubCtx)
 	if cfg, err := state.LoadConfig(); err == nil {
 		svc.reconcileRemote(cfg.RemoteMcpSettings)
@@ -305,6 +332,23 @@ func Serve(ctx context.Context) error {
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- grpcServer.Serve(lis) }()
+	// Kubernetes connections: every cluster call (probes, Lease renewals,
+	// credential plugins) starts here, after fleetd serves, so a cluster that
+	// is unreachable or a login plugin that hangs never delays a Hello. Stops
+	// with hubCtx.
+	go svc.kube.run(hubCtx)
+	// The Kubernetes instances' pods: informers, restarts, crash-loop parking
+	// and agent supervision, with or without a TUI. Like the connections,
+	// nothing reaches a cluster before fleetd serves.
+	go svc.kubePods.run(hubCtx)
+	// The fleets' shared folders on their clusters, kept converged with the
+	// daemon host's; the shutdown flushes them after hubCtx is gone, so the
+	// sync runs on a context of its own.
+	shareKick = svc.shareSync.kickCluster
+	go svc.shareSync.run(hubCtx)
+	// The fleets' shares moving to their connection's shared StorageClass
+	// once it changed.
+	go svc.shareMoves.run(hubCtx)
 
 	select {
 	case <-ctx.Done():
@@ -327,9 +371,30 @@ func Serve(ctx context.Context) error {
 		flog.Error("fleet server shutdown wedged; exiting", "pid", os.Getpid(), "after", shutdownHardLimit)
 		exitProcess(1)
 	})
+	// The bounded shutdown (shutdown.go): the shim's RPCs are refused first,
+	// then every stream, loop and job is cancelled (hubCtx), and the ordered
+	// steps run in their budget alongside the gRPC drain.
+	svc.beginShutdown()
 	cancelHub()
-	stopGRPC(grpcServer, drainTimeout)
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		stopGRPC(grpcServer, drainTimeout)
+	}()
+	runShutdownSteps(shutdownBudget, svc.shutdownSteps())
+	<-drained
 	return nil
+}
+
+// goLoop runs loop on a goroutine of its own and returns a channel closed
+// once it returns.
+func goLoop(loop func()) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		loop()
+	}()
+	return done
 }
 
 var (

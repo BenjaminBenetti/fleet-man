@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
@@ -43,7 +44,7 @@ func stubExecCommand(t *testing.T) *execStub {
 	t.Helper()
 	seen := &execStub{}
 	orig := buildExecCommand
-	buildExecCommand = func(inst *fleet.Instance, argv []string) *exec.Cmd {
+	buildExecCommand = func(_ backend.Backend, inst *fleet.Instance, argv []string) *exec.Cmd {
 		seen.Instance = inst.Name
 		seen.Argv = argv
 		seen.Cmd = exec.Command(argv[0], argv[1:]...)

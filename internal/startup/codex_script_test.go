@@ -180,7 +180,7 @@ func assertCodexAutoMode(t *testing.T, path string) map[string]any {
 	for key, want := range map[string]string{
 		"approval_policy":    "on-request",
 		"approvals_reviewer": "auto_review",
-		"sandbox_mode":       "workspace-write",
+		"sandbox_mode":       "danger-full-access",
 	} {
 		if got := config[key]; got != want {
 			t.Errorf("%s = %v, want %s", key, got, want)
@@ -445,7 +445,7 @@ sandbox_mode = "read-only"
 			}
 			want["approval_policy"] = "on-request"
 			want["approvals_reviewer"] = "auto_review"
-			want["sandbox_mode"] = "workspace-write"
+			want["sandbox_mode"] = "danger-full-access"
 			path := filepath.Join(env.codexHome, "config.toml")
 			if err := os.WriteFile(path, []byte(existing), 0o640); err != nil {
 				t.Fatal(err)

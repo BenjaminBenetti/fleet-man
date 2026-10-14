@@ -111,7 +111,7 @@ func newTriggerCreateCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName, name := args[0], args[1]
-			err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
+			_, err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
 				t := fleet.Trigger{Name: name}
 				tf.apply(cmd, &t, false)
 				return fleet.AddTrigger(s, t)
@@ -136,7 +136,7 @@ func newTriggerEditCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName, name := args[0], args[1]
-			err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
+			_, err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
 				t, ok := fleet.FindTrigger(s.Triggers, name)
 				if !ok {
 					return s, fmt.Errorf("trigger %q not found", name)
@@ -167,7 +167,7 @@ func newTriggerDeleteCmd() *cobra.Command {
 		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName, name := args[0], args[1]
-			err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
+			_, err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
 				return fleet.DeleteTrigger(s, name)
 			})
 			if err != nil {
@@ -184,7 +184,9 @@ func newTriggerLogsCmd() *cobra.Command {
 		Use:   "logs <fleet> <name>",
 		Short: "Show a trigger's recorded event logs",
 		Long: "Show a trigger's recorded event logs: the payloads of its recent firings\n" +
-			"(webhook body, bash command stdout, or schedule fire-time). The last 100 firings are kept.",
+			"(webhook body, bash command stdout, or schedule fire-time), each followed by\n" +
+			"# outcome: lines for its agents (instance, queued, refused, failed, reaped).\n" +
+			"The last 100 firings are kept.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName, name := args[0], args[1]

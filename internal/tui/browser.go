@@ -18,14 +18,14 @@ import (
 
 // browser.go is the HOST-side half of fleet's browser feature: launching /
 // switching / killing the local Chrome process and tracking its data dir. The
-// CONTAINER-side work — installing the privoxy proxy, reading the workspace
+// CONTAINER-side work — starting the in-instance browser proxy, reading the workspace
 // devcontainer.json, staging + running the Fleet Launch landing page — lives in
 // the server (internal/server/browser.go) and is driven over RPCs
 // (GetBrowserConfig / PrepareBrowser) plus the Forward data-plane stream. The
 // TUI never touches a backend (the P5 boundary).
 
-// browserProxyPort is the port privoxy listens on inside the container; the host
-// forwards a local port to it.
+// browserProxyPort is the port the browser proxy listens on inside the
+// container; the host forwards a local port to it.
 const browserProxyPort = 58888
 
 // ===========================================
@@ -47,10 +47,10 @@ type browserProxyMsg struct {
 // (server-side) and launches a Chromium-based browser routed through it.
 //
 //	Sequence:
-//	  1. PrepareBrowser RPC: ensure privoxy is installed/running in the
-//	     container and resolve the initial URL (honouring targetURL, else the
+//	  1. PrepareBrowser RPC: ensure the browser proxy runs in the container
+//	     and resolve the initial URL (honouring targetURL, else the
 //	     devcontainer.json initialUrl / Fleet Launch landing page / default).
-//	  2. Reuse or create the host-side port forward (local -> privoxy:58888).
+//	  2. Reuse or create the host-side port forward (local -> proxy:58888).
 //	  3. Launch the local browser with --proxy-server pointed at the forward.
 //
 // targetURL, when non-empty, is used verbatim (a control-socket browser.open
@@ -71,12 +71,12 @@ func openBrowserProxyCmd(
 			return browserProxyMsg{instanceKey: instanceKey, err: err}
 		}
 
-		// 2. Reuse or create the host-side port forward to privoxy. Each
+		// 2. Reuse or create the host-side port forward to the proxy. Each
 		// accepted connection is tunnelled over the server's Forward stream
 		// (the data plane), so the proxy works even against a remote server.
 		localPort, found := pf.FindBrowserProxy(instanceKey)
 		if !found {
-			dial, err := forwardDialer(fleetName, instanceName, browserProxyPort)
+			dial, err := forwardDialer(fleetName, instanceName, browserProxyPort, false)
 			if err != nil {
 				return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("port forward: %w", err)}
 			}
@@ -148,7 +148,7 @@ func (fleetPage *fleetPage) startBrowser(m *model, instance *fleet.Instance, fle
 //
 // The subtlety is which instance the existing browser (if any) is proxied to. A
 // fleet's instances share one Chrome data dir (unless MultipleBrowsersPerFleet),
-// and that Chrome can only route through one instance's privoxy proxy at a time:
+// and that Chrome can only route through one instance's browser proxy at a time:
 //
 //   - none running              → start a fresh proxied browser at url.
 //   - running, this instance    → forward url as a new tab (the live process
@@ -487,7 +487,7 @@ func (fleetPage *fleetPage) chooseBrowserLaunch(m *model, preferFleetLaunch bool
 
 	prefer := preferFleetLaunch
 	f.Settings.PreferFleetLaunch = &prefer
-	_ = setFleetSettingsRemote(fleetName, f.Settings)
+	_, _ = setFleetSettingsRemote(fleetName, f.Settings)
 
 	instance, err := f.GetInstance(fleetPage.dlg.inst)
 	if err != nil || instance.Status != fleet.StatusRunning {

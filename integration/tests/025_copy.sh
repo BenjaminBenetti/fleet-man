@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet copy` is bidirectional scp-style — out of, into, and between instances, preserving content and mode.
 set -euo pipefail
 
@@ -103,5 +104,27 @@ assert_equals "nested" "$(cat "${workdir}/downtree/sub/nested.txt")" "downloaded
 info "relay a directory tree between two instance paths"
 "${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/alpha:/tmp/uptree" "${FIXTURE_REPO_NAME}/alpha:/tmp/relaytree"
 assert_equals "nested" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/relaytree/sub/nested.txt)" "relayed dir nested file"
+
+# ---- across backends: a Docker instance and a cluster instance ----
+
+if itest_backend_is kubernetes; then
+  info "kubernetes: a Docker instance beside the cluster one"
+  out=$("${FLEET_BIN}" up "${FIXTURE_REPO_NAME}/dock" --backend devcontainer 2>&1) \
+    || fail "fleet up dock --backend devcontainer failed: ${out}"
+  backend=$(jq -r --arg f "${FIXTURE_REPO_NAME}" '.fleets[$f].instances[] | select(.name == "dock") | .backend' "${HOME}/.fleet/state.json")
+  assert_equals "devcontainer" "${backend}" "dock should be a Docker instance"
+
+  info "kubernetes: a folder copies from the Docker instance into the cluster instance"
+  "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/dock" -- sh -c \
+    'mkdir -p /tmp/dtree/sub && printf docker-top > /tmp/dtree/top.txt && printf docker-nested > /tmp/dtree/sub/nested.txt && chmod 750 /tmp/dtree/sub && chmod 640 /tmp/dtree/top.txt'
+  "${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/dock:/tmp/dtree" "${FIXTURE_REPO_NAME}/alpha:/tmp/fromdocker"
+  assert_equals "docker-top" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/fromdocker/top.txt)" "Docker → cluster top file"
+  assert_equals "docker-nested" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/fromdocker/sub/nested.txt)" "Docker → cluster nested file"
+  assert_equals "750 640" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- stat -c '%a' /tmp/fromdocker/sub /tmp/fromdocker/top.txt | tr '\n' ' ' | sed 's/ $//')" "Docker → cluster modes"
+
+  info "kubernetes: and back from the cluster instance into the Docker instance"
+  "${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/alpha:/tmp/uptree" "${FIXTURE_REPO_NAME}/dock:/tmp/fromcluster"
+  assert_equals "nested" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/dock" -- cat /tmp/fromcluster/sub/nested.txt)" "cluster → Docker nested file"
+fi
 
 pass "copy"

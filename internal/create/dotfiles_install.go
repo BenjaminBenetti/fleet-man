@@ -1,13 +1,13 @@
 package create
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 var (
@@ -45,7 +45,7 @@ type dotfilesExecer interface {
 // clone + install. This only ever fires after a failed attempt, so a legitimate
 // pre-existing ~/dotfiles (which makes attempt 1 a successful no-op) is never
 // touched.
-func installDotfiles(execer dotfilesExecer, fleetName, instanceName, wsDir, script string) {
+func installDotfiles(ctx context.Context, execer dotfilesExecer, fleetName, instanceName, wsDir, script string) {
 	var lastErr error
 	var lastOut string
 	for attempt := 1; attempt <= dotfilesInstallAttempts; attempt++ {
@@ -63,7 +63,7 @@ func installDotfiles(execer dotfilesExecer, fleetName, instanceName, wsDir, scri
 
 	// All attempts failed. WriteWarn overwrites the per-instance warn file, so we
 	// emit a single summary rather than one warning per attempt.
-	state.WriteWarn(fleetName, instanceName, fmt.Sprintf(
+	provisionWarning(ctx, fleetName, instanceName, fmt.Sprintf(
 		"dotfiles install failed after %d attempt(s); instance started anyway: %v\n%s",
 		dotfilesInstallAttempts, lastErr, lastOut))
 }

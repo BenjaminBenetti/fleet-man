@@ -830,11 +830,26 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	syncAudioFromConfig(m.config)
 	clear(m.runtime)
 	clear(m.creating)
+	m.jobSteps = nil
 	m.remoteMcpStatus = nil
 	m.micSources = nil // the other daemon has its own set of microphone clients
 	m.outputTargets = nil
 	m.outputStatus = output.Status{}
 	m.outputRevision = 0
+	// The fleetd rows of Tool Status describe the daemon being left.
+	m.daemonTools = nil
+	// So do its Kubernetes connections, and the tests and logins still
+	// streaming from it.
+	m.resetKube()
+	// And its automation status, and a Log in waiting on one of its instances.
+	m.automationStatus = nil
+	if m.fleetPage != nil {
+		m.fleetPage.pendingLogin = nil
+	}
+	if page, ok := m.currentPage.(*settingsPage); ok {
+		page.kubeDialog = nil
+		page.resetKubeRowFocus()
+	}
 	m.codespaceMachines = nil
 	m.codespaceFetchingMachines = false
 	m.sessionStore = NewSessionStore()

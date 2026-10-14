@@ -65,8 +65,10 @@ func TestSetConfigRoundTripsFullConfig(t *testing.T) {
 	if out.GetCodespaces().GetMachine() != "basicLinux32gb" || out.GetCodespaces().GetIdleTimeout() != "30m" {
 		t.Fatalf("codespaces mismatch: %v", out.GetCodespaces())
 	}
-	if out.GetDefaultBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODER {
-		t.Fatalf("default_backend mismatch: %v", out.GetDefaultBackend())
+	// The remembered default deploy target is the one field SetConfig does not
+	// take from the request (see TestSetConfigKeepsRememberedDefaultTarget).
+	if out.GetDefaultBackend() != fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED {
+		t.Fatalf("SetConfig wrote default_backend from the request: %v", out.GetDefaultBackend())
 	}
 
 	// And the bytes on disk must be exactly what the legacy SaveConfig writes,

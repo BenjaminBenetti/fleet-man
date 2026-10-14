@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Fleet MCP inside instances (issue #219) — with the fleet's "Fleet
 # MCP" setting on, the daemon serves its MCP server into every instance of the
 # fleet and the instance's shells hand it to agents: a bash shell there gets
 # CLAUDE_CODE_PLUGIN_DIRS pointing at a plugin (the MCP server + the
 # fleet-admiral skill), and that server (`fleet mcp-bridge`) reaches the daemon —
 # fleet_list answers with live data. Turning the setting off takes both away;
-# turning it back on brings them back for a running instance.
+# turning it back on brings them back for a running instance. A daemon restart
+# in the middle of an agent's MCP session leaves its next call working.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -33,7 +35,28 @@ server=$(sed -n 's/.*"command": *"\([^"]*\)".*/\1/p' "${plugin}/.mcp.json")
 } | "${server}" mcp-bridge
 echo "BRIDGE_EXIT=$?"
 PROBE
-( cd "${FIXTURE_REPO_DIR}" && git add -A && git commit -q -m "fixture: mcp probe" )
+# An agent's MCP session across a daemon restart: one call, then (once the
+# test says the daemon is down) another on the same server process, which
+# waits for the daemon to come back.
+cat > "${FIXTURE_REPO_DIR}/mcp-restart.sh" <<'PROBE'
+plugin=$(printf '%s\n' "${CLAUDE_CODE_PLUGIN_DIRS:-}" | tr ':' '\n' | grep '/fleet/mcp/claude-plugin$' | head -n 1)
+server=$(sed -n 's/.*"command": *"\([^"]*\)".*/\1/p' "${plugin}/.mcp.json")
+args=$(awk '/"args"/ {f = 1; next} f && /]/ {f = 0} f {gsub(/[",[:space:]]/, ""); printf "%s ", $0}' "${plugin}/.mcp.json")
+echo "SERVER=${server} ${args}" >&2
+{
+  printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"itest","version":"1"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fleet_list","arguments":{}}}'
+  i=0
+  while [ ! -e /tmp/mcp-restart.go ] && [ "${i}" -lt 3000 ]; do sleep 0.1; i=$((i + 1)); done
+  echo "CALLING_WHILE_DOWN" >&2
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fleet_list","arguments":{}}}'
+  sleep 100
+} | "${server}" ${args}
+echo "BRIDGE_EXIT=$?" >&2
+PROBE
+( cd "${FIXTURE_REPO_DIR}" && git add -A && git commit -q -m "fixture: mcp probes" )
 
 info "seeding the fleet with Fleet MCP on"
 cat > "${HOME}/.fleet/state.json" <<EOF2
@@ -53,7 +76,6 @@ EOF2
 
 fleet_up alpha
 inst="${FIXTURE_REPO_NAME}/alpha"
-sock="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/.control/mcp.sock"
 
 # probe runs the script from an interactive bash, the way a tmux session or an
 # automation agent's launch does (it sources ~/.bashrc, hence fleet.rc).
@@ -78,15 +100,15 @@ if settings.get("fleetMcp", False) != want:
         json.dump(st, f, indent=2)
     os.replace(tmp, path)
 PY
-    if [ "${want}" = "true" ] && [ -S "${sock}" ]; then return 0; fi
-    if [ "${want}" = "false" ] && [ ! -e "${sock}" ]; then return 0; fi
+    if [ "${want}" = "true" ] && itest_control_test "${inst}" -S mcp.sock; then return 0; fi
+    if [ "${want}" = "false" ] && ! itest_control_test "${inst}" -e mcp.sock; then return 0; fi
     sleep 1
   done
-  fail "the MCP socket did not follow fleetMcp=${want} (${sock})"
+  fail "the MCP socket did not follow fleetMcp=${want} (mcp.sock in the control dir)"
 }
 
 info "a new instance of the fleet has the socket and its shells the plugin"
-[ -S "${sock}" ] || fail "no MCP socket in the instance's control directory (${sock})"
+itest_control_test "${inst}" -S mcp.sock || fail "no MCP socket in the instance's control directory (mcp.sock)"
 out=$(probe)
 printf 'probe:\n%s\n' "${out}"
 assert_contains "${out}" ".cache/fleet/mcp/claude-plugin" "the shell was not handed the fleet plugin via CLAUDE_CODE_PLUGIN_DIRS"
@@ -95,6 +117,13 @@ assert_contains "${out}" "mcp-bridge" "the plugin's .mcp.json does not run the b
 assert_contains "${out}" '"id":1' "no answer to the MCP initialize"
 assert_contains "${out}" '\"instance\":\"alpha\"' "fleet_list through the bridge did not return the daemon's instances"
 assert_contains "${out}" "BRIDGE_EXIT=0" "the bridge did not exit cleanly"
+# The stable path, never a binary a restage of the in-instance fleet removes;
+# in a pod a call waits as long as the pod's session to the daemon takes to
+# come back after a daemon restart.
+assert_contains "${out}" '"command": "/usr/bin/fleet"' "the plugin's server is not the stable /usr/bin/fleet"
+if itest_backend_is kubernetes; then
+  assert_contains "${out}" '"--wait"' "the plugin's server in a pod does not wait for the daemon's session"
+fi
 
 info "nothing was written to the agent's own config"
 claude_json=$("${FLEET_BIN}" exec "${inst}" -- sh -c 'cat ~/.claude.json 2>/dev/null; ls ~/.claude/plugins 2>/dev/null; true' 2>/dev/null || true)
@@ -112,5 +141,36 @@ set_fleet_mcp true
 out=$(probe)
 assert_contains "${out}" ".cache/fleet/mcp/claude-plugin" "the plugin did not come back with the setting"
 assert_contains "${out}" '\"instance\":\"alpha\"' "fleet_list did not answer after the setting came back"
+
+info "a daemon restart mid-session leaves the agent's next call working"
+cid=$(itest_container_id "${inst}")
+"${FLEET_BIN}" exec "${inst}" -- sh -c 'rm -f /tmp/mcp-restart.out /tmp/mcp-restart.go; setsid bash -ic "sh ./mcp-restart.sh" > /tmp/mcp-restart.out 2>&1 < /dev/null &' \
+  || fail "could not start the MCP session in the instance"
+restart_out() { "${FLEET_BIN}" exec "${inst}" -- cat /tmp/mcp-restart.out 2>/dev/null || true; }
+deadline=$(( $(date +%s) + $(_scale_timeout 60) ))
+until restart_out | grep -q '"id":2'; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the first call of the session got no answer: $(restart_out)"
+  sleep 0.5
+done
+pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
+deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
+while [ "$(server_count)" != "0" ]; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the daemon would not stop"
+  sleep 0.2
+done
+# With the daemon down (reached without it), the agent makes its next call,
+# then the daemon comes back.
+itest_container_exec_as "${cid}" root touch /tmp/mcp-restart.go
+sleep 2
+"${FLEET_BIN}" ls >/dev/null
+deadline=$(( $(date +%s) + $(_scale_timeout 120) ))
+out=""
+until printf '%s\n' "${out}" | grep '"id":3' | grep -q '\\"instance\\":\\"alpha\\"'; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the call after the daemon restart did not answer: ${out}"
+  sleep 1
+  out=$(restart_out)
+done
+printf 'session across the restart:\n%s\n' "${out}"
+assert_contains "${out}" "CALLING_WHILE_DOWN" "the call after the restart was not made while the daemon was down"
 
 pass "fleet MCP: the fleet setting serves the MCP to the agents in its instances"

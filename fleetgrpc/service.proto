@@ -8,8 +8,11 @@ import "watch.proto";
 import "jobs.proto";
 import "config.proto";
 import "exec.proto";
+import "kube_exec.proto";
 import "output.proto";
 import "inspect.proto";
+import "deploy.proto";
+import "kube.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 
@@ -60,10 +63,15 @@ service FleetService {
   // longer deadline and show progress.
   rpc DeleteBuildkitCache(DeleteBuildkitCacheRequest) returns (DeleteBuildkitCacheReply);
   // DeleteDebCache / DeleteImageCache wipe a fleet's shared deb / docker-image
-  // cache and restart the (empty) server. Synchronous host-docker actions —
-  // clients use the same longer deadline as DeleteBuildkitCache.
+  // cache and restart the (empty) server, wherever the fleet's instances reach
+  // one (the daemon host's docker, each cluster). Synchronous — clients use
+  // the same longer deadline as DeleteBuildkitCache.
   rpc DeleteDebCache(DeleteDebCacheRequest) returns (DeleteDebCacheReply);
   rpc DeleteImageCache(DeleteImageCacheRequest) returns (DeleteImageCacheReply);
+  // GetCacheUsage reports how full each of a fleet's cache volumes is where
+  // its caches run on volumes of a fixed size (its clusters), for the fleet
+  // options' Caching rows.
+  rpc GetCacheUsage(GetCacheUsageRequest) returns (GetCacheUsageReply);
   rpc SetInstanceMetadata(SetInstanceMetadataRequest) returns (MutationReply);
   rpc SetGroupLayout(SetGroupLayoutRequest) returns (MutationReply);
   rpc DeleteGroupLayout(DeleteGroupLayoutRequest) returns (MutationReply);
@@ -85,6 +93,10 @@ service FleetService {
   // Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
   // ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
   rpc TrustSSHHostKey(TrustSSHHostKeyRequest) returns (TrustSSHHostKeyReply);
+  // Remember / look up a remote daemon an editor alias leads to (armada.proto,
+  // editor_endpoints.json). Local-only, like Get/SetArmada.
+  rpc SaveEditorEndpoint(SaveEditorEndpointRequest) returns (SaveEditorEndpointReply);
+  rpc ResolveEditorEndpoint(ResolveEditorEndpointRequest) returns (ResolveEditorEndpointReply);
 
   // Interactive approval of unknown git-host keys on THIS daemon's host.
   // Unlike Armada trust, this is available to authenticated remote clients.
@@ -94,13 +106,34 @@ service FleetService {
   rpc Exec(stream ExecIn) returns (stream ExecOut);
   rpc ResolveExecCommand(ResolveExecCommandRequest) returns (ResolveExecCommandReply);
   rpc ResolveLogsCommand(ResolveLogsCommandRequest) returns (ResolveLogsCommandReply);
+  // How the caller opens VS Code on an instance (exec.proto).
+  rpc ResolveEditorLaunch(ResolveEditorLaunchRequest) returns (ResolveEditorLaunchReply);
   rpc Logs(LogsRequest) returns (stream LogLine);
+  // IssueKubeExecCredential hands the daemon-host `fleet kube-exec` shim the
+  // transport fleetd reaches a Kubernetes connection's API server with
+  // (kube_exec.proto), so its direct-mode attaches run no credential plugin
+  // of their own. Local-only: remote clients exec through Exec instead.
+  rpc IssueKubeExecCredential(IssueKubeExecCredentialRequest) returns (IssueKubeExecCredentialReply);
+  // PodExec runs one command in a Kubernetes instance's pod for the
+  // daemon-host `fleet kube-exec` shim's daemon mode (a command without a
+  // terminal: every ExecCommand of a Kubernetes instance), through the pod's
+  // agent session. The first ExecIn carries pod_start. Local-only, like
+  // IssueKubeExecCredential: remote clients run the same commands through
+  // Exec.
+  rpc PodExec(stream ExecIn) returns (stream ExecOut);
 
   // TriggerLogs returns an automation trigger's recorded event logs (the
   // payloads of its recent firings, concatenated for viewing). The daemon owns
   // the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
   // over the service works unchanged when the daemon is remote.
   rpc TriggerLogs(TriggerLogsRequest) returns (TriggerLogsReply);
+
+  // GetAutomationStatus is the automation scheduler's view of a fleet's
+  // agents (every fleet's when fleet is empty), as Watch pushes it
+  // (Event.automation_status): which ones the login check refuses, and how
+  // many runs each has queued and running. For clients that do not watch
+  // (`fleet agent list`); served to remote clients as to local ones.
+  rpc GetAutomationStatus(GetAutomationStatusRequest) returns (GetAutomationStatusReply);
 
   // Forward is the port-forward data plane: one bidi stream per forwarded TCP
   // connection (first frame is the ForwardOpen header, the rest raw bytes).
@@ -127,6 +160,55 @@ service FleetService {
   // Client-streaming: first chunk is the open header, the rest are data. Backs
   // the scp-style upload (and instance→instance relay) direction of `fleet copy`.
   rpc CopyInto(stream CopyIntoChunk) returns (CopyIntoReply);
+
+  // ---- Deploy targets ----
+  // ListDeployTargets lists where this daemon can create an instance (judged
+  // on the daemon host), the remembered default, and the daemon host's build
+  // tools. Served to remote clients exactly as to local ones.
+  rpc ListDeployTargets(ListDeployTargetsRequest) returns (ListDeployTargetsReply);
+
+  // ---- Kubernetes cluster connections (kube.proto) ----
+  // Served to remote clients exactly as to local ones: every RPC and every
+  // field. Cluster I/O runs in fleetd, on the daemon host.
+
+  // ListKubeContexts lists the contexts of kubeconfig files on the daemon
+  // host (the context picker).
+  rpc ListKubeContexts(ListKubeContextsRequest) returns (ListKubeContextsReply);
+  // ListKubeClusters returns every connection with its health (also pushed
+  // as Watch Event.kube_clusters).
+  rpc ListKubeClusters(ListKubeClustersRequest) returns (ListKubeClustersReply);
+  rpc AddKubeCluster(AddKubeClusterRequest) returns (AddKubeClusterReply);
+  // UpdateKubeCluster changes the fields its FieldMask names.
+  rpc UpdateKubeCluster(UpdateKubeClusterRequest) returns (UpdateKubeClusterReply);
+  // RemoveKubeCluster disconnects a connection (KubeRemoveMode). Destroying
+  // its instances can take minutes: clients use a long deadline.
+  rpc RemoveKubeCluster(RemoveKubeClusterRequest) returns (RemoveKubeClusterReply);
+  // TestKubeCluster runs the full preflight on a saved or an unsaved
+  // connection, streaming each check.
+  rpc TestKubeCluster(TestKubeClusterRequest) returns (stream TestKubeClusterEvent);
+  // PruneKubeCluster lists, and with apply deletes, the objects labelled for
+  // this daemon and connection that no instance accounts for.
+  rpc PruneKubeCluster(PruneKubeClusterRequest) returns (PruneKubeClusterReply);
+  // LoginKubeCluster runs the connection's login plugin on the daemon host
+  // ([Run login on daemon]) and relays only its device-code URL and code.
+  rpc LoginKubeCluster(LoginKubeClusterRequest) returns (stream LoginKubeClusterEvent);
+  // CreateKubeNamespace creates a connection's namespace (AddKubeCluster and
+  // UpdateKubeCluster create a missing one themselves; this makes one that
+  // went missing later, or with other labels), or with dry_run only renders
+  // it.
+  rpc CreateKubeNamespace(CreateKubeNamespaceRequest) returns (CreateKubeNamespaceReply);
+
+  // ---- Shared-state sync (kube.proto; `fleet sync`) ----
+  // A fleet's shared folders on its clusters, kept converged with the daemon
+  // host's. Served to remote clients exactly as to local ones.
+
+  // GetShareSync reports each fleet's sync: its folders, sides, pauses,
+  // shares and conflict count.
+  rpc GetShareSync(GetShareSyncRequest) returns (GetShareSyncReply);
+  // WaitShareSync waits until the fleet's sides agree (`fleet sync wait`).
+  rpc WaitShareSync(WaitShareSyncRequest) returns (WaitShareSyncReply);
+  // ListShareConflicts lists the conflict copies kept on the daemon host.
+  rpc ListShareConflicts(ListShareConflictsRequest) returns (ListShareConflictsReply);
 
   // ---- Repo inspection (server-side clone + checks) ----
   // InspectRepo shallow-clones remote_url on the DAEMON's host and reports

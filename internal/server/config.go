@@ -52,17 +52,30 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	//
 	// So is the Claude Code group: an older TUI never sends it, and a zero base
 	// would turn a fleet status mod the user switched off back on.
+	//
+	// The remembered default deploy target (backend and cluster) is not the
+	// caller's to set at all: only CreateInstanceRequest.remember_default
+	// writes it (deploy_targets.go). Every client sends the whole Config, so
+	// taking the fields from the request would let any client's stale copy
+	// undo a target another client (or this one, since its copy was fetched)
+	// remembered.
 	base := &state.Config{}
 	micWasEnabled := false
+	defaultBackend, defaultKubeCluster := "", ""
 	if previous, err := state.LoadConfig(); err == nil {
 		micWasEnabled = previous.MicSettings.Enabled
 		base.MicSettings = previous.MicSettings
 		base.OutputSettings = previous.OutputSettings
 		base.ThemeSettings = previous.ThemeSettings
 		base.ClaudeCodeSettings = previous.ClaudeCodeSettings
+		defaultBackend = previous.DefaultBackend
+		defaultKubeCluster = previous.DefaultKubeCluster
 	}
 
-	if err := state.SaveConfig(protoconv.ConfigFromProto(req.GetConfig(), base)); err != nil {
+	next := protoconv.ConfigFromProto(req.GetConfig(), base)
+	next.DefaultBackend = defaultBackend
+	next.DefaultKubeCluster = defaultKubeCluster
+	if err := state.SaveConfig(next); err != nil {
 		return nil, status.Errorf(codes.Internal, "save config: %v", err)
 	}
 	saved, err := state.LoadConfig()
@@ -97,7 +110,7 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	// The remote-gateway fields are the ones whose effects outlive this RPC (the
 	// tunnel supervisor reacts to them), so call them out; the manager logs the
 	// resulting connection transitions itself.
-	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL, "mic", saved.MicSettings.Enabled)
+	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "imageRegistry", saved.RemoteMcpSettings.ImageRegistryEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL, "mic", saved.MicSettings.Enabled)
 
 	return &fleetgrpc.SetConfigReply{Config: protoconv.ConfigToProto(saved), OutputRevision: outputRevision}, nil
 }
@@ -117,7 +130,7 @@ func (s *service) reconcileRemote(rm state.RemoteMcpSettings) {
 		s.agent.maybeRedirect()
 	}
 	if s.remote != nil {
-		s.remote.Reconcile(rm.Enabled, rm.FleetViaGateway(), rm.WebhookEnabled, rm.GatewayURL)
+		s.remote.Reconcile(rm.Enabled, rm.FleetViaGateway(), rm.WebhookEnabled, rm.ImageRegistryEnabled, rm.GatewayURL)
 	}
 	if s.sshListen != nil {
 		s.sshListen.Reconcile(rm.FleetViaSSH())

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet open` copies a file out of an instance and hands it to the opener (FLEET_OPENER); own-machine sources and instance destinations are rejected.
 set -euo pipefail
 

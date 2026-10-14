@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -35,6 +36,9 @@ type CoderBackend struct {
 	// the right workspace even when its name differs from the
 	// path-derived default.
 	nameCache map[string]string
+	// nameMu guards nameCache: the server's pollers share one backend per
+	// instance across goroutines.
+	nameMu sync.RWMutex
 }
 
 // New creates a new CoderBackend.
@@ -52,14 +56,19 @@ func New(opts ...Option) *CoderBackend {
 // register it so Exec/ExecCommand target the actual workspace instead of
 // re-deriving a name from the path.
 func (coderBackend *CoderBackend) RegisterName(workspaceDir, containerID string) {
+	coderBackend.nameMu.Lock()
 	coderBackend.nameCache[workspaceDir] = containerID
+	coderBackend.nameMu.Unlock()
 }
 
 // resolveWorkspaceName returns the workspace name (or "workspace.agent" SSH
 // target) for a workspace dir: the registered/created name when known, the
 // configured explicit name next, and the path-derived historical name last.
 func (coderBackend *CoderBackend) resolveWorkspaceName(workspaceDir string) string {
-	if name, ok := coderBackend.nameCache[workspaceDir]; ok {
+	coderBackend.nameMu.RLock()
+	name, ok := coderBackend.nameCache[workspaceDir]
+	coderBackend.nameMu.RUnlock()
+	if ok {
 		return name
 	}
 	if coderBackend.workspaceName != "" {
@@ -71,7 +80,7 @@ func (coderBackend *CoderBackend) resolveWorkspaceName(workspaceDir string) stri
 // Up creates a Coder workspace. workspaceDir is used to derive the workspace
 // name (last path component). The git clone happens inside the Coder template
 // via the repo parameter. The mounts argument is ignored: Coder workspaces
-// are managed remotely and SupportsCustomMounts reports false.
+// are managed remotely and SupportsSharedMounts reports false.
 func (coderBackend *CoderBackend) Up(workspaceDir string, _ []backend.Mount) (*backend.UpResult, error) {
 	// The configured workspace name wins (issue #221); otherwise derive it
 	// from the workspace dir path (~/.fleet/workspaces/{fleet}/{instance}/{fleet}
@@ -126,7 +135,7 @@ func (coderBackend *CoderBackend) Up(workspaceDir string, _ []backend.Mount) (*b
 	// Post-Up provisioning runs Exec/ExecCommand against this same backend
 	// instance with only the workspace dir in hand — record the created
 	// target so those calls address the workspace we just made.
-	coderBackend.nameCache[workspaceDir] = sshTarget
+	coderBackend.RegisterName(workspaceDir, sshTarget)
 
 	return &backend.UpResult{
 		Outcome:               "success",
@@ -345,10 +354,10 @@ func (coderBackend *CoderBackend) ResolveHostname(containerID string) (string, b
 	return "", false
 }
 
-// SupportsCustomMounts reports false: Coder workspaces are provisioned
+// SupportsSharedMounts reports false: Coder workspaces are provisioned
 // by a remote control plane and the local CLI cannot inject host bind
 // mounts into them.
-func (coderBackend *CoderBackend) SupportsCustomMounts() bool {
+func (coderBackend *CoderBackend) SupportsSharedMounts() bool {
 	return false
 }
 

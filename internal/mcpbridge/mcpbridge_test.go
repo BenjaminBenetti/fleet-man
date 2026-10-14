@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -247,8 +248,16 @@ func TestBridgeReplaysTheHandshakeOnReconnect(t *testing.T) {
 	_ = os.Remove(path)
 	d2 := startFakeDaemon(t, path, func(_ *fakeDaemon, conn net.Conn, _ int, line string) { reply(conn, line) })
 
+	// A call the bridge sent before it saw the old session end is lost with
+	// it (errLost: the client is told to retry, as it might have run), so
+	// the client may need its retry; the next goes through.
 	c.send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
-	if got := c.next(); got["id"] != float64(2) || got["result"] == nil {
+	got := c.next()
+	if e, _ := got["error"].(map[string]any); e != nil && strings.Contains(fmt.Sprint(e["message"]), "lost the connection") {
+		c.send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+		got = c.next()
+	}
+	if got["id"] != float64(2) || got["result"] == nil {
 		t.Fatalf("after the restart the call must go through, got %v", got)
 	}
 	lines := d2.received(0)
@@ -433,5 +442,17 @@ func TestIDKeyNormalizes(t *testing.T) {
 	}
 	if idKey(json.RawMessage(`"1"`)) == idKey(json.RawMessage(`1`)) {
 		t.Fatal("a string id is not a number id")
+	}
+}
+
+// TestWaitSetsTheConnectAndReplayWaits: a bridge given Wait (a pod's) waits
+// that long for the socket and for a replayed initialize's answer.
+func TestWaitSetsTheConnectAndReplayWaits(t *testing.T) {
+	b := &Bridge{Dial: Dialer(filepath.Join(t.TempDir(), "none.sock")), In: strings.NewReader(""), Out: io.Discard, Wait: PodWait}
+	if err := b.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.timing.connect != PodWait || b.timing.replay != PodWait || b.timing.drain != defaultTimings.drain {
+		t.Fatalf("timings %+v", b.timing)
 	}
 }

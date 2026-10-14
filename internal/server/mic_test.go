@@ -865,12 +865,17 @@ func TestMicRejectsOversizedFrames(t *testing.T) {
 // being LIFO, it is then restored only after the loop has stopped).
 func stubMicSetting(t *testing.T, read func() (bool, error)) {
 	t.Helper()
-	orig := micSetting
-	micSetting = func() (state.MicSettings, error) {
+	setMicSetting(t, func() (state.MicSettings, error) {
 		enabled, err := read()
 		return state.MicSettings{Enabled: enabled}, err
-	}
-	t.Cleanup(func() { micSetting = orig })
+	})
+}
+
+// setMicSetting makes micSetting read through read until the test ends.
+func setMicSetting(t *testing.T, read func() (state.MicSettings, error)) {
+	t.Helper()
+	orig := micSettingSeam.Swap(&read)
+	t.Cleanup(func() { micSettingSeam.Store(orig) })
 }
 
 // EVERY exit from attach must hand the registration back. The one that did not
@@ -1585,18 +1590,15 @@ func TestHandEditedMicSelectionIsPushed(t *testing.T) {
 // still hold the last value the daemon could read.
 func TestMicSourcesKeepLastKnownSettingsWhenTheConfigIsUnreadable(t *testing.T) {
 	svc := newService()
-	orig := micSetting
-	t.Cleanup(func() { micSetting = orig })
-
-	micSetting = func() (state.MicSettings, error) {
+	setMicSetting(t, func() (state.MicSettings, error) {
 		return state.MicSettings{Enabled: true, Client: "desk"}, nil
-	}
+	})
 	known := svc.micSourcesNow(nil).GetSettings()
 	if known.GetClient() != "desk" || !known.GetEnabled() {
 		t.Fatalf("settings = %v", known)
 	}
 
-	micSetting = func() (state.MicSettings, error) { return state.MicSettings{}, fmt.Errorf("mid-write") }
+	setMicSetting(t, func() (state.MicSettings, error) { return state.MicSettings{}, fmt.Errorf("mid-write") })
 	if got := svc.micSourcesNow(known).GetSettings(); got.GetClient() != "desk" {
 		t.Fatalf("an unreadable config replaced the last known settings with %v", got)
 	}

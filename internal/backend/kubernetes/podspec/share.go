@@ -1,0 +1,263 @@
+//go:build !nok8s
+
+package podspec
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path"
+	"runtime"
+	"slices"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/mounts/hostbind"
+	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
+	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
+)
+
+// share.go renders where an instance's fleet mounts (its agents' state, the
+// shared files, the custom mounts: MountFleet) live on a cluster: the
+// fleet's share volume, one PVC per (connection, fleet) every instance pod of
+// the fleet mounts, or on the copy tier (no volume two pods can mount) the
+// instance disk's own copy. Either way the tree is laid out the same
+// (internal/podshare): each fleet mount is the subPath roots/<its SubPath>,
+// and the tree's root mounts at podshare.MountDir, inside a folder only root
+// may enter, for the pod's spoke. A share-layout init container (the dev
+// image, running fleet's binary from the instance disk) replays the fleet's
+// Layout there before the dev container starts, so every subPath exists,
+// with the fleet's modes, owned by the share uid, and no symlink sits where
+// a fleet folder belongs: the kubelet makes a missing subPath root-owned,
+// makes a missing file a folder, and follows a link inside the volume.
+
+// ShareIDs are the share uid and gid: what the remote user is remapped to
+// and the workspace and a fleet's share are owned by. The daemon host user's
+// on a Linux daemon (what the devcontainer CLI's own remap gives a docker
+// instance there), else 1000.
+func ShareIDs() (int, int) {
+	if runtime.GOOS == "linux" {
+		if uid, gid := os.Getuid(), os.Getgid(); uid > 0 && gid > 0 {
+			return uid, gid
+		}
+	}
+	return 1000, 1000
+}
+
+// ShareInit is the share-layout init container's name.
+const ShareInit = "fleet-share"
+
+// The instance pod's share volume.
+const volumeShare = "share"
+
+// Share is where an instance's fleet mounts live.
+type Share struct {
+	// Claim is the fleet's share PVC (names.FleetObject(fleet, h8,
+	// names.SuffixShare)); "" keeps them on the instance disk (the copy
+	// tier: podshare.DiskDir).
+	Claim string
+	// Layout is the tree the init container lays out: the fleet's Layout,
+	// owned by the share uid.
+	Layout podshare.Layout
+}
+
+// shareSubPath is the subPath on its volume of the fleet folder at sub.
+func (s *Share) shareSubPath(sub string) string {
+	if s.Claim == "" {
+		return path.Join(podshare.DiskDir, podshare.SubPath(sub))
+	}
+	return podshare.SubPath(sub)
+}
+
+// volume is the volume the tree is on.
+func (s *Share) volume() string {
+	if s.Claim == "" {
+		return volumeDisk
+	}
+	return volumeShare
+}
+
+// treeMount mounts the tree's root at podshare.MountDir.
+func (s *Share) treeMount() corev1.VolumeMount {
+	m := corev1.VolumeMount{Name: s.volume(), MountPath: podshare.MountDir}
+	if s.Claim == "" {
+		m.SubPath = podshare.DiskDir
+	}
+	return m
+}
+
+// fleetMount is the dev container's mount of fleet mount m (or a host
+// folder's copy).
+func (s *Share) fleetMount(m Mount) corev1.VolumeMount {
+	return corev1.VolumeMount{Name: s.volume(), MountPath: m.Target, SubPath: s.shareSubPath(m.SubPath), ReadOnly: m.ReadOnly}
+}
+
+// hostFileMount is the dev container's mount of the folder holding a host
+// file bind's copy.
+func (s *Share) hostFileMount(m Mount) corev1.VolumeMount {
+	return corev1.VolumeMount{Name: s.volume(), MountPath: hostbind.FileDir(m.SubPath), SubPath: s.shareSubPath(m.SubPath), ReadOnly: m.ReadOnly}
+}
+
+// volumeMount is the dev container's mount of a named volume of the fleet's,
+// in the tree's volumes folder (beside its roots: never synced).
+func (s *Share) volumeMount(m Mount) corev1.VolumeMount {
+	sub := m.SubPath
+	if s.Claim == "" {
+		sub = path.Join(podshare.DiskDir, sub)
+	}
+	return corev1.VolumeMount{Name: s.volume(), MountPath: m.Target, SubPath: sub, ReadOnly: m.ReadOnly}
+}
+
+// shareVolumes are the pod volumes the share needs (none on the copy tier,
+// whose tree is on the instance disk).
+func (s *Share) shareVolumes() []corev1.Volume {
+	if s.Claim == "" {
+		return nil
+	}
+	return []corev1.Volume{{Name: volumeShare, VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: s.Claim}}}}
+}
+
+// layoutFile is the layout as the spec Secret holds it, for pod p.
+func (s *Share) layoutFile(p *PodSpec) ([]byte, error) {
+	l := ShareLayout(p, s)
+	if err := l.Validate(); err != nil {
+		return nil, fmt.Errorf("podspec: the fleet's share layout: %w", err)
+	}
+	return json.Marshal(l)
+}
+
+// ShareLayout is the tree pod p's share-layout init container lays out: the
+// fleet's Layout, and what the run itself keeps on the share: a folder for
+// each bound host folder or file's copy (a folder's with its host mode), and
+// each named volume's folder.
+func ShareLayout(p *PodSpec, s *Share) podshare.Layout {
+	l := s.Layout
+	l.V = podshare.LayoutVersion
+	l.Entries = slices.Clone(l.Entries)
+	have := map[string]bool{}
+	for _, e := range l.Entries {
+		have[e.Path] = true
+	}
+	var volumes []string
+	for _, m := range p.Mounts {
+		switch m.Kind {
+		case MountHostDir, MountHostFile:
+			if have[m.SubPath] {
+				continue
+			}
+			have[m.SubPath] = true
+			mode := uint32(0o755)
+			if m.Kind == MountHostDir && m.Mode != 0 {
+				mode = m.Mode
+			}
+			l.Entries = append(l.Entries, podshare.Entry{Path: m.SubPath, Dir: true, Mode: mode})
+		case MountSharedVolume:
+			if id := sharedVolumeID(m.SubPath); !slices.Contains(volumes, id) {
+				volumes = append(volumes, id)
+			}
+		}
+	}
+	slices.Sort(volumes)
+	l.Volumes = volumes
+	return l
+}
+
+// shareInitRequests are the init container's requests, and shareInitMemory
+// the most memory it is limited to (where the dev container's memory is
+// limited, companionLimits): it touches a handful of paths.
+var (
+	shareInitRequests = corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("10m"),
+		corev1.ResourceMemory: resource.MustParse("32Mi"),
+	}
+	shareInitMemory = resource.MustParse("128Mi")
+)
+
+// shareInitResources are the init container's resources.
+func (r *renderer) shareInitResources() corev1.ResourceRequirements {
+	return companionResources(shareInitRequests, r.companionLimits(func(name corev1.ResourceName, dev resource.Quantity) resource.Quantity {
+		if name == corev1.ResourceMemory && dev.Cmp(shareInitMemory) > 0 {
+			return shareInitMemory.DeepCopy()
+		}
+		return dev
+	}))
+}
+
+// initTree is where the init container finds the tree, its volume mounted
+// whole at podshare.InitDir.
+func (s *Share) initTree() string {
+	if s.Claim == "" {
+		return path.Join(podshare.InitDir, podshare.DiskDir)
+	}
+	return podshare.InitDir
+}
+
+// shareInit is the share-layout init container: fleet's binary on the
+// instance disk replaying the layout in the spec Secret on the tree. It
+// mounts the tree's volume whole: a subPath the kubelet makes when missing is
+// root-owned, which a pod without root could not lay out.
+func (r *renderer) shareInit(s *Share) corev1.Container {
+	return corev1.Container{
+		Name:            ShareInit,
+		Image:           r.in.Image.Ref,
+		ImagePullPolicy: r.pullPolicy(),
+		Command:         ShareInitCommand(s.initTree()),
+		Resources:       r.shareInitResources(),
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: volumeDisk, MountPath: podseed.InstallDir, SubPath: podseed.DirFleet, ReadOnly: true},
+			{Name: volumeSpec, MountPath: podseed.SpecDir, ReadOnly: true},
+			{Name: volumeRun, MountPath: podseed.RunDir},
+			{Name: s.volume(), MountPath: podshare.InitDir},
+		},
+		SecurityContext:          r.containerSecurity(shareInitSecurity(r.in.Identity), r.in.Identity),
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+	}
+}
+
+// ShareInitCommand is the share-layout init container's command, laying out
+// the tree at tree.
+func ShareInitCommand(tree string) []string {
+	return []string{podseed.CurrentBinary, "pod-layout", "--spec", podshare.LayoutPath, "--tree", tree}
+}
+
+// shareInitSecurity is what the init container needs: as root, giving the
+// tree to the share uid (CHOWN) and setting modes on what others own
+// (FOWNER, DAC_OVERRIDE), nothing more; without root, nothing at all (a
+// restricted namespace admits no added capability).
+func shareInitSecurity(id Identity) Security {
+	if id.NonRoot {
+		return Security{}
+	}
+	return Security{CapAdd: []string{"CHOWN", "DAC_OVERRIDE", "FOWNER"}, CapDrop: []string{"ALL"}}
+}
+
+// NeedsShare reports whether pod p keeps anything on the fleet's share: a
+// fleet mount, a named volume of the fleet's, a bound host folder or file.
+func NeedsShare(p *PodSpec) bool {
+	return slices.ContainsFunc(p.Mounts, func(m Mount) bool { return onShare[m.Kind] })
+}
+
+// onShare are the mount kinds whose data is on the fleet's share.
+var onShare = map[MountKind]bool{MountFleet: true, MountSharedVolume: true, MountHostDir: true, MountHostFile: true}
+
+// shareMounts are the targets of the run's mounts that live on the fleet's
+// share (a render without one refuses them).
+func (r *renderer) shareMounts() []string {
+	var out []string
+	for _, m := range r.pod.Mounts {
+		if onShare[m.Kind] {
+			out = append(out, m.Target)
+		}
+	}
+	return out
+}
+
+// SELinuxMountSupported reports whether an API server of version takes a
+// pod's seLinuxChangePolicy (beta and on by default from Kubernetes 1.33):
+// an older one drops the field, and a pod made without it would not hash as
+// fleet rendered it.
+func SELinuxMountSupported(version string) bool {
+	minor, ok := kubeMinor(version)
+	return ok && minor >= 33
+}

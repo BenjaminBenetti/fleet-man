@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Layout presets (issue #150) — capture a preset from a live session, then create a templated session whose pane command auto-runs
 set -euo pipefail
 

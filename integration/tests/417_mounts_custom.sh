@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: a user-defined custom mount appears in the container at the
 # user-supplied path, is a real bind mount backed by the fleet's .mnt
 # directory, and shares writes across the host boundary like the built-in
@@ -14,12 +15,13 @@ setup_agent_test
 seed_fleet_settings "${FIXTURE_REPO_NAME}" false false /home/node false false '["/opt/data"]'
 
 info "seeding host-side custom mount dir with a stand-in file"
-host_mnt_dir="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/.mnt/opt/data"
+host_mnt_dir=$(itest_share_dir "${FIXTURE_REPO_NAME}" .mnt/opt/data)
 mkdir -p "${host_mnt_dir}"
 printf "from-host\n" > "${host_mnt_dir}/seed.txt"
 
 info "fleet up alpha (custom mount /opt/data enabled)"
 fleet_up alpha
+itest_share_sync "${FIXTURE_REPO_NAME}"
 
 info "asserting /opt/data is a directory inside the container"
 "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- test -d /opt/data \
@@ -37,6 +39,7 @@ assert_contains "${container_seed}" "from-host" \
 info "asserting a container-side write propagates back to the host"
 "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- \
   sh -c 'printf "from-container\n" > /opt/data/written.txt'
+itest_share_sync "${FIXTURE_REPO_NAME}"
 assert_file_exists "${host_mnt_dir}/written.txt"
 host_written=$(cat "${host_mnt_dir}/written.txt")
 assert_contains "${host_written}" "from-container" \

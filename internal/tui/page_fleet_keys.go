@@ -1,19 +1,12 @@
 package tui
 
 import (
-	"encoding/hex"
 	"fmt"
-	"os/exec"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	tea "github.com/charmbracelet/bubbletea"
+	grpcstatus "google.golang.org/grpc/status"
 )
-
-// checkTools is the deps.CheckTools seam the add-instance key uses to refresh
-// the deploy-target list; tests stub it so the dialog opens regardless of what
-// CLIs the host has installed.
-var checkTools = deps.CheckTools
 
 // updateNormal handles keyboard input in the default fleet list mode.
 func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
@@ -269,30 +262,29 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "No fleet selected"
 				break
 			}
-			// Must precede availableBackendTypes: a template fleet narrows
-			// the deploy targets to devcontainer.
+			// The daemon decides where this fleet's instances can go (it runs
+			// the backend CLIs) and which target it remembered last; a
+			// template fleet is narrowed to devcontainer.
 			fleetPage.addInst.template = false
 			if f, ok := m.st.Fleets[fleetName]; ok {
 				fleetPage.addInst.template = fleet.IsTemplateRemote(f.Remote)
 			}
-			m.toolStatus = checkTools()
-			available := fleetPage.availableBackendTypes(m)
-			if len(available) == 0 {
-				m.message = "No deploy targets available – install devcontainer or coder CLI"
+			targets, err := loadDeployTargets(m, fleetName, fleetPage.addInst.template)
+			if err != nil {
+				m.message = "Could not list deploy targets: " + grpcstatus.Convert(err).Message()
+				break
+			}
+			preferred, ok := targets.preferred()
+			if !ok {
+				m.message = noDeployTargetsMessage()
 				break
 			}
 			fleetPage.mode = viewAddInstance
 			fleetPage.dlg.fleet = fleetName
-			fleetPage.addInst.backend = available[0]
-			if m.config != nil {
-				preferred := fleet.BackendType(m.config.DefaultBackend)
-				for _, backendType := range available {
-					if backendType == preferred {
-						fleetPage.addInst.backend = preferred
-						break
-					}
-				}
-			}
+			fleetPage.addInst.targets = targets.available()
+			fleetPage.addInst.unavailable = targets.unavailableClusters()
+			fleetPage.addInst.warnings = targets.warnings()
+			fleetPage.addInst.target = preferred
 			fleetPage.addInst.color = instanceColorWhite
 			fleetPage.dlg.row = addInstanceRowName
 			fleetPage.addInst.editing = false
@@ -366,30 +358,11 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
+			// The daemon says how (the Dev Containers URI, Remote-SSH, or the
+			// Coder/Codespaces CLIs), exactly as for `fleet code`.
 			r := fleetPage.rows[fleetPage.cursor]
-			var codeCmd *exec.Cmd
-			// Each backend opens VS Code with a local CLI; no container access is
-			// needed, so these are computed client-side (no internal/backend) —
-			// the editor URI/args are pure and small enough to inline.
-			switch instance.Backend {
-			case fleet.BackendCoder:
-				codeCmd = exec.Command("coder", "open", "vscode", instance.ContainerID)
-			case fleet.BackendCodespaces:
-				codeCmd = exec.Command("gh", "codespace", "code", "-c", instance.ContainerID)
-			default:
-				// Devcontainer: VS Code's dev-container remote URI (hex of the host
-				// workspace path + the in-container /workspaces/<project> folder).
-				uri := fmt.Sprintf("vscode-remote://dev-container+%s/workspaces/%s",
-					hex.EncodeToString([]byte(instance.WorkspaceDir)), r.fleetName)
-				codeCmd = exec.Command("code", "--folder-uri", uri)
-			}
-			if codeCmd != nil {
-				if err := codeCmd.Run(); err != nil {
-					m.message = fmt.Sprintf("VS Code error: %v", err)
-				} else {
-					m.message = fmt.Sprintf("Opened VS Code for %s", instance.GetDisplayName())
-				}
-			}
+			m.message = fmt.Sprintf("Opening VS Code for %s…", instance.GetDisplayName())
+			return openVSCodeCmd(r.fleetName, instance.Name, instance.GetDisplayName())
 
 		case "C":
 			_, instance := fleetPage.selectedInstance(m)
@@ -397,9 +370,9 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
-			// Only the devcontainer backend supports clone (coder/codespaces don't);
-			// "" defaults to devcontainer. Pure check — no backend construction.
-			if instance.Backend != fleet.BackendDevcontainer && instance.Backend != "" {
+			// Gate on the deploy target's capability hints. Pure check — no
+			// backend construction; the clone job re-checks the live backend.
+			if !instance.DeployTarget().Capabilities().Clone {
 				m.message = fmt.Sprintf("Clone not supported by %s backend", instance.Backend)
 				break
 			}
@@ -421,9 +394,10 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
-			// Coder workspaces have no rebuild primitive; devcontainer ("" defaults
-			// to devcontainer) and codespaces do. Pure check — no backend construction.
-			if instance.Backend == fleet.BackendCoder {
+			// Gate on the deploy target's capability hints (coder has no rebuild
+			// primitive). Pure check — no backend construction; the server
+			// re-checks the live backend before it marks the instance rebuilding.
+			if !instance.DeployTarget().Capabilities().Rebuild {
 				m.message = fmt.Sprintf("Rebuild not supported by %s backend", instance.Backend)
 				break
 			}
@@ -431,7 +405,15 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = fmt.Sprintf("Instance %s/%s is %s", fleetPage.currentFleetName(), instance.Name, instance.Status)
 				break
 			}
-			if instance.ContainerID == "" {
+			// A failed cluster job a rebuild retries: the recovery dialog,
+			// on its Retry button, says what failed first.
+			if kubeRetryable(instance) && fleetPage.openKubeRecovery(fleetPage.currentFleetName(), instance) {
+				fleetPage.kubeRecovery.focus(kubeRecoveryRetry)
+				break
+			}
+			// A failed cluster create has no container, but its rebuild is
+			// the retry of the create (by its key).
+			if instance.ContainerID == "" && !kubeRetryRecord(instance) {
 				m.message = "Instance has not finished provisioning; nothing to rebuild yet"
 				break
 			}
@@ -479,10 +461,14 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.rightSelected = false
 
 		case "L":
-			// On a trigger row, page its recorded event logs; otherwise the
-			// instance container/creation logs.
+			// On a trigger row, page its recorded event logs; on an agent row,
+			// log its tool in where it runs; otherwise the instance
+			// container/creation logs.
 			if r := fleetPage.currentRow(); r != nil && r.kind == rowTrigger {
 				return fleetPage.openTriggerLogs(m, r.fleetName, r.autoIdx)
+			}
+			if r := fleetPage.currentRow(); r != nil && r.kind == rowAgent {
+				return fleetPage.logInAgent(m, r.fleetName, r.autoIdx)
 			}
 			_, instance := fleetPage.selectedInstance(m)
 			if instance == nil {
@@ -533,6 +519,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.dlg.fleet = fleetPage.currentFleetName()
 			fleetPage.dlg.inst = instance.Name
 			fleetPage.pfCursor = 0
+			fleetPage.pfHalfClose = false
 			fleetPage.textInput.SetValue("")
 			fleetPage.textInput.Placeholder = "local:remote (e.g. 8080:80)"
 			fleetPage.textInput.CharLimit = 11
@@ -564,7 +551,6 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 
 	switch r.kind {
 	case rowSettings:
-		m.toolStatus = deps.CheckTools()
 		return m.ChangeRoute(routeSettings)
 
 	case rowLeaveFocus:
@@ -657,6 +643,12 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		_, instance := fleetPage.selectedInstance(m)
 		if instance == nil {
 			break
+		}
+		// A failed Kubernetes instance, one the cluster parked, or one whose
+		// pod fleet refuses has no shell to open: enter explains what
+		// happened instead.
+		if fleetPage.openKubeRecovery(r.fleetName, instance) || fleetPage.openKubePodRecovery(m, r.fleetName, instance) {
+			return nil
 		}
 		instFleetName := r.fleetName
 		instRef := InstanceRef{Fleet: instFleetName, Instance: instance.Name}
@@ -786,9 +778,11 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 		})
 
 	case rowAgent:
-		return withArmadaHint([]string{
-			"j/k: navigate", "enter/e: edit", "a: add agent", "d: delete", "m: instances", "q: quit",
-		})
+		keys := []string{"j/k: navigate", "enter/e: edit"}
+		if a := agentAt(m.st.Fleets[r.fleetName], r.autoIdx); a != nil && m.automationAgentStatus(r.fleetName, a.Name).GetLogin() != "" {
+			keys = append(keys, "L: log in")
+		}
+		return withArmadaHint(append(keys, "a: add agent", "d: delete", "m: instances", "q: quit"))
 
 	case rowNewTrigger, rowNewAgent:
 		return withArmadaHint([]string{
@@ -798,7 +792,23 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 	case rowInstance:
 		keys := []string{"j/k: navigate"}
 		if r.instance != nil {
+			_, _, recoverable := kubeRecoveryCode(r.instance)
+			_, podRefused := kubePodRecoveryCode(r.instance, m.runtime[rtKey(r.fleetName, r.instance.Name)])
 			switch {
+			case podRefused:
+				keys = append(keys,
+					"enter: details", "e: edit", "s: stop",
+					"d: delete", "t: tag", "L: logs", "r: refresh", "q: quit",
+				)
+			case recoverable && r.instance.Status == fleet.StatusStopped:
+				keys = append(keys,
+					"enter: details", "e: edit", "s: start",
+					"d: delete", "t: tag", "L: logs", "r: refresh", "q: quit",
+				)
+			case recoverable && kubeRetryable(r.instance):
+				keys = append(keys, "enter: details", "R: rebuild (retry)", "d: delete", "L: logs", "r: refresh", "q: quit")
+			case recoverable:
+				keys = append(keys, "enter: details", "d: delete", "L: logs", "r: refresh", "q: quit")
 			case r.instance.Status == fleet.StatusRunning:
 				keys = append(keys,
 					"space: show sessions", "enter: open shell", "e: edit",

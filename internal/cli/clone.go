@@ -49,8 +49,7 @@ func newCloneCmd() *cobra.Command {
 				if f := st.GetFleets()[srcTarget.Fleet]; f != nil {
 					for _, inst := range f.GetInstances() {
 						if inst.GetName() == destName && inst.GetContainerId() != "" {
-							cid := inst.GetContainerId()
-							fmt.Printf("Instance %s/%s is running (container: %s)\n", srcTarget.Fleet, destName, cid[:min(12, len(cid))])
+							fmt.Printf("Instance %s/%s is running (container: %s)\n", srcTarget.Fleet, destName, fleet.ShortContainerID(inst.GetContainerId()))
 						}
 					}
 				}

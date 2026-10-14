@@ -1,0 +1,407 @@
+package create
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
+)
+
+// downRecorder is a backend whose only working method is Down, which records
+// the container ids it was asked to tear down. Anything else panics, proving
+// the code under test touched nothing but Down.
+type downRecorder struct {
+	backend.Backend
+	downs []string
+}
+
+func (d *downRecorder) Down(containerID string) error {
+	d.downs = append(d.downs, containerID)
+	return nil
+}
+
+var errTestDestroyed = errors.New("instance destroyed")
+
+// cancelledCtx is a job context cancelled the way a destroy cancels one.
+func cancelledCtx() context.Context {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(errTestDestroyed)
+	return ctx
+}
+
+// seedInstance writes a one-instance fleet to a fresh temp HOME.
+func seedInstance(t *testing.T, inst *fleet.Instance) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Remote: "git@example.com:a.git", Instances: []*fleet.Instance{inst}},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+}
+
+// findInstance returns alpha's persisted record name, or nil when it is gone.
+func findInstance(t *testing.T, name string) *fleet.Instance {
+	t.Helper()
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	f, ok := st.Fleets["alpha"]
+	if !ok {
+		return nil
+	}
+	inst, err := f.GetInstance(name)
+	if err != nil {
+		return nil
+	}
+	return inst
+}
+
+// TestCommitRunning covers the commit a provisioning run ends with: a live run
+// records its container; a run whose record was destroyed or marked deleting
+// tears the container down and commits nothing (the destroy-cancels-create
+// half that lives in the run itself); a run the daemon's shutdown cancelled
+// keeps its container on the failed record.
+func TestCommitRunning(t *testing.T) {
+	cases := []struct {
+		name          string
+		status        fleet.InstanceStatus
+		remove        bool // the record is gone (a destroy already removed it)
+		cancel        bool
+		wantErr       error
+		wantStatus    fleet.InstanceStatus
+		wantContainer bool // the record holds cid-1
+		wantDiscard   bool // cid-1 was torn down
+	}{
+		{name: "live run commits", status: fleet.StatusCreating, wantStatus: fleet.StatusRunning, wantContainer: true},
+		{name: "shutdown keeps the container on the failed record", status: fleet.StatusCreating, cancel: true, wantErr: errCancelled, wantStatus: fleet.StatusFailed, wantContainer: true},
+		{name: "deleting record is left to the destroy", status: fleet.StatusDeleting, wantErr: errAbandoned, wantStatus: fleet.StatusDeleting, wantDiscard: true},
+		{name: "cancelled and deleting", status: fleet.StatusDeleting, cancel: true, wantErr: errCancelled, wantStatus: fleet.StatusDeleting, wantDiscard: true},
+		{name: "removed record", remove: true, wantErr: errAbandoned, wantDiscard: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.remove {
+				seedInstance(t, &fleet.Instance{Name: "other", Status: fleet.StatusRunning})
+			} else {
+				seedInstance(t, &fleet.Instance{Name: "i1", Status: tc.status})
+			}
+			ctx := context.Background()
+			if tc.cancel {
+				ctx = cancelledCtx()
+			}
+			b := &downRecorder{}
+
+			err := commitRunning(ctx, b, "alpha", "i1", "cid-1")
+
+			if tc.wantErr == nil && err != nil {
+				t.Fatalf("commitRunning: %v", err)
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if discarded := len(b.downs) == 1 && b.downs[0] == "cid-1"; discarded != tc.wantDiscard || len(b.downs) > 1 {
+				t.Fatalf("downs = %v, want discard=%v", b.downs, tc.wantDiscard)
+			}
+			inst := findInstance(t, "i1")
+			if tc.remove {
+				if inst != nil {
+					t.Fatalf("a removed record came back: %+v", inst)
+				}
+				return
+			}
+			if inst.Status != tc.wantStatus {
+				t.Fatalf("status = %s, want %s", inst.Status, tc.wantStatus)
+			}
+			if tc.wantContainer != (inst.ContainerID == "cid-1") {
+				t.Fatalf("container id recorded = %q, want recorded=%v", inst.ContainerID, tc.wantContainer)
+			}
+		})
+	}
+}
+
+// TestCancelledRunNamesTheCause: the failure a cancelled run records reads as
+// the reason its job was cancelled.
+func TestCancelledRunNamesTheCause(t *testing.T) {
+	seedInstance(t, &fleet.Instance{Name: "i1", Status: fleet.StatusCreating})
+	err := commitRunning(cancelledCtx(), &downRecorder{}, "alpha", "i1", "cid-1")
+	if err == nil || err.Error() != "cancelled: instance destroyed" {
+		t.Fatalf("err = %v, want %q", err, "cancelled: instance destroyed")
+	}
+	if inst := findInstance(t, "i1"); inst.Error != err.Error() {
+		t.Fatalf("recorded error = %q, want %q", inst.Error, err.Error())
+	}
+}
+
+// TestStopIfCancelled: after a step produced a container, a live run goes on;
+// a cancelled run stops there, tearing the container down only when a destroy
+// has its record. A shutdown leaves the record failed and holding the
+// container, the one a rebuild just made included: for codespaces that is the
+// codespace itself, which a teardown would delete with the user's work.
+func TestStopIfCancelled(t *testing.T) {
+	cases := []struct {
+		name          string
+		status        fleet.InstanceStatus
+		prior         string // the record's ContainerID before the step
+		ctx           context.Context
+		containerID   string
+		wantErr       bool
+		wantDiscard   bool
+		wantStatus    fleet.InstanceStatus
+		wantContainer string
+	}{
+		{name: "live run goes on", status: fleet.StatusCreating, ctx: context.Background(), containerID: "cid-1", wantStatus: fleet.StatusCreating},
+		{name: "destroy tears the container down", status: fleet.StatusDeleting, ctx: cancelledCtx(), containerID: "cid-1", wantErr: true, wantDiscard: true, wantStatus: fleet.StatusDeleting},
+		{name: "destroy before any container", status: fleet.StatusDeleting, ctx: cancelledCtx(), wantErr: true, wantStatus: fleet.StatusDeleting},
+		{name: "shutdown keeps a new container", status: fleet.StatusCreating, ctx: cancelledCtx(), containerID: "cid-1", wantErr: true, wantStatus: fleet.StatusFailed, wantContainer: "cid-1"},
+		{name: "shutdown keeps a rebuilt codespace", status: fleet.StatusRebuilding, prior: "cs-1", ctx: cancelledCtx(), containerID: "cs-1", wantErr: true, wantStatus: fleet.StatusFailed, wantContainer: "cs-1"},
+		{name: "shutdown before any container keeps the old one", status: fleet.StatusRebuilding, prior: "old", ctx: cancelledCtx(), wantErr: true, wantStatus: fleet.StatusFailed, wantContainer: "old"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			seedInstance(t, &fleet.Instance{Name: "i1", Status: tc.status, ContainerID: tc.prior})
+			b := &downRecorder{}
+			err := stopIfCancelled(tc.ctx, b, "alpha", "i1", tc.containerID)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, want error=%v", err, tc.wantErr)
+			}
+			if err != nil && (!errors.Is(err, errCancelled) || !errors.Is(err, errTestDestroyed)) {
+				t.Fatalf("err = %v, want the cancellation and its cause", err)
+			}
+			if discarded := len(b.downs) == 1 && b.downs[0] == tc.containerID; discarded != tc.wantDiscard || len(b.downs) > 1 {
+				t.Fatalf("downs = %v, want discard=%v", b.downs, tc.wantDiscard)
+			}
+			inst := findInstance(t, "i1")
+			if inst.Status != tc.wantStatus || inst.ContainerID != tc.wantContainer {
+				t.Fatalf("record = %s %q, want %s %q", inst.Status, inst.ContainerID, tc.wantStatus, tc.wantContainer)
+			}
+			if tc.wantStatus == fleet.StatusFailed && inst.Error != err.Error() {
+				t.Fatalf("recorded error = %q, want %q", inst.Error, err.Error())
+			}
+		})
+	}
+}
+
+// TestCancelledOr: a step that failed because the run was cancelled (a killed
+// git clone or copy) reports the cancellation; any other failure is its own.
+func TestCancelledOr(t *testing.T) {
+	stepErr := errors.New("signal: killed")
+	if err := cancelledOr(context.Background(), stepErr); err != stepErr {
+		t.Fatalf("live run: err = %v, want the step's error", err)
+	}
+	if err := cancelledOr(cancelledCtx(), stepErr); !errors.Is(err, errCancelled) || !errors.Is(err, errTestDestroyed) {
+		t.Fatalf("cancelled run: err = %v, want the cancellation and its cause", err)
+	}
+}
+
+func TestSetFailedLeavesDeletingRecords(t *testing.T) {
+	seedInstance(t, &fleet.Instance{Name: "i1", Status: fleet.StatusDeleting})
+	setFailed("alpha", "i1", errors.New("boom"))
+	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusDeleting || inst.Error != "" {
+		t.Fatalf("a record being destroyed must not flip to failed: %+v", inst)
+	}
+
+	seedInstance(t, &fleet.Instance{Name: "i1", Status: fleet.StatusCreating})
+	setFailed("alpha", "i1", errors.New("boom"))
+	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusFailed || inst.Error != "boom" {
+		t.Fatalf("setFailed = %+v, want failed with the error", inst)
+	}
+}
+
+// TestRunStopsWhenCancelledBeforeWork: a create whose job was cancelled before
+// it got going (destroyed while queued behind the host-key prompt, say) does no
+// work at all — no clone — and fails with the reason.
+func TestRunStopsWhenCancelledBeforeWork(t *testing.T) {
+	seedInstance(t, &fleet.Instance{Name: "i1", Status: fleet.StatusCreating})
+	// An unreachable remote: a clone attempt would fail with a git error.
+	err := RunContext(cancelledCtx(), "alpha", "i1", "/nonexistent/repo.git", "", false, fleet.BackendDevcontainer)
+	if !errors.Is(err, errCancelled) {
+		t.Fatalf("err = %v, want the cancellation (no clone attempted)", err)
+	}
+	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusFailed || !strings.Contains(inst.Error, "instance destroyed") {
+		t.Fatalf("record = %+v, want failed with the cancellation cause", inst)
+	}
+}
+
+// TestRunCloneStopsWhenCancelledBeforeCopy: a cancelled clone stops before it
+// copies the source workspace or commits the source container.
+func TestRunCloneStopsWhenCancelledBeforeCopy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	src := t.TempDir()
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{
+			{Name: "src", Status: fleet.StatusRunning, ContainerID: "src-cid", WorkspaceDir: src, Backend: fleet.BackendDevcontainer},
+			{Name: "dst", Status: fleet.StatusCloning, Backend: fleet.BackendDevcontainer},
+		}},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	err := RunClone(cancelledCtx(), "alpha", "src", "dst", false)
+	if !errors.Is(err, errCancelled) {
+		t.Fatalf("err = %v, want the cancellation", err)
+	}
+	if inst := findInstance(t, "dst"); inst.Status != fleet.StatusFailed {
+		t.Fatalf("dest record = %+v, want failed", inst)
+	}
+}
+
+// cancellingUpBackend is a ctx-aware backend (UpContexter) whose provisioning
+// is cut short by its job's cancellation: the destroy lands mid-UpContext, and
+// the backend fails with its own wording of the stop.
+type cancellingUpBackend struct {
+	fakeJobBackend
+	cancel context.CancelCauseFunc
+}
+
+func (c *cancellingUpBackend) UpContext(context.Context, backend.UpRequest) (*backend.UpResult, error) {
+	c.cancel(errTestDestroyed)
+	return nil, errors.New("wait for pod: context canceled")
+}
+
+// TestRunReportsACancelledUpContext: a ctx-aware backend stopped by the run's
+// cancellation fails the create with the cancellation and its cause, not the
+// backend's own "context canceled".
+func TestRunReportsACancelledUpContext(t *testing.T) {
+	seedInstance(t, &fleet.Instance{Name: "i1", Status: fleet.StatusCreating, Backend: fleet.BackendDevcontainer})
+	tmpl := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpl, ".devcontainer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpl, ".devcontainer", "devcontainer.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	stubInstanceBackend(t, &cancellingUpBackend{cancel: cancel})
+
+	err := RunContext(ctx, "alpha", "i1", "file://"+tmpl, "", false, fleet.BackendDevcontainer)
+	if !errors.Is(err, errCancelled) || !errors.Is(err, errTestDestroyed) {
+		t.Fatalf("err = %v, want the cancellation and its cause", err)
+	}
+	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusFailed || inst.Error != err.Error() {
+		t.Fatalf("record = %s %q, want failed with %q", inst.Status, inst.Error, err.Error())
+	}
+}
+
+// checkpointingUpBackend is a ctx-aware backend that stops at a checkpoint
+// when the daemon shuts down mid-UpContext, as the Kubernetes backend does.
+type checkpointingUpBackend struct {
+	fakeJobBackend
+	cancel context.CancelCauseFunc
+}
+
+func (c *checkpointingUpBackend) UpContext(context.Context, backend.UpRequest) (*backend.UpResult, error) {
+	c.cancel(backend.ErrDaemonShutdown)
+	return nil, fmt.Errorf("kubernetes:interrupted: the daemon shut down during the create (at step seed): %w", backend.ErrCheckpointed)
+}
+
+// TestRunLeavesACheckpointedRecord: a run the backend checkpointed at the
+// daemon's shutdown leaves its record as it is (still creating), for the next
+// start to fail from the run's journal; the run reports the checkpoint.
+func TestRunLeavesACheckpointedRecord(t *testing.T) {
+	seedInstance(t, &fleet.Instance{Name: "i1", Status: fleet.StatusCreating, Backend: fleet.BackendDevcontainer})
+	tmpl := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpl, ".devcontainer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpl, ".devcontainer", "devcontainer.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	stubInstanceBackend(t, &checkpointingUpBackend{cancel: cancel})
+
+	err := RunContext(ctx, "alpha", "i1", "file://"+tmpl, "", false, fleet.BackendDevcontainer)
+	if !errors.Is(err, backend.ErrCheckpointed) {
+		t.Fatalf("err = %v, want the checkpoint", err)
+	}
+	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusCreating || inst.Error != "" {
+		t.Fatalf("record = %s %q, want it left creating", inst.Status, inst.Error)
+	}
+}
+
+// ownerCloneBackend keeps its workspaces itself (backend.WorkspaceOwner) and
+// clones through CloneContext, as the Kubernetes backend does.
+type ownerCloneBackend struct {
+	fakeJobBackend
+	cloneErr error
+	gotSrc   string
+	gotReq   backend.UpRequest
+	cancel   context.CancelCauseFunc
+}
+
+func (o *ownerCloneBackend) OwnsWorkspace() bool { return true }
+
+func (o *ownerCloneBackend) CloneContext(_ context.Context, src string, req backend.UpRequest) (*backend.UpResult, error) {
+	o.gotSrc, o.gotReq = src, req
+	if o.cancel != nil {
+		o.cancel(backend.ErrDaemonShutdown)
+	}
+	return nil, o.cloneErr
+}
+
+func (o *ownerCloneBackend) Clone(string, string, []backend.Mount) (*backend.UpResult, error) {
+	return nil, errors.New("plain Clone called on a CloneContexter")
+}
+
+func seedClone(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	// The source's host workspace does not exist: a host copy would fail.
+	seedFleet(t,
+		&fleet.Instance{Name: "src", Status: fleet.StatusRunning, Backend: fleet.BackendKubernetes, ContainerID: "k8s:c/ns/fi-src@g1", WorkspaceDir: "/nonexistent/src"},
+		&fleet.Instance{Name: "dest", Status: fleet.StatusCloning, Backend: fleet.BackendKubernetes},
+	)
+}
+
+// TestRunCloneOfAWorkspaceOwnerSkipsTheHostCopy: a backend that keeps its
+// workspaces copies the source's with the rest of the instance; RunClone
+// makes no host copy and hands the backend the job's request.
+func TestRunCloneOfAWorkspaceOwnerSkipsTheHostCopy(t *testing.T) {
+	seedClone(t)
+	b := &ownerCloneBackend{fakeJobBackend: fakeJobBackend{clone: true}, cloneErr: errors.New("the copier failed")}
+	stubInstanceBackend(t, b)
+
+	err := RunClone(context.Background(), "alpha", "src", "dest", false)
+	if err == nil || err.Error() != "the copier failed" {
+		t.Fatalf("err = %v, want the backend's clone error", err)
+	}
+	wantWS := filepath.Join(state.WorkspacesDir(), "alpha", "dest", "alpha")
+	if b.gotSrc != "k8s:c/ns/fi-src@g1" || b.gotReq.WorkspaceDir != wantWS {
+		t.Fatalf("CloneContext got src %q req %+v", b.gotSrc, b.gotReq)
+	}
+	if _, err := os.Stat(wantWS); !os.IsNotExist(err) {
+		t.Fatalf("a host copy of the workspace was made: %v", err)
+	}
+	if got := findInstance(t, "dest"); got.Status != fleet.StatusFailed || got.Error != "the copier failed" {
+		t.Fatalf("dest = %s %q", got.Status, got.Error)
+	}
+}
+
+// TestRunCloneLeavesACheckpointedRecord: a clone the backend checkpointed at
+// the daemon's shutdown leaves the destination record cloning, for the next
+// start to fail from the clone's journal.
+func TestRunCloneLeavesACheckpointedRecord(t *testing.T) {
+	seedClone(t)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	b := &ownerCloneBackend{fakeJobBackend: fakeJobBackend{clone: true}, cancel: cancel,
+		cloneErr: fmt.Errorf("kubernetes:interrupted: the daemon shut down during the clone (at step copy): %w", backend.ErrCheckpointed)}
+	stubInstanceBackend(t, b)
+
+	err := RunClone(ctx, "alpha", "src", "dest", false)
+	if !errors.Is(err, backend.ErrCheckpointed) {
+		t.Fatalf("err = %v, want the checkpoint", err)
+	}
+	if got := findInstance(t, "dest"); got.Status != fleet.StatusCloning || got.Error != "" {
+		t.Fatalf("dest = %s %q, want it left cloning", got.Status, got.Error)
+	}
+}

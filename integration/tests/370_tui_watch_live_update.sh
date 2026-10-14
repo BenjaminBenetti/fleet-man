@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: a new instance created via the CLI appears in a running TUI WITHOUT pressing `r` (Watch push).
 set -euo pipefail
 

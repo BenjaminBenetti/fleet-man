@@ -592,7 +592,7 @@ func (fleetPage *fleetPage) saveAutomationTrigger(m *model) tea.Cmd {
 		return nil
 	}
 	fleetPage.mode = viewNormal
-	m.message = fmt.Sprintf("Saved trigger %q", strings.TrimSpace(candidate.Name))
+	m.message = fleetPage.savedMessage(fmt.Sprintf("Saved trigger %q", strings.TrimSpace(candidate.Name)))
 	return nil
 }
 

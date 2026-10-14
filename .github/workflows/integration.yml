@@ -9,11 +9,13 @@ jobs:
   # SLOWEST shard — not the whole 80+-test suite — sets the wall-clock. Each
   # shard runs integration/run.sh with FLEET_ITEST_RANGE; run.sh filters to the
   # tests whose numeric filename prefix falls in [START, END). The open-ended
-  # "600-" shard catches any future high-numbered tests so none are dropped.
+  # last shard ("760-") catches any future high-numbered tests so none are dropped.
   integration-shard:
     name: integration ${{ matrix.range }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The longest shards take ~17 minutes; a retried test (FLEET_ITEST_RETRIES)
+    # can add a few more.
+    timeout-minutes: 30
     strategy:
       # Run every shard to completion even if one fails — we want the full
       # pass/fail picture across the suite, not a first-failure abort.
@@ -26,7 +28,10 @@ jobs:
           - "300-400"
           - "400-500"
           - "500-600"
-          - "600-"
+          - "600-700"
+          - "700-730"
+          - "730-760"
+          - "760-"
     steps:
       - uses: actions/checkout@v5
 
@@ -52,14 +57,143 @@ jobs:
           docker version
           docker info
 
+      # Static (CGO_ENABLED=0), as released: see the Makefile's dist target.
       - name: Build fleet binary
-        run: go build -o /usr/local/bin/fleet ./cmd/fleet
+        run: CGO_ENABLED=0 go build -o /usr/local/bin/fleet ./cmd/fleet
 
       - name: Run integration tests
         env:
           FLEET_BIN: /usr/local/bin/fleet
           FLEET_ITEST_RANGE: ${{ matrix.range }}
+          # A failed test runs once more (a download or runner blip fails one
+          # attempt); one that passes only then is named flaky in the summary.
+          FLEET_ITEST_RETRIES: "1"
         run: ./integration/run.sh
+
+  # The backend conformance suite (internal/backend/backendtest) against the
+  # devcontainer backend on the runner's docker. Without FLEET_CONFORMANCE the
+  # same test skips, so the unit workflow never needs docker for it.
+  conformance-devcontainer:
+    name: conformance devcontainer
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Run the conformance suite
+        env:
+          FLEET_CONFORMANCE: devcontainer
+        run: go test -count=1 -timeout 40m -v ./internal/backend/conformance
+
+  # The Kubernetes backend's docker shim (internal/kubeshim, driven by
+  # internal/backend/kubernetes/devcli) against the real devcontainer CLI and
+  # docker: the capture signature of a pinned CLI version, the set-up replay,
+  # the compose refusal, and the shim's option tables against docker's own
+  # --help. The matrix is the oldest and newest of devcli.TestedCLIVersions
+  # (the goldens in between were recorded the same way); a CLI release gets a
+  # golden and a TestedCLIVersions entry before it joins. Without
+  # FLEET_KUBESHIM_CLI the same tests skip, so the unit workflow never needs
+  # the CLI.
+  kubeshim-cli:
+    name: kubeshim cli ${{ matrix.cli }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cli: ["0.85.0", "0.89.0"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install devcontainer CLI ${{ matrix.cli }}
+        run: npm install -g "@devcontainers/cli@${{ matrix.cli }}"
+
+      - name: Run the kubeshim CLI tests
+        env:
+          FLEET_KUBESHIM_CLI: "1"
+        run: go test -count=1 -timeout 25m -v ./internal/kubeshim ./internal/backend/kubernetes/devcli ./internal/backend/kubernetes/podspec
+
+  # Image delivery against the runner's real docker and registry:2 (push,
+  # digest, managed pull secret, DELETE detection, retention GC). Not in the
+  # aggregate check, like kubeshim-cli.
+  kubeimage-docker:
+    name: kubeimage docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run the kubeimage docker tests
+        env:
+          FLEET_KUBEIMAGE_DOCKER: "1"
+        run: go test -count=1 -timeout 10m -v -run TestRealDocker ./internal/backend/kubernetes/kubeimage
+
+  # Gateway image delivery against the runner's real docker: `docker save` of
+  # its image store (containerd or classic), served by the image server and
+  # pulled back by docker. Not in the aggregate check, like kubeimage-docker.
+  imageserve-docker:
+    name: imageserve docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run the imageserve docker test
+        env:
+          FLEET_IMAGESERVE_DOCKER: "1"
+        run: go test -count=1 -timeout 10m -v -run TestRealDocker ./internal/k8s/imageserve
+
+  # The OCI distribution-spec conformance suite's pull workflow, read-only,
+  # against the image server through an in-process gateway and fleetd's
+  # tunnel client. Not in the aggregate check.
+  oci-conformance:
+    name: OCI conformance (pull)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build the conformance suite
+        run: |
+          git clone --depth 1 --branch v1.1.1 https://github.com/opencontainers/distribution-spec "$RUNNER_TEMP/distribution-spec"
+          cd "$RUNNER_TEMP/distribution-spec/conformance"
+          go test -c -o "$RUNNER_TEMP/oci-conformance.test" .
+
+      - name: Run the pull workflow against the image server
+        env:
+          FLEET_OCI_CONFORMANCE: ${{ runner.temp }}/oci-conformance.test
+        run: go test -count=1 -timeout 10m -v -run TestOCIConformancePull ./internal/k8s/imageserve
 
   # Single aggregate check: green only when every shard passed. Preserves one
   # stable "integration" status name for branch protection / the review loop,

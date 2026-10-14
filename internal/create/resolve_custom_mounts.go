@@ -9,7 +9,7 @@ import (
 // resolveCustomMounts looks up the fleet's persisted settings and
 // translates them into a Resolved bundle (mounts + symlinks). Returns
 // a zero-value Resolved when the backend does not advertise
-// SupportsCustomMounts so callers avoid wasted host-side preparation
+// SupportsSharedMounts so callers avoid wasted host-side preparation
 // for cloud-managed backends.
 //
 // State load failures are tolerated: if state.json cannot be read the
@@ -18,7 +18,7 @@ import (
 // the same file in the success path immediately after, which will
 // surface a hard error then if the file is truly broken.)
 func resolveCustomMounts(instanceBackend backend.Backend, fleetName string) (mountresolver.Resolved, error) {
-	if !instanceBackend.SupportsCustomMounts() {
+	if !instanceBackend.SupportsSharedMounts() {
 		return mountresolver.Resolved{}, nil
 	}
 	st, err := state.Load()

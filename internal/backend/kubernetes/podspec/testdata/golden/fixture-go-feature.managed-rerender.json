@@ -1,0 +1,159 @@
+{
+  "pod": {
+    "image": {
+      "ref": "vsc-fixture-go-feature-0000000000000000000000000000000000000000000000000000000000000000-features",
+      "id": "sha256:fe0bbf4f67a1a63d2e75f36d12d30eaeef79f19dbccde18cc2efd2be569cae6a",
+      "os": "linux",
+      "arch": "amd64"
+    },
+    "pid1": {
+      "format": 1,
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "user": "root",
+      "init": true,
+      "remote_user": "vscode"
+    },
+    "security": {},
+    "resources": {
+      "requests": {
+        "cpu": "500m",
+        "memory": "2Gi"
+      },
+      "limits": {
+        "memory": "8Gi"
+      }
+    },
+    "diskSize": "50Gi",
+    "mounts": [
+      {
+        "kind": "workspace",
+        "target": "/workspaces/fixture-go-feature",
+        "source": "/home/dev/src/fixture-go-feature"
+      }
+    ],
+    "nodeSelector": {
+      "kubernetes.io/arch": "amd64",
+      "kubernetes.io/os": "linux"
+    },
+    "debugGrants": [
+      "--cap-add SYS_PTRACE",
+      "--security-opt seccomp=unconfined"
+    ],
+    "debugDropped": true,
+    "warnings": [
+      "debug capabilities dropped by admission: --cap-add SYS_PTRACE, --security-opt seccomp=unconfined (namespace team-dev denies them); debuggers such as dlv and gdb cannot attach. Set debug_capabilities to require on prod-eu to fail the create instead"
+    ],
+    "options": [
+      {
+        "option": "attach",
+        "outcome": "ignore"
+      },
+      {
+        "option": "cap-add",
+        "outcome": "map"
+      },
+      {
+        "option": "entrypoint",
+        "outcome": "map"
+      },
+      {
+        "option": "init",
+        "outcome": "map"
+      },
+      {
+        "option": "label",
+        "outcome": "map"
+      },
+      {
+        "option": "mount",
+        "outcome": "map"
+      },
+      {
+        "option": "security-opt",
+        "outcome": "map"
+      },
+      {
+        "option": "sig-proxy",
+        "outcome": "ignore"
+      }
+    ]
+  },
+  "specFiles": {
+    "capture.json": {
+      "args": [
+        "--sig-proxy=false",
+        "-a",
+        "STDOUT",
+        "-a",
+        "STDERR",
+        "--mount",
+        "type=bind,source=/home/dev/src/fixture-go-feature,target=/workspaces/fixture-go-feature",
+        "-l",
+        "devcontainer.local_folder=/home/dev/src/fixture-go-feature",
+        "-l",
+        "devcontainer.config_file=/home/dev/src/fixture-go-feature/.devcontainer/devcontainer.json",
+        "--init",
+        "--cap-add",
+        "SYS_PTRACE",
+        "--security-opt",
+        "seccomp=unconfined",
+        "--entrypoint",
+        "/bin/sh",
+        "vsc-fixture-go-feature-0000000000000000000000000000000000000000000000000000000000000000-features",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "env": [],
+      "format": 1,
+      "labels": {
+        "devcontainer.config_file": "/home/dev/src/fixture-go-feature/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/fixture-go-feature"
+      },
+      "verb": "run"
+    },
+    "exec.json": {
+      "container_user": "root",
+      "remote_user": "vscode",
+      "ssh_auth_sock": "/fleet-mounts/control/ssh-agent.sock",
+      "workspace_folder": "/workspaces/fixture-go-feature"
+    },
+    "inspect.json": {
+      "cmd": [
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "containerId": "",
+      "created": "0001-01-01T00:00:00Z",
+      "entrypoint": [
+        "/bin/sh"
+      ],
+      "env": [
+        "PATH=/usr/local/go/bin:/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "GOROOT=/usr/local/go",
+        "GOPATH=/go"
+      ],
+      "image": "vsc-fixture-go-feature-0000000000000000000000000000000000000000000000000000000000000000-features",
+      "imageId": "sha256:fe0bbf4f67a1a63d2e75f36d12d30eaeef79f19dbccde18cc2efd2be569cae6a",
+      "labels": {
+        "dev.containers.id": "base-debian",
+        "dev.containers.release": "v0.4.19",
+        "dev.containers.source": "https://github.com/devcontainers/images",
+        "dev.containers.timestamp": "Thu, 16 Oct 2025 10:40:40 GMT",
+        "dev.containers.variant": "bookworm",
+        "devcontainer.config_file": "/home/dev/src/fixture-go-feature/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/fixture-go-feature",
+        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"}, {\"id\":\"ghcr.io/devcontainers/features/go:1\",\"init\":true,\"capAdd\":[\"SYS_PTRACE\"],\"securityOpt\":[\"seccomp=unconfined\"],\"customizations\":{\"vscode\":{\"extensions\":[\"golang.Go\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes Go and common Go utilities pre-installed and available on the `PATH`, along with the Go language extension for Go development.\"}]}}}} ]",
+        "version": "2.0.2"
+      },
+      "startedAt": "0001-01-01T00:00:00Z",
+      "user": "root"
+    }
+  }
+}

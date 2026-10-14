@@ -8,7 +8,7 @@ import "time"
 // tmux session prefixes, and CLI lookups — it never changes after creation.
 // DisplayName is the user-facing label shown in the TUI; editing it never
 // touches underlying resources, but like Name it must satisfy
-// ValidateInstanceName.
+// ValidateDisplayName (ValidateInstanceName's rules for a label).
 type Instance struct {
 	Name         string         `json:"name"`
 	DisplayName  string         `json:"display_name,omitempty"`
@@ -22,10 +22,24 @@ type Instance struct {
 	Tag          string         `json:"tag,omitempty"`
 	Color        string         `json:"color,omitempty"`
 	Branch       string         `json:"branch,omitempty"`
+	// LastBranch is the last named branch a live workspace read saw checked
+	// out (see DisplayBranch). The server writes it when a read reports a
+	// different branch and just before Stop, so callers that get no live read
+	// — a stopped instance whose workspace lives only in its runtime, or a
+	// daemon that just restarted — still have a branch to show.
+	LastBranch string `json:"last_branch,omitempty"`
 	// Automated marks an instance the automation scheduler spawned for a trigger
 	// (issue #188), as opposed to one a user created. Set once at creation and
 	// never cleared; the TUI shows a marker in front of its name.
 	Automated bool `json:"automated,omitempty"`
+	// KubeCluster is the cluster connection (KubeCluster.ID) a Kubernetes
+	// instance runs on; empty for every other backend.
+	KubeCluster string `json:"kube_cluster,omitempty"`
+	// KubeKey is the instance's key on its cluster: it labels every object
+	// the instance owns, and it is recorded on the CREATING/CLONING record
+	// before any of them exists, so a failed or interrupted create can still
+	// be torn down by key. Empty for every other backend.
+	KubeKey string `json:"kube_key,omitempty"`
 }
 
 // GetDisplayName returns the user-facing label for the instance. Legacy

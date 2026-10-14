@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sync"
 	"syscall"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 )
 
 // fifoPiece is the size of one write to the FIFO. Two properties matter: it is
@@ -11,6 +13,18 @@ import (
 // the recording into noise; and it is <= PIPE_BUF (4096 on Linux), so the kernel
 // writes it atomically — all of it or, when the pipe is full, none (EAGAIN).
 const fifoPiece = 3200
+
+// The backlog cap. PulseAudio reads the pipe in real time, so whatever sits in
+// it is latency: audio that arrives in a burst (a network stall on the way to
+// the instance, then everything at once) would otherwise sit there for the
+// rest of the recording, up to the pipe's 64 KiB (two seconds). Past
+// backlogMax the OLDEST audio is discarded down to backlogKeep: live audio is
+// worth nothing late, and the newest is what the recorder should hear next.
+// Both are whole samples (even).
+const (
+	backlogMax  = mic.BytesPerSecond / 4      // 250 ms
+	backlogKeep = mic.BytesPerSecond * 3 / 25 // 120 ms
+)
 
 // fifo is the write end of the pipe-source's FIFO. It deliberately bypasses
 // os.File: Go parks a goroutine writing to a full non-blocking pipe until there
@@ -80,6 +94,7 @@ func (f *fifo) write(pcm []byte) {
 	if !f.open {
 		return // pcm is whole samples: dropping it keeps the phase
 	}
+	pcm = f.capLocked(pcm)
 	for len(pcm) > 0 {
 		piece := pcm[:min(fifoPiece, len(pcm))]
 		_, err := syscall.Write(f.fd, piece)
@@ -93,6 +108,42 @@ func (f *fifo) write(pcm []byte) {
 			return
 		}
 		pcm = pcm[len(piece):]
+	}
+}
+
+// capLocked holds the pipe's backlog to backlogMax: when pcm would take it
+// past that, the oldest audio goes first (out of the pipe, then off the front
+// of pcm) until backlogKeep is left. Everything discarded is whole samples, so
+// the phase holds. A pipe whose fill cannot be asked is left as it is (the
+// full pipe's drop below still bounds it).
+func (f *fifo) capLocked(pcm []byte) []byte {
+	queued, err := pipeQueued(f.fd)
+	if err != nil || queued < 0 || queued+len(pcm) <= backlogMax {
+		return pcm
+	}
+	drop := queued + len(pcm) - backlogKeep
+	fromPipe := min(drop, queued) &^ 1
+	if fromPipe > 0 {
+		f.discardLocked(fromPipe)
+	}
+	fromPCM := drop - fromPipe
+	fromPCM += fromPCM % 2
+	return pcm[min(fromPCM, len(pcm)):]
+}
+
+// discardLocked reads up to n bytes (even) off the front of the pipe: the
+// oldest audio in it.
+func (f *fifo) discardLocked(n int) {
+	buf := make([]byte, min(n, 64*1024))
+	for n > 0 {
+		got, err := syscall.Read(f.fd, buf[:min(n, len(buf))])
+		if errors.Is(err, syscall.EINTR) {
+			continue
+		}
+		if got <= 0 || err != nil {
+			return
+		}
+		n -= got
 	}
 }
 

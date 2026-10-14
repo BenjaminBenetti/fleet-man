@@ -144,3 +144,57 @@ message SetArmadaRequest {
 message SetArmadaReply {
   repeated ArmadaRemote remotes = 1;
 }
+
+// =====================================================================
+// EDITOR ENDPOINTS (editor_endpoints.json) — remotes `fleet code` reached by env
+// =====================================================================
+//
+// VS Code opens a remote daemon's instance over Remote-SSH through the alias
+// `<inst>.<fleet>.r<h6>.fleet`, where <h6> hashes the remote (sshalias). OpenSSH
+// starts `fleet ssh-proxy` without the client's FLEET_GATEWAY, FLEET_SSH,
+// FLEET_SERVER or FLEET_TOKEN, so ssh-proxy finds the remote again by that hash:
+// first among the armada's remotes, then among these records, which `fleet code`
+// and the TUI's `c` save on the LOCAL daemon when the remote they reached was
+// chosen by those variables rather than the armada. LOCAL-ONLY, like
+// Get/SetArmada: a record can hold another daemon's bearer token, so the
+// tunnel-facing server refuses both RPCs. They guard the user's own registry and
+// limit no remote control. Stored 0600 in ~/.fleet/editor_endpoints.json.
+
+enum EditorEndpointKind {
+  EDITOR_ENDPOINT_KIND_UNSPECIFIED = 0;
+  // GATEWAY: address is a FLEET_GATEWAY URL.
+  EDITOR_ENDPOINT_KIND_GATEWAY = 1;
+  // SSH: address is a FLEET_SSH ssh:// URL (the local daemon keeps the tunnel).
+  EDITOR_ENDPOINT_KIND_SSH = 2;
+  // SERVER: address is a FLEET_SERVER host:port.
+  EDITOR_ENDPOINT_KIND_SERVER = 3;
+}
+
+// EditorEndpoint is one remote daemon an editor alias leads to.
+message EditorEndpoint {
+  EditorEndpointKind kind = 1;
+  string address = 2;
+  // The bearer token, only when it came from FLEET_TOKEN (otherwise ssh-proxy
+  // falls back to ~/.fleet/mcp.token, as the client did). Never written into
+  // ssh config.
+  string token = 3;
+}
+
+message SaveEditorEndpointRequest {
+  EditorEndpoint endpoint = 1;
+}
+
+message SaveEditorEndpointReply {
+  // The alias's remote part for this endpoint: "r" + six hex digits.
+  string remote = 1;
+}
+
+message ResolveEditorEndpointRequest {
+  // The alias's remote part ("r" + six hex digits).
+  string remote = 1;
+}
+
+message ResolveEditorEndpointReply {
+  // Unset when no record has that hash.
+  EditorEndpoint endpoint = 1;
+}

@@ -68,7 +68,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	// --- lifecycle ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_up",
-		Description: "Create (provision) a new instance in a fleet. Returns immediately with a job_id to poll via fleet_job_status (provisioning takes minutes); pass wait:true to block until done instead. Provide remote (a git URL, or file:///abs/dir for a local template directory that is copied per instance) when creating the first instance of a new fleet.",
+		Description: "Create (provision) a new instance in a fleet. Returns immediately with a job_id to poll via fleet_job_status (provisioning takes minutes); pass wait:true to block until done instead. Provide remote (a git URL, or file:///abs/dir for a local template directory that is copied per instance) when creating the first instance of a new fleet. Without backend the instance goes to the daemon's remembered default deploy target (the one last picked in a TUI New instance dialog, else devcontainer), not necessarily devcontainer; the reply's target names where it went.",
 	}, s.mcpUp)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_start",
@@ -92,7 +92,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	}, s.mcpClone)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_rebuild",
-		Description: "Rebuild an instance's container in place (e.g. after editing its devcontainer config), preserving the workspace — the git checkout and uncommitted edits survive. Only devcontainer and codespaces backends support rebuild; coder does not. Returns immediately with a job_id to poll via fleet_job_status; pass wait:true to block until done.",
+		Description: "Rebuild an instance's container in place (e.g. after editing its devcontainer config), preserving the workspace — the git checkout and uncommitted edits survive. The devcontainer, codespaces and kubernetes backends support rebuild; coder does not. On kubernetes it is also the retry of a failed instance: an interrupted or failed create (what it left is deleted and the create runs again), or a rebuild that failed and was rolled back. Returns immediately with a job_id to poll via fleet_job_status; pass wait:true to block until done.",
 	}, s.mcpRebuild)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_job_status",
@@ -124,11 +124,11 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	// --- automation (agents & triggers) ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_automation_list",
-		Description: "Read a fleet's automation config: its agents (automation workers) and triggers (what fires them). Returns {agents, triggers}.",
+		Description: "Read a fleet's automation config: its agents (automation workers) and triggers (what fires them). Returns {agents, triggers}; each agent also says how many of its runs are queued and running, and login: why the automation login check refuses its firings (a Kubernetes agent whose tool was never logged in for the fleet on its cluster), absent when they may run.",
 	}, s.mcpAutomationList)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_agent_create",
-		Description: "Create an automation agent in a fleet: a worker definition (launch command, system prompt, env backend) that triggers activate. Returns the fleet's resulting automation config.",
+		Description: "Create an automation agent in a fleet: a worker definition (launch command, system prompt, env backend or Kubernetes cluster) that triggers activate. Returns the fleet's resulting automation config.",
 	}, s.mcpAgentCreate)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_agent_update",
@@ -152,26 +152,53 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	}, s.mcpTriggerDelete)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_trigger_logs",
-		Description: "Read an automation trigger's recorded event logs: the payloads of its recent firings (webhook body, bash command stdout, or schedule fire-time), captured on the daemon so you can debug what fired it. Returns {logs, count} with the firings concatenated, oldest first.",
+		Description: "Read an automation trigger's recorded event logs: the payloads of its recent firings (webhook body, bash command stdout, or schedule fire-time), captured on the daemon so you can debug what fired it, each followed by `# outcome:` lines saying what became of it for each agent (the instance it got, or why not: queued, refused, dropped, not created, failed, reaped). Returns {logs, count} with the firings concatenated, oldest first.",
 	}, s.mcpTriggerLogs)
+
+	// --- custom mounts ---
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_mount_list",
+		Description: "List a fleet's custom mounts: each path every instance of the fleet gets, and the daemon-host folder it binds (host_folder; none: its .mnt folder under ~/.fleet/workspaces/<fleet>). Returns {mounts}.",
+	}, s.mcpMountList)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_mount_set",
+		Description: "Add a custom mount to a fleet, or change the host folder of one it has: host_folder binds an absolute daemon-host folder as it is (a bigger disk, say; synced both ways on a Kubernetes cluster) instead of the .mnt folder. Instances take it at their next create or rebuild. Returns the fleet's mounts and any warning (a host folder missing on the daemon host).",
+	}, s.mcpMountSet)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_mount_delete",
+		Description: "Remove a custom mount from a fleet (its host folder's content is left alone). Instances lose it at their next create or rebuild. Returns the fleet's mounts.",
+	}, s.mcpMountDelete)
+
+	// --- Kubernetes cluster connections ---
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_cluster_list",
+		Description: "List the daemon's Kubernetes cluster connections (a kubeconfig context and namespace each) with their health: state (ready, limited, unreachable, ...), usable, why, exposure warnings, every setting and the capabilities the last check found. Pass cluster (an id, name or context) for one.",
+	}, s.mcpClusterList)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_cluster_test",
+		Description: "Run every check of a Kubernetes cluster connection (by id, name or context) on the daemon and return each check's result with the resulting health; usable is true when the cluster is ready or limited. deep also runs the throwaway-pod probes (a pod pulls through the gateway); storage_classes runs the multi-node storage test on those StorageClasses now (the consent a class with a large minimum size needs before Auto tests it). Blocks for the run, usually seconds (at most a few minutes).",
+	}, s.mcpClusterTest)
 }
 
 // --- shared shapes ---
 
 // mcpInstance is the JSON-friendly view of an instance returned by the read and
-// lifecycle tools. It surfaces the persisted record fields (no live git HEAD
-// lookup, which would shell out per instance); branch is the REQUESTED branch.
+// lifecycle tools. It surfaces the persisted record fields; branch is the
+// REQUESTED branch. current_branch, the branch the workspace has checked out,
+// is filled by fleet_list only (a workspace read per instance, GetState
+// fresh_branches); the lifecycle tools leave it out.
 type mcpInstance struct {
-	Fleet        string `json:"fleet"`
-	Instance     string `json:"instance"`
-	Status       string `json:"status"`
-	ContainerID  string `json:"container_id,omitempty"`
-	Backend      string `json:"backend,omitempty"`
-	Branch       string `json:"branch,omitempty"`
-	Tag          string `json:"tag,omitempty"`
-	WorkspaceDir string `json:"workspace_dir,omitempty"`
-	CreatedAt    string `json:"created_at,omitempty"`
-	Error        string `json:"error,omitempty"`
+	Fleet         string `json:"fleet"`
+	Instance      string `json:"instance"`
+	Status        string `json:"status"`
+	ContainerID   string `json:"container_id,omitempty"`
+	Backend       string `json:"backend,omitempty"`
+	Branch        string `json:"branch,omitempty" jsonschema:"the branch the instance was created from; empty means the repository's default branch"`
+	CurrentBranch string `json:"current_branch,omitempty" jsonschema:"the branch checked out in the workspace now; when it can't be read, the last one seen, else the requested branch"`
+	Tag           string `json:"tag,omitempty"`
+	WorkspaceDir  string `json:"workspace_dir,omitempty"`
+	CreatedAt     string `json:"created_at,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 func toMCPInstance(fleetName string, inst *fleetgrpc.Instance) *mcpInstance {
@@ -204,11 +231,20 @@ func toMCPInstance(fleetName string, inst *fleetgrpc.Instance) *mcpInstance {
 // non-fatal issues from an otherwise-successful job (e.g. a best-effort
 // teardown step).
 type FleetJobOutput struct {
-	JobID    string       `json:"job_id,omitempty"`
-	Done     bool         `json:"done"`
-	Success  bool         `json:"success,omitempty"`
-	Instance *mcpInstance `json:"instance,omitempty"`
-	Warnings []string     `json:"warnings,omitempty"`
+	JobID    string           `json:"job_id,omitempty"`
+	Done     bool             `json:"done"`
+	Success  bool             `json:"success,omitempty"`
+	Target   *mcpDeployTarget `json:"target,omitempty" jsonschema:"fleet_up only: where the instance was created"`
+	Instance *mcpInstance     `json:"instance,omitempty"`
+	Warnings []string         `json:"warnings,omitempty"`
+}
+
+// mcpDeployTarget names where fleet_up put an instance, so a caller that left
+// backend out learns which target the daemon's remembered default resolved to.
+type mcpDeployTarget struct {
+	Backend   string `json:"backend" jsonschema:"the backend the instance was created on"`
+	Cluster   string `json:"cluster,omitempty" jsonschema:"kubernetes only: the cluster connection (its id) the instance was created on"`
+	Defaulted bool   `json:"defaulted,omitempty" jsonschema:"true when backend was omitted, so the daemon picked the target: its remembered default deploy target, else devcontainer"`
 }
 
 // jobResult turns a completed lifecycle outcome into a tool result: a failed
@@ -252,9 +288,13 @@ type FleetListOutput struct {
 }
 
 func (s *service) mcpList(ctx context.Context, _ *mcp.CallToolRequest, in FleetListInput) (*mcp.CallToolResult, FleetListOutput, error) {
-	reply, err := s.GetState(ctx, &fleetgrpc.GetStateRequest{})
+	reply, err := s.GetState(ctx, &fleetgrpc.GetStateRequest{FreshBranches: true})
 	if err != nil {
 		return nil, FleetListOutput{}, mcpErr(err)
+	}
+	live := make(map[string]*string, len(reply.GetRuntime()))
+	for _, rt := range reply.GetRuntime() {
+		live[runtimeKey(rt.GetFleet(), rt.GetInstance())] = rt.CurrentBranch
 	}
 	out := FleetListOutput{Instances: []mcpInstance{}}
 	for _, name := range sortedFleetNames(reply.GetState()) {
@@ -263,7 +303,9 @@ func (s *service) mcpList(ctx context.Context, _ *mcp.CallToolRequest, in FleetL
 		}
 		f := reply.GetState().GetFleets()[name]
 		for _, inst := range f.GetInstances() {
-			out.Instances = append(out.Instances, *toMCPInstance(name, inst))
+			m := toMCPInstance(name, inst)
+			m.CurrentBranch = fleet.DisplayBranch(live[runtimeKey(name, inst.GetName())], inst.GetLastBranch(), inst.GetBranch())
+			out.Instances = append(out.Instances, *m)
 		}
 	}
 	return nil, out, nil
@@ -367,7 +409,8 @@ type FleetUpInput struct {
 	Instance string `json:"instance" jsonschema:"instance name"`
 	Remote   string `json:"remote,omitempty" jsonschema:"git remote URL, or file:///abs/dir naming a local template directory on the daemon host that is copied into each instance instead of cloned; required only when creating the first instance of a new fleet"`
 	Branch   string `json:"branch,omitempty" jsonschema:"git branch to check out; defaults to the repository's default branch. Not allowed for a file:// template fleet"`
-	Backend  string `json:"backend,omitempty" jsonschema:"backend type: devcontainer (default), coder, or codespaces"`
+	Backend  string `json:"backend,omitempty" jsonschema:"backend type: devcontainer, coder, codespaces or kubernetes; omit to use the daemon's remembered default deploy target (the one last picked in a TUI New instance dialog, else devcontainer). A file:// template fleet runs on devcontainer or kubernetes only"`
+	Cluster  string `json:"cluster,omitempty" jsonschema:"Kubernetes connection to run the instance on: its id, name or kube context (see fleet_cluster_list); implies the kubernetes backend. Omitted with backend kubernetes: the remembered or only connection"`
 	Wait     bool   `json:"wait,omitempty" jsonschema:"block until provisioning completes instead of returning a job handle immediately; provisioning takes minutes, so only set this with a generous tool-call timeout"`
 }
 
@@ -383,10 +426,26 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 		}
 		backend = protoconv.BackendToProto(bt)
 	}
+	cluster := ""
+	if in.Cluster != "" {
+		if in.Backend != "" && backend != fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES {
+			return nil, FleetJobOutput{}, fmt.Errorf("cluster runs the instance on Kubernetes, not %s", in.Backend)
+		}
+		backend = fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES
+		reply, err := s.ListKubeClusters(ctx, &fleetgrpc.ListKubeClustersRequest{})
+		if err != nil {
+			return nil, FleetJobOutput{}, mcpErr(err)
+		}
+		c, err := fleetgrpc.FindKubeCluster(reply.GetClusters(), in.Cluster)
+		if err != nil {
+			return nil, FleetJobOutput{}, err
+		}
+		cluster = c.GetCluster().GetId()
+	}
 	// Verbose is left false (unlike `fleet up`): MCP returns only the final
 	// JobDone result, never a live provisioning stream, so verbose output would
 	// just be discarded.
-	req := &fleetgrpc.CreateInstanceRequest{Fleet: in.Fleet, Instance: in.Instance, Backend: backend}
+	req := &fleetgrpc.CreateInstanceRequest{Fleet: in.Fleet, Instance: in.Instance, Backend: backend, KubeCluster: cluster}
 	if in.Remote != "" {
 		req.Remote = &in.Remote
 	}
@@ -397,13 +456,28 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 	if err != nil {
 		return nil, FleetJobOutput{}, mcpErr(err)
 	}
-	if !in.Wait {
-		return asyncJobResult(in.Fleet, j)
+	resolved := protoconv.DeployTargetFromProto(j.target)
+	target := &mcpDeployTarget{
+		Backend:   string(resolved.Backend),
+		Cluster:   resolved.KubeCluster,
+		Defaulted: in.Backend == "" && in.Cluster == "",
 	}
-	jctx, cancel := mergeCtx(s.bgCtx, ctx)
-	defer cancel()
-	final, warnings, err := awaitJob(jctx, j)
-	return jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, err)
+	var (
+		result *mcp.CallToolResult
+		out    FleetJobOutput
+	)
+	if !in.Wait {
+		result, out, err = asyncJobResult(in.Fleet, j)
+	} else {
+		jctx, cancel := mergeCtx(s.bgCtx, ctx)
+		defer cancel()
+		final, warnings, jobErr := awaitJob(jctx, j)
+		result, out, err = jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, jobErr)
+	}
+	if err == nil {
+		out.Target = target
+	}
+	return result, out, err
 }
 
 func (s *service) mcpStart(ctx context.Context, _ *mcp.CallToolRequest, in FleetInstanceInput) (*mcp.CallToolResult, FleetJobOutput, error) {
@@ -559,6 +633,7 @@ type FleetJobStatusOutput struct {
 	Fleet     string       `json:"fleet"`
 	Instance  string       `json:"instance,omitempty"`
 	State     string       `json:"state"`
+	Step      string       `json:"step,omitempty" jsonschema:"while running, the provisioning step the job is on (e.g. cloning repository, starting container)"`
 	StartedAt string       `json:"started_at,omitempty"`
 	Ms        int64        `json:"ms,omitempty"`
 	Error     string       `json:"error,omitempty"`
@@ -584,7 +659,11 @@ func (s *service) mcpJobStatus(_ context.Context, _ *mcp.CallToolRequest, in Fle
 	if ts := j.summary.GetStartedAt(); ts != nil {
 		out.StartedAt = ts.AsTime().UTC().Format(time.RFC3339)
 	}
-	if d := j.outcome(); d != nil {
+	d := j.outcome()
+	if d == nil {
+		out.Step = protoconv.JobStepFromProto(j.currentStep()).Label()
+	}
+	if d != nil {
 		out.State = "succeeded"
 		if !d.GetSuccess() {
 			out.State = "failed"

@@ -1,0 +1,14 @@
+{
+  "id": "itest-feature",
+  "version": "1.0.0",
+  "name": "fleet itest feature",
+  "description": "Local feature for the fleet integration tests: installs itest-feature and records its option.",
+  "options": {
+    "greeting": {
+      "type": "string",
+      "default": "default-greeting",
+      "description": "Written to /usr/local/share/itest-feature-greeting."
+    }
+  },
+  "containerEnv": { "ITEST_FEATURE_ENV": "from-feature" }
+}

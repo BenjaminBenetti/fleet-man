@@ -7,6 +7,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentstrategy"
 	"github.com/BenjaminBenetti/fleet-man/internal/mcpbridge"
+	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +37,7 @@ func newMCPEnvCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			exports, err := agentstrategy.InstallFleetMCP(filepath.Join(cache, "fleet", "mcp"), []string{self, mcpbridge.Subcommand})
+			exports, err := agentstrategy.InstallFleetMCP(filepath.Join(cache, "fleet", "mcp"), mcpBridgeArgv(self))
 			if err != nil {
 				return err
 			}
@@ -44,4 +45,16 @@ func newMCPEnvCmd() *cobra.Command {
 			return err
 		},
 	}
+}
+
+// mcpBridgeArgv is the plugin's MCP server command for the fleet binary at
+// self. In a Kubernetes pod self is a content-addressed
+// /opt/fleet/bin/fleet-<sha> that a later restage removes, so the stable
+// /usr/bin/fleet link is named instead, and a call waits mcpbridge.PodWait
+// for a daemon whose session to the pod is reopening.
+func mcpBridgeArgv(self string) []string {
+	if filepath.Dir(self) == podseed.BinDir {
+		return []string{podseed.FleetLink, mcpbridge.Subcommand, "--wait", mcpbridge.PodWait.String()}
+	}
+	return []string{self, mcpbridge.Subcommand}
 }

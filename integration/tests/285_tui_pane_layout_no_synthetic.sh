@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Save path never fabricates synthetic ~restored session names during the title-tag race.
 set -euo pipefail
 

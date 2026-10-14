@@ -22,6 +22,68 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type EditorLaunchMode int32
+
+const (
+	EditorLaunchMode_EDITOR_LAUNCH_MODE_UNSPECIFIED EditorLaunchMode = 0
+	// DEVCONTAINER_URI: run argv (`code --folder-uri vscode-remote://dev-container+…`).
+	EditorLaunchMode_EDITOR_LAUNCH_MODE_DEVCONTAINER_URI EditorLaunchMode = 1
+	// CODER_CLI: run argv (`coder open vscode <workspace>`).
+	EditorLaunchMode_EDITOR_LAUNCH_MODE_CODER_CLI EditorLaunchMode = 2
+	// CODESPACES_CLI: run argv (`gh codespace code -c <name>`).
+	EditorLaunchMode_EDITOR_LAUNCH_MODE_CODESPACES_CLI EditorLaunchMode = 3
+	// REMOTE_SSH: the client opens `vscode-remote://ssh-remote+<alias><workspace_folder>`,
+	// where alias is the instance's `*.fleet` host, which ~/.ssh/fleet_config
+	// routes through `fleet ssh-proxy`. argv is empty: the alias names the
+	// daemon the client reached, which only the client knows.
+	EditorLaunchMode_EDITOR_LAUNCH_MODE_REMOTE_SSH EditorLaunchMode = 4
+)
+
+// Enum value maps for EditorLaunchMode.
+var (
+	EditorLaunchMode_name = map[int32]string{
+		0: "EDITOR_LAUNCH_MODE_UNSPECIFIED",
+		1: "EDITOR_LAUNCH_MODE_DEVCONTAINER_URI",
+		2: "EDITOR_LAUNCH_MODE_CODER_CLI",
+		3: "EDITOR_LAUNCH_MODE_CODESPACES_CLI",
+		4: "EDITOR_LAUNCH_MODE_REMOTE_SSH",
+	}
+	EditorLaunchMode_value = map[string]int32{
+		"EDITOR_LAUNCH_MODE_UNSPECIFIED":      0,
+		"EDITOR_LAUNCH_MODE_DEVCONTAINER_URI": 1,
+		"EDITOR_LAUNCH_MODE_CODER_CLI":        2,
+		"EDITOR_LAUNCH_MODE_CODESPACES_CLI":   3,
+		"EDITOR_LAUNCH_MODE_REMOTE_SSH":       4,
+	}
+)
+
+func (x EditorLaunchMode) Enum() *EditorLaunchMode {
+	p := new(EditorLaunchMode)
+	*p = x
+	return p
+}
+
+func (x EditorLaunchMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EditorLaunchMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_exec_proto_enumTypes[0].Descriptor()
+}
+
+func (EditorLaunchMode) Type() protoreflect.EnumType {
+	return &file_exec_proto_enumTypes[0]
+}
+
+func (x EditorLaunchMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EditorLaunchMode.Descriptor instead.
+func (EditorLaunchMode) EnumDescriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{0}
+}
+
 // Exec is a bidi stream for running a command inside an instance's container and
 // piping stdin/stdout/stderr. The FIRST ExecIn MUST carry `start`; subsequent
 // ExecIn carry stdin bytes (or resize). The server replies with ExecOut frames
@@ -40,6 +102,7 @@ type ExecIn struct {
 	//	*ExecIn_Start
 	//	*ExecIn_Stdin
 	//	*ExecIn_Resize
+	//	*ExecIn_PodStart
 	Msg           isExecIn_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -109,6 +172,15 @@ func (x *ExecIn) GetResize() *ExecResize {
 	return nil
 }
 
+func (x *ExecIn) GetPodStart() *PodExecStart {
+	if x != nil {
+		if x, ok := x.Msg.(*ExecIn_PodStart); ok {
+			return x.PodStart
+		}
+	}
+	return nil
+}
+
 type isExecIn_Msg interface {
 	isExecIn_Msg()
 }
@@ -125,11 +197,18 @@ type ExecIn_Resize struct {
 	Resize *ExecResize `protobuf:"bytes,3,opt,name=resize,proto3,oneof"`
 }
 
+type ExecIn_PodStart struct {
+	// pod_start is the first frame of a PodExec stream (in place of start).
+	PodStart *PodExecStart `protobuf:"bytes,4,opt,name=pod_start,json=podStart,proto3,oneof"`
+}
+
 func (*ExecIn_Start) isExecIn_Msg() {}
 
 func (*ExecIn_Stdin) isExecIn_Msg() {}
 
 func (*ExecIn_Resize) isExecIn_Msg() {}
+
+func (*ExecIn_PodStart) isExecIn_Msg() {}
 
 type ExecStart struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -207,6 +286,173 @@ func (x *ExecStart) GetEnv() map[string]string {
 	return nil
 }
 
+// PodExecStart starts a PodExec stream: one command in a Kubernetes
+// instance's pod, named the way the daemon-host `fleet kube-exec` shim's argv
+// names it. The daemon runs it only in a pod of one of its own instances,
+// verified, through the pod's agent; the stream then carries stdin, resizes
+// and the command's output and exit exactly as an Exec stream does.
+type PodExecStart struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// cluster_id is the connection (KubeCluster.id), namespace its namespace
+	// (empty: the connection's), pod the instance's pod and container its dev
+	// container (empty: the dev container).
+	ClusterId string `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	Namespace string `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Pod       string `protobuf:"bytes,3,opt,name=pod,proto3" json:"pod,omitempty"`
+	Container string `protobuf:"bytes,4,opt,name=container,proto3" json:"container,omitempty"`
+	// class is whom the command runs as: exec (as ExecCommand: the remote
+	// user with the devcontainer's environment, in the workspace folder),
+	// script (the session user, as `docker exec -u`), root, or explicit
+	// (user and cwd as given, as the docker shim's `docker exec -u -w`).
+	// Empty is exec.
+	Class string            `protobuf:"bytes,5,opt,name=class,proto3" json:"class,omitempty"`
+	User  string            `protobuf:"bytes,6,opt,name=user,proto3" json:"user,omitempty"`
+	Cwd   string            `protobuf:"bytes,7,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	Argv  []string          `protobuf:"bytes,8,rep,name=argv,proto3" json:"argv,omitempty"`
+	Env   map[string]string `protobuf:"bytes,9,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Tty   bool              `protobuf:"varint,10,opt,name=tty,proto3" json:"tty,omitempty"`
+	Rows  uint32            `protobuf:"varint,11,opt,name=rows,proto3" json:"rows,omitempty"`
+	Cols  uint32            `protobuf:"varint,12,opt,name=cols,proto3" json:"cols,omitempty"`
+	// bulk runs the command on the pod's bulk session (a folder's tar in or
+	// out), so a large transfer does not hold up the latency-sensitive traffic
+	// of the agent's main session. It is never set with tty.
+	Bulk bool `protobuf:"varint,13,opt,name=bulk,proto3" json:"bulk,omitempty"`
+	// quiet keeps the command out of fleet.log: the shim's argv for a
+	// backend's ExecCommandQuiet (polls, probes), whose callers would
+	// otherwise flood the log.
+	Quiet         bool `protobuf:"varint,14,opt,name=quiet,proto3" json:"quiet,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PodExecStart) Reset() {
+	*x = PodExecStart{}
+	mi := &file_exec_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PodExecStart) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PodExecStart) ProtoMessage() {}
+
+func (x *PodExecStart) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PodExecStart.ProtoReflect.Descriptor instead.
+func (*PodExecStart) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PodExecStart) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *PodExecStart) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *PodExecStart) GetPod() string {
+	if x != nil {
+		return x.Pod
+	}
+	return ""
+}
+
+func (x *PodExecStart) GetContainer() string {
+	if x != nil {
+		return x.Container
+	}
+	return ""
+}
+
+func (x *PodExecStart) GetClass() string {
+	if x != nil {
+		return x.Class
+	}
+	return ""
+}
+
+func (x *PodExecStart) GetUser() string {
+	if x != nil {
+		return x.User
+	}
+	return ""
+}
+
+func (x *PodExecStart) GetCwd() string {
+	if x != nil {
+		return x.Cwd
+	}
+	return ""
+}
+
+func (x *PodExecStart) GetArgv() []string {
+	if x != nil {
+		return x.Argv
+	}
+	return nil
+}
+
+func (x *PodExecStart) GetEnv() map[string]string {
+	if x != nil {
+		return x.Env
+	}
+	return nil
+}
+
+func (x *PodExecStart) GetTty() bool {
+	if x != nil {
+		return x.Tty
+	}
+	return false
+}
+
+func (x *PodExecStart) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+func (x *PodExecStart) GetCols() uint32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+func (x *PodExecStart) GetBulk() bool {
+	if x != nil {
+		return x.Bulk
+	}
+	return false
+}
+
+func (x *PodExecStart) GetQuiet() bool {
+	if x != nil {
+		return x.Quiet
+	}
+	return false
+}
+
 type ExecResize struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Rows          uint32                 `protobuf:"varint,1,opt,name=rows,proto3" json:"rows,omitempty"`
@@ -217,7 +463,7 @@ type ExecResize struct {
 
 func (x *ExecResize) Reset() {
 	*x = ExecResize{}
-	mi := &file_exec_proto_msgTypes[2]
+	mi := &file_exec_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -229,7 +475,7 @@ func (x *ExecResize) String() string {
 func (*ExecResize) ProtoMessage() {}
 
 func (x *ExecResize) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[2]
+	mi := &file_exec_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -242,7 +488,7 @@ func (x *ExecResize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecResize.ProtoReflect.Descriptor instead.
 func (*ExecResize) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{2}
+	return file_exec_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ExecResize) GetRows() uint32 {
@@ -273,7 +519,7 @@ type ExecOut struct {
 
 func (x *ExecOut) Reset() {
 	*x = ExecOut{}
-	mi := &file_exec_proto_msgTypes[3]
+	mi := &file_exec_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -285,7 +531,7 @@ func (x *ExecOut) String() string {
 func (*ExecOut) ProtoMessage() {}
 
 func (x *ExecOut) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[3]
+	mi := &file_exec_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -298,7 +544,7 @@ func (x *ExecOut) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecOut.ProtoReflect.Descriptor instead.
 func (*ExecOut) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{3}
+	return file_exec_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ExecOut) GetMsg() isExecOut_Msg {
@@ -367,7 +613,7 @@ type ExecExit struct {
 
 func (x *ExecExit) Reset() {
 	*x = ExecExit{}
-	mi := &file_exec_proto_msgTypes[4]
+	mi := &file_exec_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -379,7 +625,7 @@ func (x *ExecExit) String() string {
 func (*ExecExit) ProtoMessage() {}
 
 func (x *ExecExit) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[4]
+	mi := &file_exec_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -392,7 +638,7 @@ func (x *ExecExit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecExit.ProtoReflect.Descriptor instead.
 func (*ExecExit) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{4}
+	return file_exec_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ExecExit) GetCode() int32 {
@@ -416,14 +662,19 @@ type ResolveExecCommandRequest struct {
 	Fleet    string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
 	Instance string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
 	// command to run inside; empty means "interactive login shell".
-	Argv          []string `protobuf:"bytes,3,rep,name=argv,proto3" json:"argv,omitempty"`
+	Argv []string `protobuf:"bytes,3,rep,name=argv,proto3" json:"argv,omitempty"`
+	// attach: the client attaches a terminal with the argv (a pane, a shell),
+	// not a one-shot. The instance's "sessions reset" notice
+	// (KubeInstanceRuntime.restart_cause) clears, as it does when an Exec
+	// stream opens with tty.
+	Attach        bool `protobuf:"varint,4,opt,name=attach,proto3" json:"attach,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ResolveExecCommandRequest) Reset() {
 	*x = ResolveExecCommandRequest{}
-	mi := &file_exec_proto_msgTypes[5]
+	mi := &file_exec_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -435,7 +686,7 @@ func (x *ResolveExecCommandRequest) String() string {
 func (*ResolveExecCommandRequest) ProtoMessage() {}
 
 func (x *ResolveExecCommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[5]
+	mi := &file_exec_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -448,7 +699,7 @@ func (x *ResolveExecCommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveExecCommandRequest.ProtoReflect.Descriptor instead.
 func (*ResolveExecCommandRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{5}
+	return file_exec_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ResolveExecCommandRequest) GetFleet() string {
@@ -472,6 +723,13 @@ func (x *ResolveExecCommandRequest) GetArgv() []string {
 	return nil
 }
 
+func (x *ResolveExecCommandRequest) GetAttach() bool {
+	if x != nil {
+		return x.Attach
+	}
+	return false
+}
+
 type ResolveExecCommandReply struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// argv[0] is the program (e.g. devcontainer/docker/ssh); the client execs this
@@ -484,7 +742,7 @@ type ResolveExecCommandReply struct {
 
 func (x *ResolveExecCommandReply) Reset() {
 	*x = ResolveExecCommandReply{}
-	mi := &file_exec_proto_msgTypes[6]
+	mi := &file_exec_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -496,7 +754,7 @@ func (x *ResolveExecCommandReply) String() string {
 func (*ResolveExecCommandReply) ProtoMessage() {}
 
 func (x *ResolveExecCommandReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[6]
+	mi := &file_exec_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -509,7 +767,7 @@ func (x *ResolveExecCommandReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveExecCommandReply.ProtoReflect.Descriptor instead.
 func (*ResolveExecCommandReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{6}
+	return file_exec_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ResolveExecCommandReply) GetArgv() []string {
@@ -538,7 +796,7 @@ type LogsRequest struct {
 
 func (x *LogsRequest) Reset() {
 	*x = LogsRequest{}
-	mi := &file_exec_proto_msgTypes[7]
+	mi := &file_exec_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -550,7 +808,7 @@ func (x *LogsRequest) String() string {
 func (*LogsRequest) ProtoMessage() {}
 
 func (x *LogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[7]
+	mi := &file_exec_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -563,7 +821,7 @@ func (x *LogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogsRequest.ProtoReflect.Descriptor instead.
 func (*LogsRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{7}
+	return file_exec_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *LogsRequest) GetFleet() string {
@@ -604,7 +862,7 @@ type LogLine struct {
 
 func (x *LogLine) Reset() {
 	*x = LogLine{}
-	mi := &file_exec_proto_msgTypes[8]
+	mi := &file_exec_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -616,7 +874,7 @@ func (x *LogLine) String() string {
 func (*LogLine) ProtoMessage() {}
 
 func (x *LogLine) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[8]
+	mi := &file_exec_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -629,7 +887,7 @@ func (x *LogLine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogLine.ProtoReflect.Descriptor instead.
 func (*LogLine) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{8}
+	return file_exec_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *LogLine) GetLine() string {
@@ -669,7 +927,7 @@ type ForwardChunk struct {
 
 func (x *ForwardChunk) Reset() {
 	*x = ForwardChunk{}
-	mi := &file_exec_proto_msgTypes[9]
+	mi := &file_exec_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -681,7 +939,7 @@ func (x *ForwardChunk) String() string {
 func (*ForwardChunk) ProtoMessage() {}
 
 func (x *ForwardChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[9]
+	mi := &file_exec_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -694,7 +952,7 @@ func (x *ForwardChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardChunk.ProtoReflect.Descriptor instead.
 func (*ForwardChunk) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{9}
+	return file_exec_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ForwardChunk) GetMsg() isForwardChunk_Msg {
@@ -742,17 +1000,24 @@ func (*ForwardChunk_Data) isForwardChunk_Msg() {}
 // instance to bridge into and the port to reach inside it. There is no
 // local_port — the listen side is entirely the client's business.
 type ForwardOpen struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
-	Instance      string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
-	RemotePort    int32                  `protobuf:"varint,3,opt,name=remote_port,json=remotePort,proto3" json:"remote_port,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Fleet      string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	Instance   string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	RemotePort int32                  `protobuf:"varint,3,opt,name=remote_port,json=remotePort,proto3" json:"remote_port,omitempty"`
+	// half_close asks for a connection that passes the client's half-close
+	// (CloseSend) on and keeps reading after it: on Kubernetes, through the pod
+	// agent instead of the cluster's port-forward, whose runtime drops the
+	// half-close (the peer reads no EOF) and ends the connection about a second
+	// later. Backends whose connections keep a true half-close anyway ignore
+	// it.
+	HalfClose     bool `protobuf:"varint,4,opt,name=half_close,json=halfClose,proto3" json:"half_close,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ForwardOpen) Reset() {
 	*x = ForwardOpen{}
-	mi := &file_exec_proto_msgTypes[10]
+	mi := &file_exec_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -764,7 +1029,7 @@ func (x *ForwardOpen) String() string {
 func (*ForwardOpen) ProtoMessage() {}
 
 func (x *ForwardOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[10]
+	mi := &file_exec_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -777,7 +1042,7 @@ func (x *ForwardOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardOpen.ProtoReflect.Descriptor instead.
 func (*ForwardOpen) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{10}
+	return file_exec_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ForwardOpen) GetFleet() string {
@@ -799,6 +1064,13 @@ func (x *ForwardOpen) GetRemotePort() int32 {
 		return x.RemotePort
 	}
 	return 0
+}
+
+func (x *ForwardOpen) GetHalfClose() bool {
+	if x != nil {
+		return x.HalfClose
+	}
+	return false
 }
 
 // Mic is the virtual-microphone DATA PLANE: one bidi stream per microphone-
@@ -835,7 +1107,7 @@ type MicUp struct {
 
 func (x *MicUp) Reset() {
 	*x = MicUp{}
-	mi := &file_exec_proto_msgTypes[11]
+	mi := &file_exec_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -847,7 +1119,7 @@ func (x *MicUp) String() string {
 func (*MicUp) ProtoMessage() {}
 
 func (x *MicUp) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[11]
+	mi := &file_exec_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -860,7 +1132,7 @@ func (x *MicUp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicUp.ProtoReflect.Descriptor instead.
 func (*MicUp) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{11}
+	return file_exec_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *MicUp) GetMsg() isMicUp_Msg {
@@ -940,7 +1212,7 @@ type MicOpen struct {
 
 func (x *MicOpen) Reset() {
 	*x = MicOpen{}
-	mi := &file_exec_proto_msgTypes[12]
+	mi := &file_exec_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -952,7 +1224,7 @@ func (x *MicOpen) String() string {
 func (*MicOpen) ProtoMessage() {}
 
 func (x *MicOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[12]
+	mi := &file_exec_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -965,7 +1237,7 @@ func (x *MicOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicOpen.ProtoReflect.Descriptor instead.
 func (*MicOpen) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{12}
+	return file_exec_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *MicOpen) GetSampleRate() uint32 {
@@ -1002,7 +1274,7 @@ type MicDevice struct {
 
 func (x *MicDevice) Reset() {
 	*x = MicDevice{}
-	mi := &file_exec_proto_msgTypes[13]
+	mi := &file_exec_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1014,7 +1286,7 @@ func (x *MicDevice) String() string {
 func (*MicDevice) ProtoMessage() {}
 
 func (x *MicDevice) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[13]
+	mi := &file_exec_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1027,7 +1299,7 @@ func (x *MicDevice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicDevice.ProtoReflect.Descriptor instead.
 func (*MicDevice) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{13}
+	return file_exec_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *MicDevice) GetId() string {
@@ -1055,7 +1327,7 @@ type MicDeviceList struct {
 
 func (x *MicDeviceList) Reset() {
 	*x = MicDeviceList{}
-	mi := &file_exec_proto_msgTypes[14]
+	mi := &file_exec_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1067,7 +1339,7 @@ func (x *MicDeviceList) String() string {
 func (*MicDeviceList) ProtoMessage() {}
 
 func (x *MicDeviceList) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[14]
+	mi := &file_exec_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1080,7 +1352,7 @@ func (x *MicDeviceList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicDeviceList.ProtoReflect.Descriptor instead.
 func (*MicDeviceList) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{14}
+	return file_exec_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *MicDeviceList) GetDevices() []*MicDevice {
@@ -1103,7 +1375,7 @@ type MicDown struct {
 
 func (x *MicDown) Reset() {
 	*x = MicDown{}
-	mi := &file_exec_proto_msgTypes[15]
+	mi := &file_exec_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1115,7 +1387,7 @@ func (x *MicDown) String() string {
 func (*MicDown) ProtoMessage() {}
 
 func (x *MicDown) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[15]
+	mi := &file_exec_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1128,7 +1400,7 @@ func (x *MicDown) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicDown.ProtoReflect.Descriptor instead.
 func (*MicDown) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{15}
+	return file_exec_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *MicDown) GetMsg() isMicDown_Msg {
@@ -1183,7 +1455,7 @@ type MicListDevices struct {
 
 func (x *MicListDevices) Reset() {
 	*x = MicListDevices{}
-	mi := &file_exec_proto_msgTypes[16]
+	mi := &file_exec_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1195,7 +1467,7 @@ func (x *MicListDevices) String() string {
 func (*MicListDevices) ProtoMessage() {}
 
 func (x *MicListDevices) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[16]
+	mi := &file_exec_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1208,7 +1480,7 @@ func (x *MicListDevices) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicListDevices.ProtoReflect.Descriptor instead.
 func (*MicListDevices) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{16}
+	return file_exec_proto_rawDescGZIP(), []int{17}
 }
 
 // MicDemand is the server's start/stop signal. active=true means at least one
@@ -1240,7 +1512,7 @@ type MicDemand struct {
 
 func (x *MicDemand) Reset() {
 	*x = MicDemand{}
-	mi := &file_exec_proto_msgTypes[17]
+	mi := &file_exec_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1252,7 +1524,7 @@ func (x *MicDemand) String() string {
 func (*MicDemand) ProtoMessage() {}
 
 func (x *MicDemand) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[17]
+	mi := &file_exec_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1265,7 +1537,7 @@ func (x *MicDemand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicDemand.ProtoReflect.Descriptor instead.
 func (*MicDemand) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{17}
+	return file_exec_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *MicDemand) GetActive() bool {
@@ -1319,7 +1591,7 @@ type MicSource struct {
 
 func (x *MicSource) Reset() {
 	*x = MicSource{}
-	mi := &file_exec_proto_msgTypes[18]
+	mi := &file_exec_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1331,7 +1603,7 @@ func (x *MicSource) String() string {
 func (*MicSource) ProtoMessage() {}
 
 func (x *MicSource) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[18]
+	mi := &file_exec_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1344,7 +1616,7 @@ func (x *MicSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicSource.ProtoReflect.Descriptor instead.
 func (*MicSource) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{18}
+	return file_exec_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *MicSource) GetClient() string {
@@ -1401,7 +1673,7 @@ type MicSources struct {
 
 func (x *MicSources) Reset() {
 	*x = MicSources{}
-	mi := &file_exec_proto_msgTypes[19]
+	mi := &file_exec_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1413,7 +1685,7 @@ func (x *MicSources) String() string {
 func (*MicSources) ProtoMessage() {}
 
 func (x *MicSources) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[19]
+	mi := &file_exec_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1426,7 +1698,7 @@ func (x *MicSources) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicSources.ProtoReflect.Descriptor instead.
 func (*MicSources) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{19}
+	return file_exec_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *MicSources) GetSources() []*MicSource {
@@ -1455,7 +1727,7 @@ type ListMicSourcesRequest struct {
 
 func (x *ListMicSourcesRequest) Reset() {
 	*x = ListMicSourcesRequest{}
-	mi := &file_exec_proto_msgTypes[20]
+	mi := &file_exec_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1467,7 +1739,7 @@ func (x *ListMicSourcesRequest) String() string {
 func (*ListMicSourcesRequest) ProtoMessage() {}
 
 func (x *ListMicSourcesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[20]
+	mi := &file_exec_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1480,7 +1752,7 @@ func (x *ListMicSourcesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMicSourcesRequest.ProtoReflect.Descriptor instead.
 func (*ListMicSourcesRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{20}
+	return file_exec_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ListMicSourcesRequest) GetRefresh() bool {
@@ -1499,7 +1771,7 @@ type ListMicSourcesReply struct {
 
 func (x *ListMicSourcesReply) Reset() {
 	*x = ListMicSourcesReply{}
-	mi := &file_exec_proto_msgTypes[21]
+	mi := &file_exec_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1511,7 +1783,7 @@ func (x *ListMicSourcesReply) String() string {
 func (*ListMicSourcesReply) ProtoMessage() {}
 
 func (x *ListMicSourcesReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[21]
+	mi := &file_exec_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1524,7 +1796,7 @@ func (x *ListMicSourcesReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMicSourcesReply.ProtoReflect.Descriptor instead.
 func (*ListMicSourcesReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{21}
+	return file_exec_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListMicSourcesReply) GetSources() *MicSources {
@@ -1580,7 +1852,7 @@ type SSHAgentUp struct {
 
 func (x *SSHAgentUp) Reset() {
 	*x = SSHAgentUp{}
-	mi := &file_exec_proto_msgTypes[22]
+	mi := &file_exec_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1592,7 +1864,7 @@ func (x *SSHAgentUp) String() string {
 func (*SSHAgentUp) ProtoMessage() {}
 
 func (x *SSHAgentUp) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[22]
+	mi := &file_exec_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1605,7 +1877,7 @@ func (x *SSHAgentUp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentUp.ProtoReflect.Descriptor instead.
 func (*SSHAgentUp) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{22}
+	return file_exec_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SSHAgentUp) GetMsg() isSSHAgentUp_Msg {
@@ -1709,7 +1981,7 @@ type SSHAgentHello struct {
 
 func (x *SSHAgentHello) Reset() {
 	*x = SSHAgentHello{}
-	mi := &file_exec_proto_msgTypes[23]
+	mi := &file_exec_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1721,7 +1993,7 @@ func (x *SSHAgentHello) String() string {
 func (*SSHAgentHello) ProtoMessage() {}
 
 func (x *SSHAgentHello) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[23]
+	mi := &file_exec_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1734,7 +2006,7 @@ func (x *SSHAgentHello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentHello.ProtoReflect.Descriptor instead.
 func (*SSHAgentHello) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{23}
+	return file_exec_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SSHAgentHello) GetClient() string {
@@ -1762,7 +2034,7 @@ type SSHAgentReady struct {
 
 func (x *SSHAgentReady) Reset() {
 	*x = SSHAgentReady{}
-	mi := &file_exec_proto_msgTypes[24]
+	mi := &file_exec_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1774,7 +2046,7 @@ func (x *SSHAgentReady) String() string {
 func (*SSHAgentReady) ProtoMessage() {}
 
 func (x *SSHAgentReady) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[24]
+	mi := &file_exec_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1787,7 +2059,7 @@ func (x *SSHAgentReady) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentReady.ProtoReflect.Descriptor instead.
 func (*SSHAgentReady) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{24}
+	return file_exec_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SSHAgentReady) GetConnId() uint64 {
@@ -1807,7 +2079,7 @@ type SSHAgentPong struct {
 
 func (x *SSHAgentPong) Reset() {
 	*x = SSHAgentPong{}
-	mi := &file_exec_proto_msgTypes[25]
+	mi := &file_exec_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1819,7 +2091,7 @@ func (x *SSHAgentPong) String() string {
 func (*SSHAgentPong) ProtoMessage() {}
 
 func (x *SSHAgentPong) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[25]
+	mi := &file_exec_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1832,7 +2104,7 @@ func (x *SSHAgentPong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentPong.ProtoReflect.Descriptor instead.
 func (*SSHAgentPong) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{25}
+	return file_exec_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SSHAgentPong) GetSeq() uint64 {
@@ -1858,7 +2130,7 @@ type SSHAgentDown struct {
 
 func (x *SSHAgentDown) Reset() {
 	*x = SSHAgentDown{}
-	mi := &file_exec_proto_msgTypes[26]
+	mi := &file_exec_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1870,7 +2142,7 @@ func (x *SSHAgentDown) String() string {
 func (*SSHAgentDown) ProtoMessage() {}
 
 func (x *SSHAgentDown) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[26]
+	mi := &file_exec_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1883,7 +2155,7 @@ func (x *SSHAgentDown) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentDown.ProtoReflect.Descriptor instead.
 func (*SSHAgentDown) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{26}
+	return file_exec_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SSHAgentDown) GetMsg() isSSHAgentDown_Msg {
@@ -1985,7 +2257,7 @@ type SSHAgentOpen struct {
 
 func (x *SSHAgentOpen) Reset() {
 	*x = SSHAgentOpen{}
-	mi := &file_exec_proto_msgTypes[27]
+	mi := &file_exec_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1997,7 +2269,7 @@ func (x *SSHAgentOpen) String() string {
 func (*SSHAgentOpen) ProtoMessage() {}
 
 func (x *SSHAgentOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[27]
+	mi := &file_exec_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2010,7 +2282,7 @@ func (x *SSHAgentOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentOpen.ProtoReflect.Descriptor instead.
 func (*SSHAgentOpen) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{27}
+	return file_exec_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SSHAgentOpen) GetConnId() uint64 {
@@ -2038,7 +2310,7 @@ type SSHAgentData struct {
 
 func (x *SSHAgentData) Reset() {
 	*x = SSHAgentData{}
-	mi := &file_exec_proto_msgTypes[28]
+	mi := &file_exec_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2050,7 +2322,7 @@ func (x *SSHAgentData) String() string {
 func (*SSHAgentData) ProtoMessage() {}
 
 func (x *SSHAgentData) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[28]
+	mi := &file_exec_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2063,7 +2335,7 @@ func (x *SSHAgentData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentData.ProtoReflect.Descriptor instead.
 func (*SSHAgentData) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{28}
+	return file_exec_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SSHAgentData) GetConnId() uint64 {
@@ -2093,7 +2365,7 @@ type SSHAgentClose struct {
 
 func (x *SSHAgentClose) Reset() {
 	*x = SSHAgentClose{}
-	mi := &file_exec_proto_msgTypes[29]
+	mi := &file_exec_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2105,7 +2377,7 @@ func (x *SSHAgentClose) String() string {
 func (*SSHAgentClose) ProtoMessage() {}
 
 func (x *SSHAgentClose) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[29]
+	mi := &file_exec_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2118,7 +2390,7 @@ func (x *SSHAgentClose) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentClose.ProtoReflect.Descriptor instead.
 func (*SSHAgentClose) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{29}
+	return file_exec_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *SSHAgentClose) GetConnId() uint64 {
@@ -2146,7 +2418,7 @@ type SSHAgentStatus struct {
 
 func (x *SSHAgentStatus) Reset() {
 	*x = SSHAgentStatus{}
-	mi := &file_exec_proto_msgTypes[30]
+	mi := &file_exec_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2158,7 +2430,7 @@ func (x *SSHAgentStatus) String() string {
 func (*SSHAgentStatus) ProtoMessage() {}
 
 func (x *SSHAgentStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[30]
+	mi := &file_exec_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2171,7 +2443,7 @@ func (x *SSHAgentStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentStatus.ProtoReflect.Descriptor instead.
 func (*SSHAgentStatus) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{30}
+	return file_exec_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SSHAgentStatus) GetActive() bool {
@@ -2193,7 +2465,7 @@ type SSHAgentPing struct {
 
 func (x *SSHAgentPing) Reset() {
 	*x = SSHAgentPing{}
-	mi := &file_exec_proto_msgTypes[31]
+	mi := &file_exec_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2205,7 +2477,7 @@ func (x *SSHAgentPing) String() string {
 func (*SSHAgentPing) ProtoMessage() {}
 
 func (x *SSHAgentPing) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[31]
+	mi := &file_exec_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2218,7 +2490,7 @@ func (x *SSHAgentPing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentPing.ProtoReflect.Descriptor instead.
 func (*SSHAgentPing) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{31}
+	return file_exec_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SSHAgentPing) GetSeq() uint64 {
@@ -2248,7 +2520,7 @@ type CopyFileRequest struct {
 
 func (x *CopyFileRequest) Reset() {
 	*x = CopyFileRequest{}
-	mi := &file_exec_proto_msgTypes[32]
+	mi := &file_exec_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2260,7 +2532,7 @@ func (x *CopyFileRequest) String() string {
 func (*CopyFileRequest) ProtoMessage() {}
 
 func (x *CopyFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[32]
+	mi := &file_exec_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2273,7 +2545,7 @@ func (x *CopyFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyFileRequest.ProtoReflect.Descriptor instead.
 func (*CopyFileRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{32}
+	return file_exec_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *CopyFileRequest) GetFleet() string {
@@ -2310,7 +2582,7 @@ type CopyFileChunk struct {
 
 func (x *CopyFileChunk) Reset() {
 	*x = CopyFileChunk{}
-	mi := &file_exec_proto_msgTypes[33]
+	mi := &file_exec_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2322,7 +2594,7 @@ func (x *CopyFileChunk) String() string {
 func (*CopyFileChunk) ProtoMessage() {}
 
 func (x *CopyFileChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[33]
+	mi := &file_exec_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2335,7 +2607,7 @@ func (x *CopyFileChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyFileChunk.ProtoReflect.Descriptor instead.
 func (*CopyFileChunk) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{33}
+	return file_exec_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *CopyFileChunk) GetMsg() isCopyFileChunk_Msg {
@@ -2399,7 +2671,7 @@ type CopyFileMeta struct {
 
 func (x *CopyFileMeta) Reset() {
 	*x = CopyFileMeta{}
-	mi := &file_exec_proto_msgTypes[34]
+	mi := &file_exec_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2411,7 +2683,7 @@ func (x *CopyFileMeta) String() string {
 func (*CopyFileMeta) ProtoMessage() {}
 
 func (x *CopyFileMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[34]
+	mi := &file_exec_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2424,7 +2696,7 @@ func (x *CopyFileMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyFileMeta.ProtoReflect.Descriptor instead.
 func (*CopyFileMeta) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{34}
+	return file_exec_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *CopyFileMeta) GetName() string {
@@ -2477,7 +2749,7 @@ type CopyIntoChunk struct {
 
 func (x *CopyIntoChunk) Reset() {
 	*x = CopyIntoChunk{}
-	mi := &file_exec_proto_msgTypes[35]
+	mi := &file_exec_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2489,7 +2761,7 @@ func (x *CopyIntoChunk) String() string {
 func (*CopyIntoChunk) ProtoMessage() {}
 
 func (x *CopyIntoChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[35]
+	mi := &file_exec_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2502,7 +2774,7 @@ func (x *CopyIntoChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyIntoChunk.ProtoReflect.Descriptor instead.
 func (*CopyIntoChunk) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{35}
+	return file_exec_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *CopyIntoChunk) GetMsg() isCopyIntoChunk_Msg {
@@ -2578,7 +2850,7 @@ type CopyIntoOpen struct {
 
 func (x *CopyIntoOpen) Reset() {
 	*x = CopyIntoOpen{}
-	mi := &file_exec_proto_msgTypes[36]
+	mi := &file_exec_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2590,7 +2862,7 @@ func (x *CopyIntoOpen) String() string {
 func (*CopyIntoOpen) ProtoMessage() {}
 
 func (x *CopyIntoOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[36]
+	mi := &file_exec_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2603,7 +2875,7 @@ func (x *CopyIntoOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyIntoOpen.ProtoReflect.Descriptor instead.
 func (*CopyIntoOpen) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{36}
+	return file_exec_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *CopyIntoOpen) GetFleet() string {
@@ -2667,7 +2939,7 @@ type CopyIntoReply struct {
 
 func (x *CopyIntoReply) Reset() {
 	*x = CopyIntoReply{}
-	mi := &file_exec_proto_msgTypes[37]
+	mi := &file_exec_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2679,7 +2951,7 @@ func (x *CopyIntoReply) String() string {
 func (*CopyIntoReply) ProtoMessage() {}
 
 func (x *CopyIntoReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[37]
+	mi := &file_exec_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2692,7 +2964,7 @@ func (x *CopyIntoReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyIntoReply.ProtoReflect.Descriptor instead.
 func (*CopyIntoReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{37}
+	return file_exec_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *CopyIntoReply) GetPath() string {
@@ -2723,7 +2995,7 @@ type ResolveLogsCommandRequest struct {
 
 func (x *ResolveLogsCommandRequest) Reset() {
 	*x = ResolveLogsCommandRequest{}
-	mi := &file_exec_proto_msgTypes[38]
+	mi := &file_exec_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2735,7 +3007,7 @@ func (x *ResolveLogsCommandRequest) String() string {
 func (*ResolveLogsCommandRequest) ProtoMessage() {}
 
 func (x *ResolveLogsCommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[38]
+	mi := &file_exec_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2748,7 +3020,7 @@ func (x *ResolveLogsCommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveLogsCommandRequest.ProtoReflect.Descriptor instead.
 func (*ResolveLogsCommandRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{38}
+	return file_exec_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ResolveLogsCommandRequest) GetFleet() string {
@@ -2774,7 +3046,7 @@ type ResolveLogsCommandReply struct {
 
 func (x *ResolveLogsCommandReply) Reset() {
 	*x = ResolveLogsCommandReply{}
-	mi := &file_exec_proto_msgTypes[39]
+	mi := &file_exec_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2786,7 +3058,7 @@ func (x *ResolveLogsCommandReply) String() string {
 func (*ResolveLogsCommandReply) ProtoMessage() {}
 
 func (x *ResolveLogsCommandReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[39]
+	mi := &file_exec_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2799,7 +3071,7 @@ func (x *ResolveLogsCommandReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveLogsCommandReply.ProtoReflect.Descriptor instead.
 func (*ResolveLogsCommandReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{39}
+	return file_exec_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ResolveLogsCommandReply) GetArgv() []string {
@@ -2807,6 +3079,128 @@ func (x *ResolveLogsCommandReply) GetArgv() []string {
 		return x.Argv
 	}
 	return nil
+}
+
+// ResolveEditorLaunch says how the caller opens VS Code on an instance (the
+// TUI's `c`, `fleet code`). The daemon picks the mode: a local caller opens a
+// local devcontainer instance through the Dev Containers URI; a remote caller
+// (gateway, Armada SSH, FLEET_SERVER) and every Kubernetes instance go through
+// VS Code Remote-SSH to the in-instance `fleet ssh-server`; Coder and
+// Codespaces keep their own CLIs.
+type ResolveEditorLaunchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	Instance      string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveEditorLaunchRequest) Reset() {
+	*x = ResolveEditorLaunchRequest{}
+	mi := &file_exec_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveEditorLaunchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveEditorLaunchRequest) ProtoMessage() {}
+
+func (x *ResolveEditorLaunchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveEditorLaunchRequest.ProtoReflect.Descriptor instead.
+func (*ResolveEditorLaunchRequest) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *ResolveEditorLaunchRequest) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+func (x *ResolveEditorLaunchRequest) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+type ResolveEditorLaunchReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Mode  EditorLaunchMode       `protobuf:"varint,1,opt,name=mode,proto3,enum=fleetgrpc.EditorLaunchMode" json:"mode,omitempty"`
+	// argv the client runs for the DEVCONTAINER_URI, CODER_CLI and
+	// CODESPACES_CLI modes.
+	Argv []string `protobuf:"bytes,2,rep,name=argv,proto3" json:"argv,omitempty"`
+	// REMOTE_SSH: the folder VS Code opens inside the instance (the
+	// devcontainer's workspaceFolder).
+	WorkspaceFolder string `protobuf:"bytes,3,opt,name=workspace_folder,json=workspaceFolder,proto3" json:"workspace_folder,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ResolveEditorLaunchReply) Reset() {
+	*x = ResolveEditorLaunchReply{}
+	mi := &file_exec_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveEditorLaunchReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveEditorLaunchReply) ProtoMessage() {}
+
+func (x *ResolveEditorLaunchReply) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveEditorLaunchReply.ProtoReflect.Descriptor instead.
+func (*ResolveEditorLaunchReply) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *ResolveEditorLaunchReply) GetMode() EditorLaunchMode {
+	if x != nil {
+		return x.Mode
+	}
+	return EditorLaunchMode_EDITOR_LAUNCH_MODE_UNSPECIFIED
+}
+
+func (x *ResolveEditorLaunchReply) GetArgv() []string {
+	if x != nil {
+		return x.Argv
+	}
+	return nil
+}
+
+func (x *ResolveEditorLaunchReply) GetWorkspaceFolder() string {
+	if x != nil {
+		return x.WorkspaceFolder
+	}
+	return ""
 }
 
 // TriggerLogs reads back an automation trigger's recorded event logs. Each time
@@ -2826,7 +3220,7 @@ type TriggerLogsRequest struct {
 
 func (x *TriggerLogsRequest) Reset() {
 	*x = TriggerLogsRequest{}
-	mi := &file_exec_proto_msgTypes[40]
+	mi := &file_exec_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2838,7 +3232,7 @@ func (x *TriggerLogsRequest) String() string {
 func (*TriggerLogsRequest) ProtoMessage() {}
 
 func (x *TriggerLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[40]
+	mi := &file_exec_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2851,7 +3245,7 @@ func (x *TriggerLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerLogsRequest.ProtoReflect.Descriptor instead.
 func (*TriggerLogsRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{40}
+	return file_exec_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *TriggerLogsRequest) GetFleet() string {
@@ -2881,7 +3275,7 @@ type TriggerLogsReply struct {
 
 func (x *TriggerLogsReply) Reset() {
 	*x = TriggerLogsReply{}
-	mi := &file_exec_proto_msgTypes[41]
+	mi := &file_exec_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2893,7 +3287,7 @@ func (x *TriggerLogsReply) String() string {
 func (*TriggerLogsReply) ProtoMessage() {}
 
 func (x *TriggerLogsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[41]
+	mi := &file_exec_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2906,7 +3300,7 @@ func (x *TriggerLogsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerLogsReply.ProtoReflect.Descriptor instead.
 func (*TriggerLogsReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{41}
+	return file_exec_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *TriggerLogsReply) GetLogs() string {
@@ -2935,7 +3329,7 @@ type GetCoderTemplateParamsRequest struct {
 
 func (x *GetCoderTemplateParamsRequest) Reset() {
 	*x = GetCoderTemplateParamsRequest{}
-	mi := &file_exec_proto_msgTypes[42]
+	mi := &file_exec_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2947,7 +3341,7 @@ func (x *GetCoderTemplateParamsRequest) String() string {
 func (*GetCoderTemplateParamsRequest) ProtoMessage() {}
 
 func (x *GetCoderTemplateParamsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[42]
+	mi := &file_exec_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2960,7 +3354,7 @@ func (x *GetCoderTemplateParamsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCoderTemplateParamsRequest.ProtoReflect.Descriptor instead.
 func (*GetCoderTemplateParamsRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{42}
+	return file_exec_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetCoderTemplateParamsRequest) GetTemplate() string {
@@ -2986,7 +3380,7 @@ type CoderRichParameter struct {
 
 func (x *CoderRichParameter) Reset() {
 	*x = CoderRichParameter{}
-	mi := &file_exec_proto_msgTypes[43]
+	mi := &file_exec_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2998,7 +3392,7 @@ func (x *CoderRichParameter) String() string {
 func (*CoderRichParameter) ProtoMessage() {}
 
 func (x *CoderRichParameter) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[43]
+	mi := &file_exec_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3011,7 +3405,7 @@ func (x *CoderRichParameter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CoderRichParameter.ProtoReflect.Descriptor instead.
 func (*CoderRichParameter) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{43}
+	return file_exec_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *CoderRichParameter) GetName() string {
@@ -3059,7 +3453,7 @@ type GetCoderTemplateParamsReply struct {
 
 func (x *GetCoderTemplateParamsReply) Reset() {
 	*x = GetCoderTemplateParamsReply{}
-	mi := &file_exec_proto_msgTypes[44]
+	mi := &file_exec_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3071,7 +3465,7 @@ func (x *GetCoderTemplateParamsReply) String() string {
 func (*GetCoderTemplateParamsReply) ProtoMessage() {}
 
 func (x *GetCoderTemplateParamsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[44]
+	mi := &file_exec_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3084,7 +3478,7 @@ func (x *GetCoderTemplateParamsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCoderTemplateParamsReply.ProtoReflect.Descriptor instead.
 func (*GetCoderTemplateParamsReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{44}
+	return file_exec_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *GetCoderTemplateParamsReply) GetParameters() []*CoderRichParameter {
@@ -3114,7 +3508,7 @@ type GetBrowserConfigRequest struct {
 
 func (x *GetBrowserConfigRequest) Reset() {
 	*x = GetBrowserConfigRequest{}
-	mi := &file_exec_proto_msgTypes[45]
+	mi := &file_exec_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3126,7 +3520,7 @@ func (x *GetBrowserConfigRequest) String() string {
 func (*GetBrowserConfigRequest) ProtoMessage() {}
 
 func (x *GetBrowserConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[45]
+	mi := &file_exec_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3139,7 +3533,7 @@ func (x *GetBrowserConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBrowserConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetBrowserConfigRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{45}
+	return file_exec_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *GetBrowserConfigRequest) GetFleet() string {
@@ -3168,7 +3562,7 @@ type GetBrowserConfigReply struct {
 
 func (x *GetBrowserConfigReply) Reset() {
 	*x = GetBrowserConfigReply{}
-	mi := &file_exec_proto_msgTypes[46]
+	mi := &file_exec_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3180,7 +3574,7 @@ func (x *GetBrowserConfigReply) String() string {
 func (*GetBrowserConfigReply) ProtoMessage() {}
 
 func (x *GetBrowserConfigReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[46]
+	mi := &file_exec_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3193,7 +3587,7 @@ func (x *GetBrowserConfigReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBrowserConfigReply.ProtoReflect.Descriptor instead.
 func (*GetBrowserConfigReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{46}
+	return file_exec_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *GetBrowserConfigReply) GetInitialUrl() string {
@@ -3211,7 +3605,7 @@ func (x *GetBrowserConfigReply) GetHasLanding() bool {
 }
 
 // PrepareBrowser does all the container-side work for a browser open: ensure the
-// privoxy proxy is installed + running, then resolve the page to open —
+// browser proxy is running, then resolve the page to open —
 // honouring an explicit target_url, else the devcontainer.json initialUrl /
 // Fleet Launch landing page (starting the landing-page server when chosen) /
 // the default. It returns the URL the client's browser should open.
@@ -3231,7 +3625,7 @@ type PrepareBrowserRequest struct {
 
 func (x *PrepareBrowserRequest) Reset() {
 	*x = PrepareBrowserRequest{}
-	mi := &file_exec_proto_msgTypes[47]
+	mi := &file_exec_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3243,7 +3637,7 @@ func (x *PrepareBrowserRequest) String() string {
 func (*PrepareBrowserRequest) ProtoMessage() {}
 
 func (x *PrepareBrowserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[47]
+	mi := &file_exec_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3256,7 +3650,7 @@ func (x *PrepareBrowserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareBrowserRequest.ProtoReflect.Descriptor instead.
 func (*PrepareBrowserRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{47}
+	return file_exec_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *PrepareBrowserRequest) GetFleet() string {
@@ -3296,7 +3690,7 @@ type PrepareBrowserReply struct {
 
 func (x *PrepareBrowserReply) Reset() {
 	*x = PrepareBrowserReply{}
-	mi := &file_exec_proto_msgTypes[48]
+	mi := &file_exec_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3308,7 +3702,7 @@ func (x *PrepareBrowserReply) String() string {
 func (*PrepareBrowserReply) ProtoMessage() {}
 
 func (x *PrepareBrowserReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[48]
+	mi := &file_exec_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3321,7 +3715,7 @@ func (x *PrepareBrowserReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareBrowserReply.ProtoReflect.Descriptor instead.
 func (*PrepareBrowserReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{48}
+	return file_exec_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *PrepareBrowserReply) GetInitialUrl() string {
@@ -3336,11 +3730,12 @@ var File_exec_proto protoreflect.FileDescriptor
 const file_exec_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"exec.proto\x12\tfleetgrpc\x1a\fconfig.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x86\x01\n" +
+	"exec.proto\x12\tfleetgrpc\x1a\fconfig.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbe\x01\n" +
 	"\x06ExecIn\x12,\n" +
 	"\x05start\x18\x01 \x01(\v2\x14.fleetgrpc.ExecStartH\x00R\x05start\x12\x16\n" +
 	"\x05stdin\x18\x02 \x01(\fH\x00R\x05stdin\x12/\n" +
-	"\x06resize\x18\x03 \x01(\v2\x15.fleetgrpc.ExecResizeH\x00R\x06resizeB\x05\n" +
+	"\x06resize\x18\x03 \x01(\v2\x15.fleetgrpc.ExecResizeH\x00R\x06resize\x126\n" +
+	"\tpod_start\x18\x04 \x01(\v2\x17.fleetgrpc.PodExecStartH\x00R\bpodStartB\x05\n" +
 	"\x03msg\"\xcc\x01\n" +
 	"\tExecStart\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
@@ -3348,6 +3743,26 @@ const file_exec_proto_rawDesc = "" +
 	"\x04argv\x18\x03 \x03(\tR\x04argv\x12\x10\n" +
 	"\x03tty\x18\x04 \x01(\bR\x03tty\x12/\n" +
 	"\x03env\x18\x05 \x03(\v2\x1d.fleetgrpc.ExecStart.EnvEntryR\x03env\x1a6\n" +
+	"\bEnvEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9b\x03\n" +
+	"\fPodExecStart\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03pod\x18\x03 \x01(\tR\x03pod\x12\x1c\n" +
+	"\tcontainer\x18\x04 \x01(\tR\tcontainer\x12\x14\n" +
+	"\x05class\x18\x05 \x01(\tR\x05class\x12\x12\n" +
+	"\x04user\x18\x06 \x01(\tR\x04user\x12\x10\n" +
+	"\x03cwd\x18\a \x01(\tR\x03cwd\x12\x12\n" +
+	"\x04argv\x18\b \x03(\tR\x04argv\x122\n" +
+	"\x03env\x18\t \x03(\v2 .fleetgrpc.PodExecStart.EnvEntryR\x03env\x12\x10\n" +
+	"\x03tty\x18\n" +
+	" \x01(\bR\x03tty\x12\x12\n" +
+	"\x04rows\x18\v \x01(\rR\x04rows\x12\x12\n" +
+	"\x04cols\x18\f \x01(\rR\x04cols\x12\x12\n" +
+	"\x04bulk\x18\r \x01(\bR\x04bulk\x12\x14\n" +
+	"\x05quiet\x18\x0e \x01(\bR\x05quiet\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"4\n" +
@@ -3363,11 +3778,12 @@ const file_exec_proto_rawDesc = "" +
 	"\bExecExit\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x19\n" +
 	"\x05error\x18\x02 \x01(\tH\x00R\x05error\x88\x01\x01B\b\n" +
-	"\x06_error\"a\n" +
+	"\x06_error\"y\n" +
 	"\x19ResolveExecCommandRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x12\n" +
-	"\x04argv\x18\x03 \x03(\tR\x04argv\"\xa4\x01\n" +
+	"\x04argv\x18\x03 \x03(\tR\x04argv\x12\x16\n" +
+	"\x06attach\x18\x04 \x01(\bR\x06attach\"\xa4\x01\n" +
 	"\x17ResolveExecCommandReply\x12\x12\n" +
 	"\x04argv\x18\x01 \x03(\tR\x04argv\x12=\n" +
 	"\x03env\x18\x02 \x03(\v2+.fleetgrpc.ResolveExecCommandReply.EnvEntryR\x03env\x1a6\n" +
@@ -3386,12 +3802,14 @@ const file_exec_proto_rawDesc = "" +
 	"\fForwardChunk\x12,\n" +
 	"\x04open\x18\x01 \x01(\v2\x16.fleetgrpc.ForwardOpenH\x00R\x04open\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\x05\n" +
-	"\x03msg\"`\n" +
+	"\x03msg\"\x7f\n" +
 	"\vForwardOpen\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x1f\n" +
 	"\vremote_port\x18\x03 \x01(\x05R\n" +
-	"remotePort\"\x86\x01\n" +
+	"remotePort\x12\x1d\n" +
+	"\n" +
+	"half_close\x18\x04 \x01(\bR\thalfClose\"\x86\x01\n" +
 	"\x05MicUp\x12(\n" +
 	"\x04open\x18\x01 \x01(\v2\x12.fleetgrpc.MicOpenH\x00R\x04open\x12\x16\n" +
 	"\x05audio\x18\x02 \x01(\fH\x00R\x05audio\x124\n" +
@@ -3498,7 +3916,14 @@ const file_exec_proto_rawDesc = "" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\"-\n" +
 	"\x17ResolveLogsCommandReply\x12\x12\n" +
-	"\x04argv\x18\x01 \x03(\tR\x04argv\"D\n" +
+	"\x04argv\x18\x01 \x03(\tR\x04argv\"N\n" +
+	"\x1aResolveEditorLaunchRequest\x12\x14\n" +
+	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
+	"\binstance\x18\x02 \x01(\tR\binstance\"\x8a\x01\n" +
+	"\x18ResolveEditorLaunchReply\x12/\n" +
+	"\x04mode\x18\x01 \x01(\x0e2\x1b.fleetgrpc.EditorLaunchModeR\x04mode\x12\x12\n" +
+	"\x04argv\x18\x02 \x03(\tR\x04argv\x12)\n" +
+	"\x10workspace_folder\x18\x03 \x01(\tR\x0fworkspaceFolder\"D\n" +
 	"\x12TriggerLogsRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x18\n" +
 	"\atrigger\x18\x02 \x01(\tR\atrigger\"<\n" +
@@ -3535,7 +3960,13 @@ const file_exec_proto_rawDesc = "" +
 	"\v_target_url\"6\n" +
 	"\x13PrepareBrowserReply\x12\x1f\n" +
 	"\vinitial_url\x18\x01 \x01(\tR\n" +
-	"initialUrlB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"initialUrl*\xcb\x01\n" +
+	"\x10EditorLaunchMode\x12\"\n" +
+	"\x1eEDITOR_LAUNCH_MODE_UNSPECIFIED\x10\x00\x12'\n" +
+	"#EDITOR_LAUNCH_MODE_DEVCONTAINER_URI\x10\x01\x12 \n" +
+	"\x1cEDITOR_LAUNCH_MODE_CODER_CLI\x10\x02\x12%\n" +
+	"!EDITOR_LAUNCH_MODE_CODESPACES_CLI\x10\x03\x12!\n" +
+	"\x1dEDITOR_LAUNCH_MODE_REMOTE_SSH\x10\x04B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_exec_proto_rawDescOnce sync.Once
@@ -3549,97 +3980,106 @@ func file_exec_proto_rawDescGZIP() []byte {
 	return file_exec_proto_rawDescData
 }
 
-var file_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 51)
+var file_exec_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
 var file_exec_proto_goTypes = []any{
-	(*ExecIn)(nil),                        // 0: fleetgrpc.ExecIn
-	(*ExecStart)(nil),                     // 1: fleetgrpc.ExecStart
-	(*ExecResize)(nil),                    // 2: fleetgrpc.ExecResize
-	(*ExecOut)(nil),                       // 3: fleetgrpc.ExecOut
-	(*ExecExit)(nil),                      // 4: fleetgrpc.ExecExit
-	(*ResolveExecCommandRequest)(nil),     // 5: fleetgrpc.ResolveExecCommandRequest
-	(*ResolveExecCommandReply)(nil),       // 6: fleetgrpc.ResolveExecCommandReply
-	(*LogsRequest)(nil),                   // 7: fleetgrpc.LogsRequest
-	(*LogLine)(nil),                       // 8: fleetgrpc.LogLine
-	(*ForwardChunk)(nil),                  // 9: fleetgrpc.ForwardChunk
-	(*ForwardOpen)(nil),                   // 10: fleetgrpc.ForwardOpen
-	(*MicUp)(nil),                         // 11: fleetgrpc.MicUp
-	(*MicOpen)(nil),                       // 12: fleetgrpc.MicOpen
-	(*MicDevice)(nil),                     // 13: fleetgrpc.MicDevice
-	(*MicDeviceList)(nil),                 // 14: fleetgrpc.MicDeviceList
-	(*MicDown)(nil),                       // 15: fleetgrpc.MicDown
-	(*MicListDevices)(nil),                // 16: fleetgrpc.MicListDevices
-	(*MicDemand)(nil),                     // 17: fleetgrpc.MicDemand
-	(*MicSource)(nil),                     // 18: fleetgrpc.MicSource
-	(*MicSources)(nil),                    // 19: fleetgrpc.MicSources
-	(*ListMicSourcesRequest)(nil),         // 20: fleetgrpc.ListMicSourcesRequest
-	(*ListMicSourcesReply)(nil),           // 21: fleetgrpc.ListMicSourcesReply
-	(*SSHAgentUp)(nil),                    // 22: fleetgrpc.SSHAgentUp
-	(*SSHAgentHello)(nil),                 // 23: fleetgrpc.SSHAgentHello
-	(*SSHAgentReady)(nil),                 // 24: fleetgrpc.SSHAgentReady
-	(*SSHAgentPong)(nil),                  // 25: fleetgrpc.SSHAgentPong
-	(*SSHAgentDown)(nil),                  // 26: fleetgrpc.SSHAgentDown
-	(*SSHAgentOpen)(nil),                  // 27: fleetgrpc.SSHAgentOpen
-	(*SSHAgentData)(nil),                  // 28: fleetgrpc.SSHAgentData
-	(*SSHAgentClose)(nil),                 // 29: fleetgrpc.SSHAgentClose
-	(*SSHAgentStatus)(nil),                // 30: fleetgrpc.SSHAgentStatus
-	(*SSHAgentPing)(nil),                  // 31: fleetgrpc.SSHAgentPing
-	(*CopyFileRequest)(nil),               // 32: fleetgrpc.CopyFileRequest
-	(*CopyFileChunk)(nil),                 // 33: fleetgrpc.CopyFileChunk
-	(*CopyFileMeta)(nil),                  // 34: fleetgrpc.CopyFileMeta
-	(*CopyIntoChunk)(nil),                 // 35: fleetgrpc.CopyIntoChunk
-	(*CopyIntoOpen)(nil),                  // 36: fleetgrpc.CopyIntoOpen
-	(*CopyIntoReply)(nil),                 // 37: fleetgrpc.CopyIntoReply
-	(*ResolveLogsCommandRequest)(nil),     // 38: fleetgrpc.ResolveLogsCommandRequest
-	(*ResolveLogsCommandReply)(nil),       // 39: fleetgrpc.ResolveLogsCommandReply
-	(*TriggerLogsRequest)(nil),            // 40: fleetgrpc.TriggerLogsRequest
-	(*TriggerLogsReply)(nil),              // 41: fleetgrpc.TriggerLogsReply
-	(*GetCoderTemplateParamsRequest)(nil), // 42: fleetgrpc.GetCoderTemplateParamsRequest
-	(*CoderRichParameter)(nil),            // 43: fleetgrpc.CoderRichParameter
-	(*GetCoderTemplateParamsReply)(nil),   // 44: fleetgrpc.GetCoderTemplateParamsReply
-	(*GetBrowserConfigRequest)(nil),       // 45: fleetgrpc.GetBrowserConfigRequest
-	(*GetBrowserConfigReply)(nil),         // 46: fleetgrpc.GetBrowserConfigReply
-	(*PrepareBrowserRequest)(nil),         // 47: fleetgrpc.PrepareBrowserRequest
-	(*PrepareBrowserReply)(nil),           // 48: fleetgrpc.PrepareBrowserReply
-	nil,                                   // 49: fleetgrpc.ExecStart.EnvEntry
-	nil,                                   // 50: fleetgrpc.ResolveExecCommandReply.EnvEntry
-	(*timestamppb.Timestamp)(nil),         // 51: google.protobuf.Timestamp
-	(*MicSettings)(nil),                   // 52: fleetgrpc.MicSettings
+	(EditorLaunchMode)(0),                 // 0: fleetgrpc.EditorLaunchMode
+	(*ExecIn)(nil),                        // 1: fleetgrpc.ExecIn
+	(*ExecStart)(nil),                     // 2: fleetgrpc.ExecStart
+	(*PodExecStart)(nil),                  // 3: fleetgrpc.PodExecStart
+	(*ExecResize)(nil),                    // 4: fleetgrpc.ExecResize
+	(*ExecOut)(nil),                       // 5: fleetgrpc.ExecOut
+	(*ExecExit)(nil),                      // 6: fleetgrpc.ExecExit
+	(*ResolveExecCommandRequest)(nil),     // 7: fleetgrpc.ResolveExecCommandRequest
+	(*ResolveExecCommandReply)(nil),       // 8: fleetgrpc.ResolveExecCommandReply
+	(*LogsRequest)(nil),                   // 9: fleetgrpc.LogsRequest
+	(*LogLine)(nil),                       // 10: fleetgrpc.LogLine
+	(*ForwardChunk)(nil),                  // 11: fleetgrpc.ForwardChunk
+	(*ForwardOpen)(nil),                   // 12: fleetgrpc.ForwardOpen
+	(*MicUp)(nil),                         // 13: fleetgrpc.MicUp
+	(*MicOpen)(nil),                       // 14: fleetgrpc.MicOpen
+	(*MicDevice)(nil),                     // 15: fleetgrpc.MicDevice
+	(*MicDeviceList)(nil),                 // 16: fleetgrpc.MicDeviceList
+	(*MicDown)(nil),                       // 17: fleetgrpc.MicDown
+	(*MicListDevices)(nil),                // 18: fleetgrpc.MicListDevices
+	(*MicDemand)(nil),                     // 19: fleetgrpc.MicDemand
+	(*MicSource)(nil),                     // 20: fleetgrpc.MicSource
+	(*MicSources)(nil),                    // 21: fleetgrpc.MicSources
+	(*ListMicSourcesRequest)(nil),         // 22: fleetgrpc.ListMicSourcesRequest
+	(*ListMicSourcesReply)(nil),           // 23: fleetgrpc.ListMicSourcesReply
+	(*SSHAgentUp)(nil),                    // 24: fleetgrpc.SSHAgentUp
+	(*SSHAgentHello)(nil),                 // 25: fleetgrpc.SSHAgentHello
+	(*SSHAgentReady)(nil),                 // 26: fleetgrpc.SSHAgentReady
+	(*SSHAgentPong)(nil),                  // 27: fleetgrpc.SSHAgentPong
+	(*SSHAgentDown)(nil),                  // 28: fleetgrpc.SSHAgentDown
+	(*SSHAgentOpen)(nil),                  // 29: fleetgrpc.SSHAgentOpen
+	(*SSHAgentData)(nil),                  // 30: fleetgrpc.SSHAgentData
+	(*SSHAgentClose)(nil),                 // 31: fleetgrpc.SSHAgentClose
+	(*SSHAgentStatus)(nil),                // 32: fleetgrpc.SSHAgentStatus
+	(*SSHAgentPing)(nil),                  // 33: fleetgrpc.SSHAgentPing
+	(*CopyFileRequest)(nil),               // 34: fleetgrpc.CopyFileRequest
+	(*CopyFileChunk)(nil),                 // 35: fleetgrpc.CopyFileChunk
+	(*CopyFileMeta)(nil),                  // 36: fleetgrpc.CopyFileMeta
+	(*CopyIntoChunk)(nil),                 // 37: fleetgrpc.CopyIntoChunk
+	(*CopyIntoOpen)(nil),                  // 38: fleetgrpc.CopyIntoOpen
+	(*CopyIntoReply)(nil),                 // 39: fleetgrpc.CopyIntoReply
+	(*ResolveLogsCommandRequest)(nil),     // 40: fleetgrpc.ResolveLogsCommandRequest
+	(*ResolveLogsCommandReply)(nil),       // 41: fleetgrpc.ResolveLogsCommandReply
+	(*ResolveEditorLaunchRequest)(nil),    // 42: fleetgrpc.ResolveEditorLaunchRequest
+	(*ResolveEditorLaunchReply)(nil),      // 43: fleetgrpc.ResolveEditorLaunchReply
+	(*TriggerLogsRequest)(nil),            // 44: fleetgrpc.TriggerLogsRequest
+	(*TriggerLogsReply)(nil),              // 45: fleetgrpc.TriggerLogsReply
+	(*GetCoderTemplateParamsRequest)(nil), // 46: fleetgrpc.GetCoderTemplateParamsRequest
+	(*CoderRichParameter)(nil),            // 47: fleetgrpc.CoderRichParameter
+	(*GetCoderTemplateParamsReply)(nil),   // 48: fleetgrpc.GetCoderTemplateParamsReply
+	(*GetBrowserConfigRequest)(nil),       // 49: fleetgrpc.GetBrowserConfigRequest
+	(*GetBrowserConfigReply)(nil),         // 50: fleetgrpc.GetBrowserConfigReply
+	(*PrepareBrowserRequest)(nil),         // 51: fleetgrpc.PrepareBrowserRequest
+	(*PrepareBrowserReply)(nil),           // 52: fleetgrpc.PrepareBrowserReply
+	nil,                                   // 53: fleetgrpc.ExecStart.EnvEntry
+	nil,                                   // 54: fleetgrpc.PodExecStart.EnvEntry
+	nil,                                   // 55: fleetgrpc.ResolveExecCommandReply.EnvEntry
+	(*timestamppb.Timestamp)(nil),         // 56: google.protobuf.Timestamp
+	(*MicSettings)(nil),                   // 57: fleetgrpc.MicSettings
 }
 var file_exec_proto_depIdxs = []int32{
-	1,  // 0: fleetgrpc.ExecIn.start:type_name -> fleetgrpc.ExecStart
-	2,  // 1: fleetgrpc.ExecIn.resize:type_name -> fleetgrpc.ExecResize
-	49, // 2: fleetgrpc.ExecStart.env:type_name -> fleetgrpc.ExecStart.EnvEntry
-	4,  // 3: fleetgrpc.ExecOut.exit:type_name -> fleetgrpc.ExecExit
-	50, // 4: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
-	51, // 5: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
-	10, // 6: fleetgrpc.ForwardChunk.open:type_name -> fleetgrpc.ForwardOpen
-	12, // 7: fleetgrpc.MicUp.open:type_name -> fleetgrpc.MicOpen
-	14, // 8: fleetgrpc.MicUp.devices:type_name -> fleetgrpc.MicDeviceList
-	13, // 9: fleetgrpc.MicDeviceList.devices:type_name -> fleetgrpc.MicDevice
-	17, // 10: fleetgrpc.MicDown.demand:type_name -> fleetgrpc.MicDemand
-	16, // 11: fleetgrpc.MicDown.list_devices:type_name -> fleetgrpc.MicListDevices
-	13, // 12: fleetgrpc.MicSource.devices:type_name -> fleetgrpc.MicDevice
-	18, // 13: fleetgrpc.MicSources.sources:type_name -> fleetgrpc.MicSource
-	52, // 14: fleetgrpc.MicSources.settings:type_name -> fleetgrpc.MicSettings
-	19, // 15: fleetgrpc.ListMicSourcesReply.sources:type_name -> fleetgrpc.MicSources
-	23, // 16: fleetgrpc.SSHAgentUp.hello:type_name -> fleetgrpc.SSHAgentHello
-	24, // 17: fleetgrpc.SSHAgentUp.ready:type_name -> fleetgrpc.SSHAgentReady
-	28, // 18: fleetgrpc.SSHAgentUp.data:type_name -> fleetgrpc.SSHAgentData
-	29, // 19: fleetgrpc.SSHAgentUp.close:type_name -> fleetgrpc.SSHAgentClose
-	25, // 20: fleetgrpc.SSHAgentUp.pong:type_name -> fleetgrpc.SSHAgentPong
-	27, // 21: fleetgrpc.SSHAgentDown.open:type_name -> fleetgrpc.SSHAgentOpen
-	28, // 22: fleetgrpc.SSHAgentDown.data:type_name -> fleetgrpc.SSHAgentData
-	29, // 23: fleetgrpc.SSHAgentDown.close:type_name -> fleetgrpc.SSHAgentClose
-	30, // 24: fleetgrpc.SSHAgentDown.status:type_name -> fleetgrpc.SSHAgentStatus
-	31, // 25: fleetgrpc.SSHAgentDown.ping:type_name -> fleetgrpc.SSHAgentPing
-	34, // 26: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
-	36, // 27: fleetgrpc.CopyIntoChunk.open:type_name -> fleetgrpc.CopyIntoOpen
-	43, // 28: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
-	29, // [29:29] is the sub-list for method output_type
-	29, // [29:29] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	2,  // 0: fleetgrpc.ExecIn.start:type_name -> fleetgrpc.ExecStart
+	4,  // 1: fleetgrpc.ExecIn.resize:type_name -> fleetgrpc.ExecResize
+	3,  // 2: fleetgrpc.ExecIn.pod_start:type_name -> fleetgrpc.PodExecStart
+	53, // 3: fleetgrpc.ExecStart.env:type_name -> fleetgrpc.ExecStart.EnvEntry
+	54, // 4: fleetgrpc.PodExecStart.env:type_name -> fleetgrpc.PodExecStart.EnvEntry
+	6,  // 5: fleetgrpc.ExecOut.exit:type_name -> fleetgrpc.ExecExit
+	55, // 6: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
+	56, // 7: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
+	12, // 8: fleetgrpc.ForwardChunk.open:type_name -> fleetgrpc.ForwardOpen
+	14, // 9: fleetgrpc.MicUp.open:type_name -> fleetgrpc.MicOpen
+	16, // 10: fleetgrpc.MicUp.devices:type_name -> fleetgrpc.MicDeviceList
+	15, // 11: fleetgrpc.MicDeviceList.devices:type_name -> fleetgrpc.MicDevice
+	19, // 12: fleetgrpc.MicDown.demand:type_name -> fleetgrpc.MicDemand
+	18, // 13: fleetgrpc.MicDown.list_devices:type_name -> fleetgrpc.MicListDevices
+	15, // 14: fleetgrpc.MicSource.devices:type_name -> fleetgrpc.MicDevice
+	20, // 15: fleetgrpc.MicSources.sources:type_name -> fleetgrpc.MicSource
+	57, // 16: fleetgrpc.MicSources.settings:type_name -> fleetgrpc.MicSettings
+	21, // 17: fleetgrpc.ListMicSourcesReply.sources:type_name -> fleetgrpc.MicSources
+	25, // 18: fleetgrpc.SSHAgentUp.hello:type_name -> fleetgrpc.SSHAgentHello
+	26, // 19: fleetgrpc.SSHAgentUp.ready:type_name -> fleetgrpc.SSHAgentReady
+	30, // 20: fleetgrpc.SSHAgentUp.data:type_name -> fleetgrpc.SSHAgentData
+	31, // 21: fleetgrpc.SSHAgentUp.close:type_name -> fleetgrpc.SSHAgentClose
+	27, // 22: fleetgrpc.SSHAgentUp.pong:type_name -> fleetgrpc.SSHAgentPong
+	29, // 23: fleetgrpc.SSHAgentDown.open:type_name -> fleetgrpc.SSHAgentOpen
+	30, // 24: fleetgrpc.SSHAgentDown.data:type_name -> fleetgrpc.SSHAgentData
+	31, // 25: fleetgrpc.SSHAgentDown.close:type_name -> fleetgrpc.SSHAgentClose
+	32, // 26: fleetgrpc.SSHAgentDown.status:type_name -> fleetgrpc.SSHAgentStatus
+	33, // 27: fleetgrpc.SSHAgentDown.ping:type_name -> fleetgrpc.SSHAgentPing
+	36, // 28: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
+	38, // 29: fleetgrpc.CopyIntoChunk.open:type_name -> fleetgrpc.CopyIntoOpen
+	0,  // 30: fleetgrpc.ResolveEditorLaunchReply.mode:type_name -> fleetgrpc.EditorLaunchMode
+	47, // 31: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
+	32, // [32:32] is the sub-list for method output_type
+	32, // [32:32] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_exec_proto_init() }
@@ -3652,62 +4092,64 @@ func file_exec_proto_init() {
 		(*ExecIn_Start)(nil),
 		(*ExecIn_Stdin)(nil),
 		(*ExecIn_Resize)(nil),
+		(*ExecIn_PodStart)(nil),
 	}
-	file_exec_proto_msgTypes[3].OneofWrappers = []any{
+	file_exec_proto_msgTypes[4].OneofWrappers = []any{
 		(*ExecOut_Stdout)(nil),
 		(*ExecOut_Stderr)(nil),
 		(*ExecOut_Exit)(nil),
 	}
-	file_exec_proto_msgTypes[4].OneofWrappers = []any{}
-	file_exec_proto_msgTypes[7].OneofWrappers = []any{}
-	file_exec_proto_msgTypes[9].OneofWrappers = []any{
+	file_exec_proto_msgTypes[5].OneofWrappers = []any{}
+	file_exec_proto_msgTypes[8].OneofWrappers = []any{}
+	file_exec_proto_msgTypes[10].OneofWrappers = []any{
 		(*ForwardChunk_Open)(nil),
 		(*ForwardChunk_Data)(nil),
 	}
-	file_exec_proto_msgTypes[11].OneofWrappers = []any{
+	file_exec_proto_msgTypes[12].OneofWrappers = []any{
 		(*MicUp_Open)(nil),
 		(*MicUp_Audio)(nil),
 		(*MicUp_Devices)(nil),
 	}
-	file_exec_proto_msgTypes[15].OneofWrappers = []any{
+	file_exec_proto_msgTypes[16].OneofWrappers = []any{
 		(*MicDown_Demand)(nil),
 		(*MicDown_ListDevices)(nil),
 	}
-	file_exec_proto_msgTypes[22].OneofWrappers = []any{
+	file_exec_proto_msgTypes[23].OneofWrappers = []any{
 		(*SSHAgentUp_Hello)(nil),
 		(*SSHAgentUp_Ready)(nil),
 		(*SSHAgentUp_Data)(nil),
 		(*SSHAgentUp_Close)(nil),
 		(*SSHAgentUp_Pong)(nil),
 	}
-	file_exec_proto_msgTypes[26].OneofWrappers = []any{
+	file_exec_proto_msgTypes[27].OneofWrappers = []any{
 		(*SSHAgentDown_Open)(nil),
 		(*SSHAgentDown_Data)(nil),
 		(*SSHAgentDown_Close)(nil),
 		(*SSHAgentDown_Status)(nil),
 		(*SSHAgentDown_Ping)(nil),
 	}
-	file_exec_proto_msgTypes[33].OneofWrappers = []any{
+	file_exec_proto_msgTypes[34].OneofWrappers = []any{
 		(*CopyFileChunk_Meta)(nil),
 		(*CopyFileChunk_Data)(nil),
 	}
-	file_exec_proto_msgTypes[35].OneofWrappers = []any{
+	file_exec_proto_msgTypes[36].OneofWrappers = []any{
 		(*CopyIntoChunk_Open)(nil),
 		(*CopyIntoChunk_Data)(nil),
 	}
-	file_exec_proto_msgTypes[47].OneofWrappers = []any{}
+	file_exec_proto_msgTypes[50].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_exec_proto_rawDesc), len(file_exec_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   51,
+			NumEnums:      1,
+			NumMessages:   55,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_exec_proto_goTypes,
 		DependencyIndexes: file_exec_proto_depIdxs,
+		EnumInfos:         file_exec_proto_enumTypes,
 		MessageInfos:      file_exec_proto_msgTypes,
 	}.Build()
 	File_exec_proto = out.File

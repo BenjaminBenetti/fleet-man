@@ -104,6 +104,25 @@ func TestWithOriginAgent(t *testing.T) {
 	}
 }
 
+// TestHostAgentPaths: every daemon-host path a devcontainer's bind of the
+// user's agent may name: the relay, the origin agent, SSH_AUTH_SOCK now and
+// a FLEET_SSH_AGENT_SOCK path, each once; never "off".
+func TestHostAgentPaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(EnvAuthSock, HostSocketPath())
+	t.Setenv(EnvOrigin, "/tmp/origin.sock")
+	t.Setenv(EnvOverride, "/run/host-services/ssh-auth.sock")
+	want := []string{HostSocketPath(), "/tmp/origin.sock", "/run/host-services/ssh-auth.sock"}
+	if got := HostAgentPaths(); !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	t.Setenv(EnvAuthSock, "/tmp/other.sock")
+	t.Setenv(EnvOverride, "off")
+	if got := HostAgentPaths(); !slices.Equal(got, []string{HostSocketPath(), "/tmp/other.sock"}) {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestRelayUsable(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(func() {
@@ -194,5 +213,60 @@ func TestRelayUsablePublishedByADeadDaemon(t *testing.T) {
 		if got := RelayUsable(); got != c.want {
 			t.Errorf("%s: RelayUsable() = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// TestPodSourceFor is where a Kubernetes pod's ssh-agent socket is served
+// from, on a Linux and a macOS daemon: the relay unless the override names a
+// live socket on the daemon host (a path only a Docker VM has falls back to
+// the relay, saying so), and off when forwarding is off. macOS daemons use
+// the relay for pods, never Docker Desktop's VM socket.
+func TestPodSourceFor(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		for _, tc := range []struct {
+			name     string
+			override string
+			live     bool
+			want     PodSource
+			fellBack bool
+		}{
+			{"relay", "", false, PodAgentRelay, false},
+			{"live override", "/run/user/1000/agent.sock", true, PodAgentOverride, false},
+			{"missing override", "/run/host-services/ssh-auth.sock", false, PodAgentRelay, true},
+			{"off", "off", false, PodAgentOff, false},
+			{"none", "None", false, PodAgentOff, false},
+		} {
+			t.Run(goos+"/"+tc.name, func(t *testing.T) {
+				got, fellBack := PodSourceFor(tc.override, goos, tc.live)
+				if got != tc.want || fellBack != tc.fellBack {
+					t.Fatalf("PodSourceFor(%q, %s, %v) = %v, %v; want %v, %v", tc.override, goos, tc.live, got, fellBack, tc.want, tc.fellBack)
+				}
+			})
+		}
+	}
+}
+
+// TestCurrentPodSource reads the override's liveness off the daemon host: a
+// path with a socket bound is dialled, the same path without one is not.
+func TestCurrentPodSource(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "agent.sock")
+	t.Setenv(EnvOverride, sock)
+	if src, fellBack := CurrentPodSource(); src != PodAgentRelay || !fellBack {
+		t.Fatalf("missing override: %v %v", src, fellBack)
+	}
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if src, fellBack := CurrentPodSource(); src != PodAgentOverride || fellBack {
+		t.Fatalf("live override: %v %v", src, fellBack)
+	}
+	if !PodAgentUsable(PodAgentOverride) || PodAgentUsable(PodAgentOff) {
+		t.Fatal("usability of the override and of off")
+	}
+	t.Setenv(EnvOverride, "off")
+	if src, _ := CurrentPodSource(); src != PodAgentOff {
+		t.Fatalf("off: %v", src)
 	}
 }

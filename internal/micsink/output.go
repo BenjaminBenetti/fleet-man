@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -15,11 +17,48 @@ import (
 
 var outputClientConfig = "/etc/pulse/client.conf.d/00-fleet-mic.conf"
 
+// UserClientConfig is where the audio setup script points the session user's
+// pulse clients at the private server when the instance has no root to write
+// /etc (a cluster that runs every container as one non-root uid, on an image
+// that ships the audio packages), relative to the user's home; under
+// $XDG_CONFIG_HOME instead when that is set, as the script (and libpulse)
+// has it.
+const UserClientConfig = ".config/" + userPulseDropIn
+
+// userPulseDropIn is the user's drop-in relative to their config directory.
+const userPulseDropIn = "pulse/client.conf.d/00-fleet-mic.conf"
+
+// userClientConfig is the session user's drop-in ("" when they have no
+// home); a var for tests.
+var userClientConfig = func() string {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, userPulseDropIn)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, UserClientConfig)
+}
+
 // A sound server alone is not sufficient: applications must discover it.
 // Images may already contain PulseAudio without fleet's routing configuration;
 // failing before ready makes the daemon run the shared audio setup script.
+// The system-wide drop-in serves every user; the session user's own (written
+// where there is no root) serves that user, who is the only one there is.
 func outputConfigured() bool {
-	data, err := os.ReadFile(outputClientConfig)
+	for _, path := range []string{outputClientConfig, userClientConfig()} {
+		if path != "" && pointsAtServer(path) {
+			return true
+		}
+	}
+	return false
+}
+
+// pointsAtServer reports whether the pulse client config at path sends its
+// clients to the private server.
+func pointsAtServer(path string) bool {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
@@ -132,8 +171,25 @@ func StopOutput() error {
 	})
 }
 
-// RunOutput captures the sink's monitor: ready\n, followed by raw wire PCM.
-// It deliberately does not record fleetmic. Stdin EOF is the daemon lifeline
+// The output source's gating. Nothing goes out while the instance plays
+// silence: an output stream is open to every running instance while a client
+// is attached (audio output is on by default), and on a cluster each one
+// would otherwise cost 192 KB/s through the API server. An audible burst goes
+// out whole, followed by outputTail silent frames (so the client's player
+// ends on silence rather than mid-sample), then nothing; while it is quiet, a
+// silent frame every AliveInterval tells the daemon the source still runs
+// (the daemon drops it, and closes a source it has heard nothing from for
+// AliveDeadline). The null sink's monitor is exactly silent when nothing
+// plays into it, so this also gates the stream on there being a sink input.
+const outputTail = 5
+
+// outputAliveInterval is how often a quiet source sends its heartbeat frame
+// (a var so tests can shorten it).
+var outputAliveInterval = AliveInterval
+
+// RunOutput captures the sink's monitor: ready\n, followed by raw wire PCM in
+// whole frames of output.ChunkBytes, gated on audibility (outputTail). It
+// deliberately does not record fleetmic. Stdin EOF is the daemon lifeline
 // (docker exec killing its local process alone need not kill the remote exec).
 func RunOutput(parent context.Context, stdin io.Reader, stdout io.Writer) error {
 	if !outputConfigured() {
@@ -159,6 +215,83 @@ func RunOutput(parent context.Context, stdin io.Reader, stdout io.Writer) error 
 	if _, err := fmt.Fprintln(stdout, "ready"); err != nil {
 		return err
 	}
-	_, err = io.Copy(stdout, pipe)
-	return err
+	return forwardOutput(ctx, pipe, stdout)
+}
+
+// forwardOutput sends the audible frames of pcm (and their tail) to out, and
+// a silent heartbeat frame while it is quiet, until pcm or out fails or ctx
+// ends. Every write is one or more whole frames.
+func forwardOutput(ctx context.Context, pcm io.Reader, out io.Writer) error {
+	var mu sync.Mutex
+	last := time.Now()
+	send := func(frame []byte) error {
+		mu.Lock()
+		defer mu.Unlock()
+		last = time.Now()
+		_, err := out.Write(frame)
+		return err
+	}
+	// The heartbeat goroutine ends with forwardOutput (unless it is stuck in
+	// a write to out, which fails once the daemon's end of out goes).
+	interval := outputAliveInterval
+	stop, beatDone := make(chan struct{}), make(chan struct{})
+	defer func() {
+		close(stop)
+		select {
+		case <-beatDone:
+		case <-time.After(time.Second):
+		}
+	}()
+	beatErr := make(chan error, 1)
+	go func() {
+		defer close(beatDone)
+		silence := make([]byte, output.ChunkBytes)
+		tick := time.NewTicker(max(interval/5, 10*time.Millisecond))
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			mu.Lock()
+			due := time.Since(last) >= interval
+			mu.Unlock()
+			if due {
+				if err := send(silence); err != nil {
+					beatErr <- err
+					return
+				}
+			}
+		}
+	}()
+	// A source starts quiet: leading silence is not sent.
+	quiet := outputTail
+	for {
+		frame := make([]byte, output.ChunkBytes)
+		if _, err := io.ReadFull(pcm, frame); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		select {
+		case err := <-beatErr:
+			return err
+		default:
+		}
+		if output.Silent(frame) {
+			if quiet >= outputTail {
+				continue
+			}
+			quiet++
+		} else {
+			quiet = 0
+		}
+		if err := send(frame); err != nil {
+			return err
+		}
+	}
 }

@@ -3,7 +3,10 @@ package server
 import (
 	"context"
 	"fmt"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -11,6 +14,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/browserproxy"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/landingpage"
@@ -19,32 +23,114 @@ import (
 )
 
 // browser.go owns the CONTAINER-side half of fleet's host-browser feature: the
-// privoxy proxy install/start, reading the workspace devcontainer.json
-// customization, and staging + running the Fleet Launch landing-page server.
-// The HOST-side half (the Chrome process, its data dir, the port forward) stays
-// in the thin TUI client (internal/tui/browser.go). This split keeps every
-// backend touch server-side (the P5 boundary) while the user's browser still
-// launches locally.
+// in-instance browser proxy (`fleet browser-proxy`, built into the staged fleet
+// binary), reading the workspace devcontainer.json customization, and the
+// Fleet Launch landing-page server the same binary hosts. The HOST-side half
+// (the Chrome process, its data dir, the port forward) stays in the thin TUI
+// client (internal/tui/browser.go). This split keeps every backend touch
+// server-side (the P5 boundary) while the user's browser still launches
+// locally.
+//
+// Both in-instance servers are started, pid-tracked and restarted after a
+// refresh of the staged binary alike. They listen on every interface where
+// the daemon dials the instance's address (Docker), and on 127.0.0.1 where it
+// reaches the instance's own loopback (a backend.PortDialer: Kubernetes), so a
+// pod never publishes them on its network. The proxy needs no package manager,
+// root or egress; a privoxy an older fleet installed and started on the
+// proxy's port is stopped first. Only where the instance cannot run the
+// daemon's own fleet binary (a macOS daemon's Docker instances, whose staged
+// binary is the daemon's darwin build; a Coder or Codespaces workspace of
+// another architecture than the daemon's) is privoxy still installed
+// instead.
 
-// browserProxyPort is the port privoxy listens on inside the container. It is
-// hard-coded into privoxyConfig below; the client forwards a local port to it.
-const browserProxyPort = 58888
+// browserProxyPort is the port the browser proxy listens on inside the
+// container; the client forwards a local port to it.
+const browserProxyPort = browserproxy.DefaultPort
 
 // defaultBrowserURL is the page the browser opens to when the workspace's
 // devcontainer.json does not specify an initialUrl.
 const defaultBrowserURL = "about:blank"
 
-// landingPagePidPath / landingPageLogPath track the in-container landing-page
-// server fleet-launch hosts, namespaced under fleet-launch.
-const (
-	landingPagePidPath = "/tmp/fleet-launch-landingpage.pid"
-	landingPageLogPath = "/tmp/fleet-launch-landingpage.log"
-)
+// browserFiles is where the in-instance browser servers keep their pid and log
+// files, and the binary that serves them (a var so tests run the scripts
+// against a directory of their own).
+type browserFiles struct {
+	proxyPid, proxyLog     string
+	landingPid, landingLog string
+	// legacyPid is the pid file of the privoxy older fleets started.
+	legacyPid string
+	bin       string
+}
 
-// --- Proxy setup script (privoxy) ------------------------------------------
+var browserPaths = browserFiles{
+	proxyPid:   "/tmp/fleet-browser-proxy.pid",
+	proxyLog:   "/tmp/fleet-browser-proxy.log",
+	landingPid: "/tmp/fleet-launch-landingpage.pid",
+	landingLog: "/tmp/fleet-launch-landingpage.log",
+	legacyPid:  "/tmp/fleet-proxy.pid",
+	bin:        fleetlaunch.RemotePath,
+}
+
+// browserStartWait bounds a server's start, until its listening line (a
+// var so tests can shorten it).
+var browserStartWait = 10 * time.Second
+
+// builtinBrowserProxy reports whether b's instance, of platform, runs the
+// built-in proxy: it needs the daemon's fleet build in the instance, which a
+// backend that stages its own (fleetlaunch.Stager: Kubernetes' pod build)
+// always has, and the others get as a copy of the daemon's executable, which
+// runs there only when the daemon is Linux and the instance is Linux on the
+// daemon's architecture (a Coder or Codespaces workspace may be neither). A
+// var for tests.
+var builtinBrowserProxy = func(b backend.Backend, platform instancePlatform) bool {
+	if _, ok := b.(fleetlaunch.Stager); ok {
+		return true
+	}
+	return runtime.GOOS == "linux" && platform.runs("linux", runtime.GOARCH)
+}
+
+// instancePlatform is an instance's `uname -s` and `uname -m` (empty where
+// it has no uname).
+type instancePlatform struct{ os, machine string }
+
+// runs reports whether a fleet binary built for goos/goarch runs on the
+// platform. One that cannot be told does not.
+func (p instancePlatform) runs(goos, goarch string) bool {
+	return strings.EqualFold(p.os, goos) && unameArch(p.machine) == goarch
+}
+
+// unameArch is the GOARCH of a `uname -m` machine name.
+func unameArch(machine string) string {
+	switch m := strings.ToLower(strings.TrimSpace(machine)); {
+	case m == "x86_64", m == "amd64":
+		return "amd64"
+	case m == "aarch64", m == "arm64", m == "armv8l", m == "armv8b":
+		return "arm64"
+	case m == "i386", m == "i486", m == "i586", m == "i686":
+		return "386"
+	case strings.HasPrefix(m, "armv"):
+		return "arm"
+	default:
+		return m
+	}
+}
+
+// browserBindAddr is the address the in-instance browser servers listen on:
+// 127.0.0.1 where the daemon reaches the instance's own loopback
+// (backend.PortDialer), else every interface ("").
+func browserBindAddr(b backend.Backend) string {
+	if _, ok := b.(backend.PortDialer); ok {
+		return "127.0.0.1"
+	}
+	return ""
+}
+
+// --- Legacy proxy setup script (privoxy) -----------------------------------
 //
-// privoxy is used instead of tinyproxy because tinyproxy mishandles responses
-// with multiple Set-Cookie headers; privoxy forwards them verbatim.
+// Only for instances that cannot run the daemon's fleet binary (see
+// builtinBrowserProxy). privoxy is used instead of tinyproxy because tinyproxy
+// mishandles responses with multiple Set-Cookie headers; privoxy forwards them
+// verbatim.
 
 // privoxyEnsureInstalled installs privoxy if not present (sudo fallback across
 // package managers).
@@ -59,8 +145,10 @@ var privoxyAction = `{ -block -filter -handle-as-image -set-image-blocker -hide-
 var privoxyConfig = `listen-address 0.0.0.0:58888\npermit-access 0.0.0.0/0\ntoggle 0\nenable-remote-toggle 0\nenable-remote-http-toggle 0\nenable-edit-actions 0\nconfdir /etc/privoxy\nactionsfile /tmp/fleet-proxy.action\n`
 
 // proxySetupScript installs privoxy (if missing) and starts it idempotently.
+// It counts as running only when its pid file names a live privoxy: a
+// restarted container gives the pid an earlier one left to another process.
 var proxySetupScript = privoxyEnsureInstalled +
-	`if [ -f /tmp/fleet-proxy.pid ] && kill -0 $(cat /tmp/fleet-proxy.pid) 2>/dev/null; then echo 'ALREADY_RUNNING'; exit 0; fi; ` +
+	`p="$(cat /tmp/fleet-proxy.pid 2>/dev/null)"; if [ -n "$p" ] && kill -0 "$p" 2>/dev/null && { [ ! -r "/proc/$p/cmdline" ] || grep -q privoxy "/proc/$p/cmdline" 2>/dev/null; }; then echo 'ALREADY_RUNNING'; exit 0; fi; ` +
 	`printf '` + privoxyAction + `' > /tmp/fleet-proxy.action; ` +
 	`printf '` + privoxyConfig + `' > /tmp/fleet-proxy.conf; ` +
 	`privoxy --pidfile /tmp/fleet-proxy.pid /tmp/fleet-proxy.conf && echo 'STARTED' || { echo 'START_FAILED'; exit 1; }`
@@ -68,57 +156,89 @@ var proxySetupScript = privoxyEnsureInstalled +
 // GetBrowserConfig reads the workspace's devcontainer.json fleet customization
 // so the TUI can decide whether to show the launch chooser. A load error reads
 // as "nothing configured".
-func (s *service) GetBrowserConfig(_ context.Context, req *fleetgrpc.GetBrowserConfigRequest) (*fleetgrpc.GetBrowserConfigReply, error) {
+func (s *service) GetBrowserConfig(ctx context.Context, req *fleetgrpc.GetBrowserConfigRequest) (*fleetgrpc.GetBrowserConfigReply, error) {
 	inst, err := resolveServerInstance(req.GetFleet(), req.GetInstance())
 	if err != nil {
 		return nil, err
 	}
 	reply := &fleetgrpc.GetBrowserConfigReply{}
-	if fc, err := devcontainer.LoadFleetCustomizations(inst.WorkspaceDir); err == nil {
+	b := backendutil.NewForInstance(inst, false)
+	if fc, err := loadWorkspaceCustomizations(ctx, b, inst.WorkspaceDir); err == nil {
 		reply.InitialUrl = fc.Browser.InitialURL
 		reply.HasLanding = fc.FleetLaunch.Configured()
 	}
 	return reply, nil
 }
 
-// PrepareBrowser ensures the privoxy proxy is running in the container and
-// resolves the page the browser should open to. An explicit target_url wins; a
-// load error falls back to the default page rather than blocking the launch.
-func (s *service) PrepareBrowser(_ context.Context, req *fleetgrpc.PrepareBrowserRequest) (*fleetgrpc.PrepareBrowserReply, error) {
+// PrepareBrowser ensures the browser proxy is running in the container and
+// resolves the page the browser should open to (starting the landing page
+// when that is the page). An explicit target_url wins; a load error falls
+// back to the default page rather than blocking the launch.
+func (s *service) PrepareBrowser(ctx context.Context, req *fleetgrpc.PrepareBrowserRequest) (*fleetgrpc.PrepareBrowserReply, error) {
 	inst, err := resolveServerInstance(req.GetFleet(), req.GetInstance())
 	if err != nil {
 		return nil, err
 	}
 	b := backendutil.NewForInstance(inst, false)
 	wsDir := inst.WorkspaceDir
-
-	if err := ensureProxyRunning(b, wsDir); err != nil {
-		flog.Error("browser prepare failed", "fleet", req.GetFleet(), "instance", req.GetInstance(), "err", err)
-		return nil, status.Errorf(codes.Internal, "%v", err)
-	}
+	// The browser's first page load opens a burst of connections through the
+	// proxy's forward: a backend whose dials share a connection sets it up
+	// meanwhile.
+	warmBrowserPorts(b, inst.ContainerID)
 
 	initialURL := defaultBrowserURL
+	landing := false
 	switch {
 	case req.GetTargetUrl() != "":
 		initialURL = req.GetTargetUrl()
 	default:
-		if fc, err := devcontainer.LoadFleetCustomizations(wsDir); err == nil {
+		if fc, err := loadWorkspaceCustomizations(ctx, b, wsDir); err == nil {
 			hasURL := fc.Browser.InitialURL != ""
 			hasLanding := fc.FleetLaunch.Configured()
 			switch {
 			case shouldUseLandingPage(hasURL, hasLanding, req.GetPreferFleetLaunch()):
-				if err := ensureLandingPageRunning(b, wsDir); err != nil {
-					flog.Error("browser prepare failed", "fleet", req.GetFleet(), "instance", req.GetInstance(), "err", err)
-					return nil, status.Errorf(codes.Internal, "landing page: %v", err)
-				}
+				landing = true
 				initialURL = appstart.LocalURL(landingpage.DefaultPort)
 			case hasURL:
 				initialURL = fc.Browser.InitialURL
 			}
 		}
 	}
+	if err := ensureInstanceBrowserServices(req.GetFleet()+"/"+inst.Name, b, wsDir, landing); err != nil {
+		flog.Error("browser prepare failed", "fleet", req.GetFleet(), "instance", req.GetInstance(), "err", err)
+		return nil, status.Errorf(codes.Internal, "%v", err)
+	}
 	flog.Info("browser prepared", "fleet", req.GetFleet(), "instance", req.GetInstance())
 	return &fleetgrpc.PrepareBrowserReply{InitialUrl: initialURL}, nil
+}
+
+// browserWarmTimeout bounds warming an instance's ports for a browser open.
+const browserWarmTimeout = time.Minute
+
+// warmBrowserPorts sets up b's shared port connection in the background
+// (backend.PortWarmer); backends without one have nothing to warm.
+func warmBrowserPorts(b backend.Backend, containerID string) {
+	w, ok := b.(backend.PortWarmer)
+	if !ok {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), browserWarmTimeout)
+		defer cancel()
+		if err := w.WarmPorts(ctx, containerID); err != nil {
+			flog.L().Debug("browser: warming the instance's ports", "err", err)
+		}
+	}()
+}
+
+// loadWorkspaceCustomizations reads the workspace devcontainer.json's fleet
+// customization through b's WorkspaceReader, so the read reaches the workspace
+// wherever the backend keeps it.
+func loadWorkspaceCustomizations(ctx context.Context, b backend.Backend, workspaceDir string) (devcontainer.FleetCustomizations, error) {
+	reader := backendutil.WorkspaceReaderFor(b)
+	return devcontainer.ReadFleetCustomizations(func(relPath string) ([]byte, error) {
+		return reader.ReadWorkspaceFile(ctx, workspaceDir, relPath)
+	})
 }
 
 // shouldUseLandingPage decides whether to open the Fleet Launch landing page
@@ -128,7 +248,244 @@ func shouldUseLandingPage(hasURL, hasLanding, preferFleetLaunch bool) bool {
 	return hasLanding && (!hasURL || preferFleetLaunch)
 }
 
-// ensureProxyRunning shells into the container and runs the proxy setup script.
+// browserStarts serializes the browser servers' checks and starts per
+// instance. Two opens at once (a second 'b' while the first is still
+// starting, two TUIs) would otherwise both start a proxy, and the one that
+// lost the port could leave the pid file naming it, dead, while the winner
+// kept the port: every later open would then fail to start one.
+var browserStarts keyedLocks
+
+// ensureInstanceBrowserServices is ensureBrowserServices for the instance
+// key names, one call at a time.
+func ensureInstanceBrowserServices(key string, b backend.Backend, workspaceDir string, wantLanding bool) error {
+	unlock := browserStarts.lock(key)
+	defer unlock()
+	return ensureBrowserServices(b, workspaceDir, wantLanding)
+}
+
+// keyedLocks is a mutex per key, kept while someone holds or waits for it.
+type keyedLocks struct {
+	mu    sync.Mutex
+	locks map[string]*keyedLock
+}
+
+type keyedLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lock takes key's mutex and returns its unlock.
+func (k *keyedLocks) lock(key string) (unlock func()) {
+	k.mu.Lock()
+	if k.locks == nil {
+		k.locks = map[string]*keyedLock{}
+	}
+	l := k.locks[key]
+	if l == nil {
+		l = &keyedLock{}
+		k.locks[key] = l
+	}
+	l.refs++
+	k.mu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		k.mu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(k.locks, key)
+		}
+		k.mu.Unlock()
+	}
+}
+
+// ensureBrowserServices makes sure the in-instance browser proxy, and the
+// landing page when wantLanding, run from the current fleet binary: a refresh
+// of the staged binary stops both first and restarts them, a server that is
+// down is started, and a landing page that was up is kept up. An instance
+// that cannot run the daemon's fleet binary gets the privoxy proxy instead.
+func ensureBrowserServices(b backend.Backend, workspaceDir string, wantLanding bool) error {
+	alive, err := browserServicesAlive(b, workspaceDir)
+	if err != nil {
+		return err
+	}
+	if !builtinBrowserProxy(b, alive.platform) {
+		if err := ensureProxyRunning(b, workspaceDir); err != nil {
+			return err
+		}
+		if wantLanding {
+			if err := ensureLandingPageRunning(b, workspaceDir); err != nil {
+				return fmt.Errorf("landing page: %w", err)
+			}
+		}
+		return nil
+	}
+	proxyUp, landingUp := alive.proxy, alive.landing
+	refreshed, err := fleetlaunch.EnsureFresh(b, workspaceDir, func() error {
+		// The new binary must serve: stop what the old one runs.
+		if proxyUp {
+			if err := stopBrowserServer(b, workspaceDir, browserPaths.proxyPid); err != nil {
+				return fmt.Errorf("browser proxy: %w", err)
+			}
+		}
+		if landingUp {
+			if err := stopBrowserServer(b, workspaceDir, browserPaths.landingPid); err != nil {
+				return fmt.Errorf("landing page: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	addr := browserBindAddr(b)
+	if !proxyUp || refreshed {
+		if err := startBrowserServer(b, workspaceDir, browserProxyArgs(addr), browserPaths.proxyPid, browserPaths.proxyLog, browserPaths.legacyPid); err != nil {
+			return fmt.Errorf("browser proxy: %w", err)
+		}
+	}
+	if (wantLanding && !landingUp) || (landingUp && refreshed) {
+		if err := startBrowserServer(b, workspaceDir, landingPageArgs(addr), browserPaths.landingPid, browserPaths.landingLog, ""); err != nil {
+			return fmt.Errorf("landing page: %w", err)
+		}
+	}
+	return nil
+}
+
+// browserProxyArgs and landingPageArgs are the in-instance fleet commands of
+// the two servers, bound to addr ("" for every interface).
+func browserProxyArgs(addr string) []string {
+	args := []string{"browser-proxy", "--port", strconv.Itoa(browserProxyPort)}
+	if addr != "" {
+		args = append(args, "--addr", addr)
+	}
+	return args
+}
+
+func landingPageArgs(addr string) []string {
+	args := []string{"landing-page", "--port", strconv.Itoa(landingpage.DefaultPort), "--workspace", "."}
+	if addr != "" {
+		args = append(args, "--addr", addr)
+	}
+	return args
+}
+
+// browserServers is what one look at an instance finds: whether the proxy's
+// and the landing page's pid files name live processes of theirs (a pid a
+// restarted container gave to another process does not count), and the
+// instance's platform.
+type browserServers struct {
+	proxy, landing bool
+	platform       instancePlatform
+}
+
+// browserServicesAlive looks at the instance's browser servers, in one exec.
+func browserServicesAlive(b backend.Backend, workspaceDir string) (browserServers, error) {
+	check := fmt.Sprintf(`alive() {
+  p="$(cat "$1" 2>/dev/null)"
+  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null && { [ ! -r "/proc/$p/cmdline" ] || grep -q -- "$2" "/proc/$p/cmdline" 2>/dev/null; }; then echo RUNNING; else echo STOPPED; fi
+}
+echo "PROXY $(alive %s browser-proxy) LANDING $(alive %s landing-page)"
+echo "PLATFORM $(uname -s 2>/dev/null) $(uname -m 2>/dev/null)"`,
+		backend.ShellQuote(browserPaths.proxyPid), backend.ShellQuote(browserPaths.landingPid))
+	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", check}).CombinedOutput()
+	if err != nil {
+		return browserServers{}, fmt.Errorf("check the browser servers: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	text := string(out)
+	st := browserServers{proxy: strings.Contains(text, "PROXY RUNNING"), landing: strings.Contains(text, "LANDING RUNNING")}
+	for _, line := range strings.Split(text, "\n") {
+		if f := strings.Fields(line); len(f) == 3 && f[0] == "PLATFORM" {
+			st.platform = instancePlatform{os: f[1], machine: f[2]}
+		}
+	}
+	return st, nil
+}
+
+// startBrowserServer starts the in-instance fleet binary with args, detached
+// so it outlives this exec, waits for the listening line both servers print
+// once they listen and then records its pid: a start that fails (the port is
+// taken) never replaces the pid of a server that runs. One still not
+// listening when the wait ends is recorded too, so a later open finds it
+// rather than racing it for the port. replacePid, when set, is a pid file of
+// an earlier server on the same port (an older fleet's privoxy), stopped
+// first when its pid is still a privoxy (a restarted container gives its pid
+// to others).
+func startBrowserServer(b backend.Backend, workspaceDir string, args []string, pidPath, logPath, replacePid string) error {
+	quoted := make([]string, 0, len(args)+1)
+	quoted = append(quoted, backend.ShellQuote(browserPaths.bin))
+	for _, a := range args {
+		quoted = append(quoted, backend.ShellQuote(a))
+	}
+	pid, log := backend.ShellQuote(pidPath), backend.ShellQuote(logPath)
+	var script strings.Builder
+	if replacePid != "" {
+		old := backend.ShellQuote(replacePid)
+		fmt.Fprintf(&script, `if [ -f %[1]s ]; then
+  old="$(cat %[1]s 2>/dev/null)"
+  if [ -n "$old" ] && grep -q privoxy "/proc/$old/cmdline" 2>/dev/null; then
+    kill "$old" 2>/dev/null || sudo -n kill "$old" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do kill -0 "$old" 2>/dev/null || break; sleep 0.1; done
+  fi
+  rm -f %[1]s 2>/dev/null || sudo -n rm -f %[1]s 2>/dev/null || true
+fi
+`, old)
+	}
+	// The log is emptied first: the background job's own redirect lands
+	// after this script reads it, and an earlier run's listening line must
+	// not count.
+	fmt.Fprintf(&script, `: > %[2]s
+nohup %[1]s >>%[2]s 2>&1 </dev/null &
+pid=$!
+i=0
+while [ "$i" -lt %[4]d ]; do
+  if grep -q 'listening on' %[2]s 2>/dev/null; then echo "$pid" > %[3]s; echo STARTED; exit 0; fi
+  if ! kill -0 "$pid" 2>/dev/null; then echo START_FAILED; cat %[2]s; exit 1; fi
+  sleep 0.1
+  i=$((i+1))
+done
+echo "$pid" > %[3]s
+echo START_FAILED; cat %[2]s; exit 1
+`, strings.Join(quoted, " "), log, pid, int(browserStartWait/(100*time.Millisecond)))
+	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", script.String()}).CombinedOutputWithTimeout(browserStartWait + 30*time.Second)
+	text := strings.TrimSpace(string(out))
+	if err != nil || !strings.Contains(text, "STARTED") {
+		if detail := strings.TrimSpace(strings.TrimPrefix(text, "START_FAILED")); detail != "" {
+			return fmt.Errorf("did not start: %s", detail)
+		}
+		return fmt.Errorf("did not start: %v", err)
+	}
+	return nil
+}
+
+// stopBrowserServer signals the server pidPath names to exit and waits
+// briefly for it to die (killing it when it does not), so a following start
+// is not racing it for the port.
+func stopBrowserServer(b backend.Backend, workspaceDir, pidPath string) error {
+	script := fmt.Sprintf(`
+pid="$(cat %[1]s 2>/dev/null)"
+if [ -n "$pid" ]; then
+  kill "$pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+  fi
+fi
+rm -f %[1]s`, backend.ShellQuote(pidPath))
+	if out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", script}).CombinedOutput(); err != nil {
+		return fmt.Errorf("stop: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// ensureProxyRunning shells into the container and runs the privoxy setup
+// script (an instance that cannot run the built-in proxy).
 func ensureProxyRunning(b backend.Backend, workspaceDir string) error {
 	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", proxySetupScript}).CombinedOutput()
 	if err != nil {
@@ -150,18 +507,20 @@ func ensureProxyRunning(b backend.Backend, workspaceDir string) error {
 }
 
 // ensureLandingPageRunning stages the in-container fleet-launch binary (when
-// stale) and makes sure the landing-page server it hosts is alive. A running
-// server is stopped before a refresh so the new code takes effect.
+// stale) and makes sure the landing-page server it hosts is alive: the
+// landing page of an instance that runs the privoxy proxy. A running server
+// is stopped before a refresh so the new code takes effect.
 func ensureLandingPageRunning(b backend.Backend, workspaceDir string) error {
-	running, err := landingPageProcessAlive(b, workspaceDir)
+	alive, err := browserServicesAlive(b, workspaceDir)
 	if err != nil {
 		return err
 	}
+	running := alive.landing
 	refreshed, err := fleetlaunch.EnsureFresh(b, workspaceDir, func() error {
 		if !running {
 			return nil
 		}
-		if err := stopLandingPage(b, workspaceDir); err != nil {
+		if err := stopBrowserServer(b, workspaceDir, browserPaths.landingPid); err != nil {
 			return err
 		}
 		running = false
@@ -173,52 +532,5 @@ func ensureLandingPageRunning(b backend.Backend, workspaceDir string) error {
 	if running && !refreshed {
 		return nil
 	}
-	if err := startLandingPage(b, workspaceDir); err != nil {
-		return err
-	}
-	time.Sleep(500 * time.Millisecond)
-	return nil
-}
-
-// landingPageProcessAlive reports whether the in-container landing-page server's
-// pidfile names a live process.
-func landingPageProcessAlive(b backend.Backend, workspaceDir string) (bool, error) {
-	check := fmt.Sprintf(`[ -f %s ] && kill -0 "$(cat %s)" 2>/dev/null && echo RUNNING || echo STOPPED`,
-		landingPagePidPath, landingPagePidPath)
-	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", check}).CombinedOutput()
-	if err != nil {
-		return false, fmt.Errorf("check status: %w (%s)", err, strings.TrimSpace(string(out)))
-	}
-	return strings.Contains(string(out), "RUNNING"), nil
-}
-
-// stopLandingPage signals the in-container landing-page server to exit and waits
-// briefly for it to die so the follow-up start isn't racing it for the port.
-func stopLandingPage(b backend.Backend, workspaceDir string) error {
-	script := fmt.Sprintf(`
-pid="$(cat %s 2>/dev/null)"
-if [ -n "$pid" ]; then
-  kill "$pid" 2>/dev/null || true
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 0.1
-  done
-fi
-rm -f %s`, landingPagePidPath, landingPagePidPath)
-	if out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", script}).CombinedOutput(); err != nil {
-		return fmt.Errorf("stop landing page: %w (%s)", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// startLandingPage launches the in-container fleet binary as the landing-page
-// server, detached so it outlives this exec session.
-func startLandingPage(b backend.Backend, workspaceDir string) error {
-	startScript := fmt.Sprintf(
-		`nohup %s landing-page --port %d --workspace . >%s 2>&1 & echo $! > %s`,
-		fleetlaunch.RemotePath, landingpage.DefaultPort, landingPageLogPath, landingPagePidPath)
-	if out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", startScript}).CombinedOutput(); err != nil {
-		return fmt.Errorf("start server: %w (%s)", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return startBrowserServer(b, workspaceDir, landingPageArgs(""), browserPaths.landingPid, browserPaths.landingLog, "")
 }

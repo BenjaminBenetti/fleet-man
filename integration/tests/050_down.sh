@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet down` removes the container, wipes the workspace, and drops the state entry.
 set -euo pipefail
 
@@ -8,25 +9,22 @@ itest_begin
 setup_test
 fleet_up alpha
 
-container_id=$(grep -oE '"container_id":\s*"[^"]+"' "${HOME}/.fleet/state.json" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
-# Fleet clones into <fleet>/<instance>/<fleet> so the leaf dir contains the
-# workspace; `fleet down` wipes that leaf.
-workspace_dir="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/${FIXTURE_REPO_NAME}"
+inst="${FIXTURE_REPO_NAME}/alpha"
+container_id=$(itest_container_id "${inst}")
 [ -n "${container_id}" ] || fail "could not read container_id"
-assert_file_exists "${workspace_dir}"
+assert_workspace_exists "${inst}" "the instance workspace should exist after up"
 
 info "fleet down alpha"
 down_out=$("${FLEET_BIN}" down "${FIXTURE_REPO_NAME}/alpha")
 printf '%s\n' "${down_out}"
 assert_contains "${down_out}" "removed" "down should mention removed"
 
-# Docker container gone.
-if docker inspect "${container_id}" >/dev/null 2>&1; then
-  fail "container ${container_id} still exists after down"
-fi
+# Container gone.
+assert_container_absent "${container_id}" "container still exists after down"
 
-# Workspace clone gone.
-assert_file_absent "${workspace_dir}"
+# Workspace gone (devcontainer: the clone under
+# ~/.fleet/workspaces/<fleet>/<instance>/<fleet>).
+assert_workspace_absent "${inst}" "the instance workspace should be gone after down"
 
 # State no longer has the instance.
 state=$(cat "${HOME}/.fleet/state.json")

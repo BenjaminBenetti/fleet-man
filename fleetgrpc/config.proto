@@ -87,6 +87,14 @@ message RemoteMcpSettings {
   // reaches over an SSH tunnel (no gateway involved). Mirrors
   // state.FleetModeGateway / state.FleetModeSSH; an unknown value is gateway.
   string fleet_mode = 5;
+  // image_registry_enabled gates gateway image delivery ("Enable Image
+  // Registry"): fleetd serves the images it builds for Kubernetes clusters
+  // set to Gateway delivery through the gateway's /v2/ route, negotiating
+  // the registry tunnel feature. Off by default; on its own it brings the
+  // tunnel up. optional: a client built before the field sends the group
+  // without it, which must read as "unchanged", not as turning delivery off
+  // under every cluster that uses it when that client saves another setting.
+  optional bool image_registry_enabled = 6;
 }
 
 // MicSettings mirrors internal/state.MicSettings — the virtual microphone.
@@ -142,8 +150,11 @@ message Config {
   reserved "coder";
   CodespacesSettings codespaces = 5;
   BrowserSettings browser = 6;
-  // Feeds CreateInstanceRequest's UNSPECIFIED-backend resolution. UNSPECIFIED
-  // means "no default recorded" (-> DEVCONTAINER).
+  // The remembered default deploy target: feeds CreateInstanceRequest's
+  // UNSPECIFIED-backend resolution. UNSPECIFIED means "no default recorded"
+  // (-> DEVCONTAINER). Server-owned: written by
+  // CreateInstanceRequest.remember_default, and SetConfig keeps the stored value
+  // whatever the request carries, so a client's stale copy can't undo it.
   BackendType default_backend = 7;
   RemoteMcpSettings remote_mcp = 8;
 
@@ -153,6 +164,11 @@ message Config {
   ThemeSettings theme = 22;
   ClaudeCodeSettings claude_code = 23;
   OutputSettings output = 24;
+  // The remembered default cluster connection (KubeCluster.id): the cluster a
+  // KUBERNETES default_backend deploys to. Empty unless default_backend is
+  // KUBERNETES. Server-owned like default_backend: only
+  // CreateInstanceRequest.remember_default writes it.
+  string default_kube_cluster = 25;
 }
 
 message GetConfigRequest {}
@@ -162,7 +178,9 @@ message GetConfigReply {
 }
 
 // SetConfig replaces the whole Config (the settings page sends the full edited
-// Config). Returns the post-mutation Config so the caller stays consistent.
+// Config), except default_backend and default_kube_cluster, which only
+// remember_default writes. Returns
+// the post-mutation Config so the caller stays consistent.
 message SetConfigRequest {
   Config config = 1;
 }

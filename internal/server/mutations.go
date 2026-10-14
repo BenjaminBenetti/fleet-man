@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -111,10 +112,7 @@ func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetReq
 	// synchronous RPC, so surface failures to the event log). The network is
 	// removed last, after the cache containers, so docker doesn't refuse it for
 	// active endpoints.
-	teardownWarnings := teardownFleetBuildkit(req.GetName(), buildkitEnabled)
-	teardownWarnings = append(teardownWarnings, teardownFleetDebCache(req.GetName(), true)...)
-	teardownWarnings = append(teardownWarnings, teardownFleetImageCache(req.GetName(), true)...)
-	teardownWarnings = append(teardownWarnings, teardownFleetNetwork(req.GetName(), true)...)
+	teardownWarnings := teardownFleetSharedServices(req.GetName(), buildkitEnabled, nil)
 	for _, w := range teardownWarnings {
 		flog.Warn("destroy fleet cache teardown", "fleet", req.GetName(), "warn", w)
 	}
@@ -138,6 +136,19 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 		return nil, status.Errorf(codes.InvalidArgument, "invalid custom mount: %v", err)
 	}
 	settings.CustomMounts = normalizedMounts
+	// A custom mount's host folder is a daemon-host path every caller that
+	// may change the settings sets alike, local or remote (as a cluster's
+	// kubeconfig paths). It is checked against fleet's own state only: a
+	// folder holding ~/.fleet (or inside it) would be bound, and on a
+	// cluster synced, over the daemon's own files.
+	folders, err := fleet.NormalizeCustomMountHostFolders(settings.CustomMounts, settings.CustomMountHostFolders)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid custom mount: %v", err)
+	}
+	if err := checkHostFolders(folders); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid custom mount: %v", err)
+	}
+	settings.CustomMountHostFolders = folders
 	// Same trust boundary for layout presets: reject empty/duplicate names and
 	// pane-less presets here so a malformed list never reaches state.json.
 	normalizedPresets, err := fleet.NormalizeLayoutPresets(settings.LayoutPresets)
@@ -164,30 +175,88 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 		return nil, status.Errorf(codes.InvalidArgument, "invalid coder settings: %v", err)
 	}
 
+	var prevAgents []fleet.Agent
+	var saved *state.State
 	snapshot, err := s.mutate(func(st *state.State) error {
 		f, ok := st.Fleets[req.GetFleet()]
 		if !ok {
 			return status.Errorf(codes.NotFound, "fleet %q not found", req.GetFleet())
 		}
+		if err := s.checkAgentClusters(f.Settings.Agents, settings.Agents); err != nil {
+			return err
+		}
+		prevAgents = f.Settings.Agents
 		f.Settings = settings
+		saved = st
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	flog.Info("fleet settings updated", "fleet", req.GetFleet())
-	return &fleetgrpc.MutationReply{State: snapshot}, nil
+	warnings := s.agentLoginWarnings(saved, req.GetFleet(), prevAgents, settings.Agents)
+	warnings = append(warnings, hostFolderWarnings(settings.CustomMountHostFolders)...)
+	// The agents' login state, and what their queues wait for, may have
+	// changed: the scheduler looks again now rather than at its next tick.
+	s.wakeScheduler()
+	return &fleetgrpc.MutationReply{State: snapshot, Warnings: warnings}, nil
+}
+
+// agentLoginWarnings warns about each agent that is new, or whose command
+// or target changed, whose firings the automation login check will refuse
+// (automation_login.go).
+func (s *service) agentLoginWarnings(st *state.State, fleetName string, prev, next []fleet.Agent) []string {
+	var out []string
+	c := s.runChecks()
+	for _, a := range next {
+		if old, ok := fleet.FindAgent(prev, a.Name); ok && old.Command == a.Command && old.DeployTarget() == a.DeployTarget() {
+			continue
+		}
+		target := a.DeployTarget()
+		if target.Backend != fleet.BackendKubernetes {
+			continue
+		}
+		lim, ok := c.limits(target.KubeCluster)
+		if !ok {
+			continue
+		}
+		if why, _ := loginRefusal(st, fleetName, a, lim.name); why != "" {
+			out = append(out, fmt.Sprintf("agent %s: %s; until then its firings are refused", a.Name, why))
+		}
+	}
+	return out
+}
+
+// checkAgentClusters refuses a Kubernetes agent that is new, or whose
+// target changed, unless it names a connection this daemon has: an agent
+// fires unattended, so a wrong cluster would only show as refused firings.
+// An agent whose connection went away since (a Forget) is kept as it is
+// (the TUI shows it "(missing)") until it is given another target.
+func (s *service) checkAgentClusters(prev, next []fleet.Agent) error {
+	for _, a := range next {
+		target := a.DeployTarget()
+		if target.Backend != fleet.BackendKubernetes {
+			continue
+		}
+		if old, ok := fleet.FindAgent(prev, a.Name); ok && old.DeployTarget() == target {
+			continue
+		}
+		if !s.kube.connected(target.KubeCluster) {
+			return status.Errorf(codes.InvalidArgument, "invalid automation agent: agent %q: cluster %s is not connected", a.Name, target.KubeCluster)
+		}
+	}
+	return nil
 }
 
 // SetInstanceMetadata updates user-facing labels (display name, color, tag)
 // without touching resources. Only the fields present in the request are
 // changed; an explicit empty string (e.g. clearing a tag) is distinguished from
 // "leave unchanged" by the proto presence bit. A non-empty display name (the
-// rename path) must satisfy fleet.ValidateInstanceName; an empty one clears
+// rename path) must satisfy fleet.ValidateDisplayName; an empty one clears
 // the override so the instance falls back to its immutable Name.
 func (s *service) SetInstanceMetadata(_ context.Context, req *fleetgrpc.SetInstanceMetadataRequest) (*fleetgrpc.MutationReply, error) {
 	if req.DisplayName != nil && req.GetDisplayName() != "" {
-		if err := fleet.ValidateInstanceName(req.GetDisplayName()); err != nil {
+		if err := fleet.ValidateDisplayName(req.GetDisplayName()); err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 	}

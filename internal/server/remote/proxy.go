@@ -20,12 +20,14 @@ import (
 //   - serveProxy (legacy / MCP-only gateway): every stream is an HTTP request,
 //     served by one http.Server over the whole session and reverse-proxied to the
 //     loopback MCP server.
-//   - serveTunnel (FeatureGRPC and/or FeatureWebhook negotiated): every stream
-//     begins with a tag byte; fleetd reads it and dispatches — TagMCP streams go
-//     to the MCP http.Server, TagGRPC streams are spliced (as raw net.Conns) to
-//     the daemon's tunnel-facing gRPC server, TagWebhook streams go to the webhook
-//     receiver's http.Server. One stream per request/connection means MCP
-//     requests, SSE, native gRPC (incl. bidi), and webhooks never interleave.
+//   - serveTunnel (a tagging feature negotiated: FeatureGRPC, FeatureWebhook
+//     and/or FeatureRegistry, see tunnel.Tagged): every stream begins with a tag
+//     byte; fleetd reads it and dispatches — TagMCP streams go to the MCP
+//     http.Server, TagGRPC streams are spliced (as raw net.Conns) to the daemon's
+//     tunnel-facing gRPC server, TagWebhook streams go to the webhook receiver's
+//     http.Server, TagRegistry streams to the image server. One stream per
+//     request/connection means MCP requests, SSE, native gRPC (incl. bidi),
+//     webhooks and image pulls never interleave.
 
 // mcpReverseProxy builds the reverse proxy to the loopback MCP server.
 func mcpReverseProxy(mcpPort int) http.Handler {
@@ -71,15 +73,26 @@ func serveReject(session *yamux.Session) error {
 	}
 }
 
-// serveTunnel serves a session whose streams are TAG-prefixed (FeatureGRPC and/or
-// FeatureWebhook negotiated): it reads each stream's tag and routes it. MCP
+// tunnelListeners are the listeners tagged tunnel streams are pushed to, one per
+// non-MCP traffic kind. They are shared across reconnects and never closed by
+// the serve loops; a nil listener means that traffic kind was not negotiated,
+// so its streams are rejected.
+type tunnelListeners struct {
+	grpc     *ChanListener
+	webhook  *ChanListener
+	registry *ChanListener
+	// registryHit, when set, is called for every registry stream (the main
+	// tunnel's, to open the registry connection).
+	registryHit func()
+}
+
+// serveTunnel serves a session whose streams are TAG-prefixed (a tagging feature
+// negotiated, see tunnel.Tagged): it reads each stream's tag and routes it. MCP
 // streams feed a local http.Server — unless remote MCP is disabled (mcpOn false:
-// a remote-fleet/webhook-only tunnel), in which case they are rejected; gRPC
-// streams feed grpcLis and webhook streams feed webhookLis (both shared across
-// reconnects and NOT closed here). A nil grpcLis/webhookLis means that traffic
-// kind was not negotiated, so its streams are rejected. Returns when the session
-// errors.
-func serveTunnel(session *yamux.Session, mcpPort int, grpcLis, webhookLis *ChanListener, mcpOn bool) error {
+// a remote-fleet/webhook/registry-only tunnel), in which case they are rejected;
+// gRPC, webhook and registry streams feed their listener in lis. Returns when
+// the session errors.
+func serveTunnel(session *yamux.Session, mcpPort int, lis tunnelListeners, mcpOn bool) error {
 	var mcpLis *ChanListener
 	if mcpOn {
 		mcpLis = NewChanListener()
@@ -96,15 +109,17 @@ func serveTunnel(session *yamux.Session, mcpPort int, grpcLis, webhookLis *ChanL
 		if err != nil {
 			return err
 		}
-		go dispatchStream(stream, mcpLis, grpcLis, webhookLis)
+		go dispatchStream(stream, mcpLis, lis)
 	}
 }
 
 // dispatchStream reads the leading tag byte and routes the (tag-stripped) stream
-// to the MCP, gRPC, or webhook listener. A nil listener means that traffic kind is
-// disabled, so its streams are rejected. An unreadable tag or unknown value
-// closes the stream without disturbing the others.
-func dispatchStream(stream net.Conn, mcpLis, grpcLis, webhookLis *ChanListener) {
+// to the MCP, gRPC, webhook or registry listener. A nil listener means that
+// traffic kind is disabled, so its streams are rejected. An unreadable tag or
+// unknown value closes the stream without disturbing the others. A registry
+// attach connection (tunnel.AttachRegistry) carries only TagRegistry streams, so
+// it can serve with dispatchStream(stream, nil, tunnelListeners{registry: …}).
+func dispatchStream(stream net.Conn, mcpLis *ChanListener, lis tunnelListeners) {
 	tag, err := tunnel.ReadTag(stream)
 	if err != nil {
 		_ = stream.Close()
@@ -113,10 +128,15 @@ func dispatchStream(stream net.Conn, mcpLis, grpcLis, webhookLis *ChanListener) 
 	switch {
 	case tag == tunnel.TagMCP && mcpLis != nil:
 		mcpLis.Push(stream)
-	case tag == tunnel.TagGRPC && grpcLis != nil:
-		grpcLis.Push(stream)
-	case tag == tunnel.TagWebhook && webhookLis != nil:
-		webhookLis.Push(stream)
+	case tag == tunnel.TagGRPC && lis.grpc != nil:
+		lis.grpc.Push(stream)
+	case tag == tunnel.TagWebhook && lis.webhook != nil:
+		lis.webhook.Push(stream)
+	case tag == tunnel.TagRegistry && lis.registry != nil:
+		if lis.registryHit != nil {
+			lis.registryHit()
+		}
+		lis.registry.Push(stream)
 	default:
 		_ = stream.Close()
 	}

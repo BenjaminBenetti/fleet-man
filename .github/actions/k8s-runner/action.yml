@@ -1,0 +1,84 @@
+name: Kubernetes runner
+description: >-
+  The build job's fleet binaries in $RUNNER_TEMP/fleet-k8s-bin, kubectl and
+  minikube (and kind, if asked) at the QA image's pins (qa/env/Dockerfile),
+  and, unless asked not to, a minikube started on the runner's docker as the
+  current context.
+inputs:
+  minikube-flags:
+    description: extra `minikube start` flags
+    required: false
+    default: ""
+  start-minikube:
+    description: start the minikube (false for a job that makes its own clusters)
+    required: false
+    default: "true"
+  kind:
+    description: install kind too, at the QA image's pin
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: fleet-k8s-bin
+        path: ${{ runner.temp }}/fleet-k8s-bin
+
+    - name: Make the binaries executable
+      shell: bash
+      run: chmod +x "$RUNNER_TEMP/fleet-k8s-bin/fleet" "$RUNNER_TEMP/fleet-k8s-bin/fleet-pod-linux-amd64"
+
+    # The same versions the QA image ships, so CI and a local QA run match.
+    - name: Read the pinned versions
+      id: pins
+      shell: bash
+      run: |
+        for arg in KUBECTL_VERSION MINIKUBE_VERSION KIND_VERSION; do
+          v=$(sed -n "s/^ARG ${arg}=//p" qa/env/Dockerfile)
+          [ -n "$v" ] || { echo "::error::no ARG ${arg} in qa/env/Dockerfile"; exit 1; }
+          echo "$(echo "$arg" | tr '[:upper:]' '[:lower:]')=$v" >> "$GITHUB_OUTPUT"
+        done
+
+    - name: Install kubectl and minikube
+      shell: bash
+      env:
+        KUBECTL_VERSION: ${{ steps.pins.outputs.kubectl_version }}
+        MINIKUBE_VERSION: ${{ steps.pins.outputs.minikube_version }}
+      run: |
+        curl -fsSLo /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+        curl -fsSLo /tmp/minikube "https://storage.googleapis.com/minikube/releases/${MINIKUBE_VERSION}/minikube-linux-amd64"
+        sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+        sudo install -m 0755 /tmp/minikube /usr/local/bin/minikube
+        kubectl version --client
+        minikube version
+
+    - name: Install kind
+      if: inputs.kind == 'true'
+      shell: bash
+      env:
+        KIND_VERSION: ${{ steps.pins.outputs.kind_version }}
+      run: |
+        base="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}"
+        curl -fsSLo /tmp/kind "${base}/kind-linux-amd64"
+        echo "$(curl -fsSL "${base}/kind-linux-amd64.sha256sum" | awk '{ print $1 }')  /tmp/kind" | sha256sum -c -
+        sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+        kind version
+
+    # The node image and Kubernetes binaries (~1 GB) between runs.
+    - uses: actions/cache@v4
+      with:
+        path: ~/.minikube/cache
+        key: minikube-${{ steps.pins.outputs.minikube_version }}-${{ runner.arch }}
+
+    - name: Start minikube
+      if: inputs.start-minikube == 'true'
+      shell: bash
+      env:
+        MINIKUBE_FLAGS: ${{ inputs.minikube-flags }}
+        MINIKUBE_WANTUPDATENOTIFICATION: "false"
+      run: |
+        # shellcheck disable=SC2086
+        minikube start --driver=docker --wait=all $MINIKUBE_FLAGS
+        kubectl config use-context minikube
+        kubectl get nodes -o wide

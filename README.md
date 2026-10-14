@@ -33,6 +33,7 @@ when they need attention.
 - [TUI Keybindings](#tui-keybindings)
 - [MCP Server](#mcp-server)
 - [Remote MCP](#remote-mcp) — expose MCP & gRPC to remote agents via a fleet gateway
+- [Kubernetes](#kubernetes) — run instances as pods on a cluster
 - [Microphone](#microphone) — talk to the agents in your instances (voice input in a container)
 - [Audio output](#audio-output) — hear instance audio on a connected client
 - [Themes](#themes) — color themes for the TUI (Gruvbox, Catppuccin, Tokyo Night, Solarized)
@@ -50,6 +51,7 @@ when they need attention.
 **Deep-dive docs** (in [`doc/`](doc/)):
 
 - [The Fleet Gateway](doc/gateway.md) — how the reverse tunnel relays both MCP and gRPC to your daemon
+- [Fleet on Kubernetes](doc/kubernetes.md) — clusters: setup, settings, storage, sync, and the trust model
 
 ## Install
 
@@ -106,6 +108,10 @@ fleet destroy my-project
 # Spawn from anywhere with explicit repo
 fleet up agent-1 --repo git@github.com:org/my-project.git
 
+# Run an instance on a Kubernetes cluster (see Kubernetes below)
+fleet cluster add my-context -n fleet
+fleet up agent-4 --cluster my-context
+
 # Reference an existing fleet from anywhere
 fleet up my-project/agent-3
 
@@ -137,13 +143,17 @@ Enabling a fleet's **Claude Code mount** shares `~/.claude`, `~/.claude.json`,
 and the project's `.claude/settings.local.json` across its devcontainer instances.
 Project overrides survive instance deletion and recreation; other project
 `.claude` files remain part of each workspace. Rebuild existing instances to
-apply newly enabled mounts and project settings links.
+apply newly enabled mounts and project settings links. On a Kubernetes cluster
+these live on the fleet's share there, kept in sync with the daemon host, and
+each cluster logs in once per fleet (see [Shared folders, logins and
+sync](doc/kubernetes.md#7-shared-folders-logins-and-sync)).
 
 Enabling a fleet's **Codex mount** shares `~/.codex` and installs Codex in each
 instance. Creation and rebuilds also configure Codex's default permissions for
 [automatic approval review](https://learn.chatgpt.com/docs/sandboxing/auto-review)
 ("Approve for me"): `approval_policy = "on-request"`,
-`approvals_reviewer = "auto_review"`, and `sandbox_mode = "workspace-write"`.
+`approvals_reviewer = "auto_review"`, and `sandbox_mode = "danger-full-access"`
+(the instance is the sandbox, so Codex's own is off).
 These three top-level settings are reset on every create/rebuild of any instance
 in the fleet, including when Codex is already installed in the image. Use a named
 Codex profile for a different permission mode; other settings and named profiles
@@ -172,14 +182,14 @@ Restart hook failures are logged while the container remains running.
 |-----|--------|
 | `j/k` | Navigate |
 | `space` | Expand/collapse fleet |
-| `enter/e` | Exec into instance |
+| `enter/e` | Exec into instance (on a failed or parked ☸ instance: what happened, what to do) |
 | `s` | Stop/start instance |
 | `o` | Open instance in new terminal |
 | `a` | Add instance |
 | `n` | New fleet |
 | `d` | Delete instance/fleet |
 | `c` | Open VS Code |
-| `R` | Rebuild instance (preserves workspace) |
+| `R` | Rebuild instance (preserves workspace); retries a failed cluster create or rebuild |
 | `L` | View logs (instance logs, or a selected trigger's event logs in the automation view) |
 | `→/l`, `←/h` | Select / deselect the PR-status auto tag |
 | `enter` (on PR status) | Open the PR in a browser |
@@ -240,13 +250,16 @@ An MCP client config (`mcp.json`) can then reference them directly:
 
 Tools mirror the non-interactive CLI: `fleet_list`, `fleet_status`,
 `fleet_version`, `fleet_logs`, `fleet_up`, `fleet_start`, `fleet_stop`,
-`fleet_down`, `fleet_destroy_fleet`, `fleet_clone`, `fleet_rebuild`, `fleet_exec`,
-the tmux session tools `fleet_session_spawn` / `fleet_session_exec` /
-`fleet_session_read` / `fleet_session_list`, and the automation CRUD tools
-`fleet_automation_list`, `fleet_agent_create` / `fleet_agent_update` /
-`fleet_agent_delete`, `fleet_trigger_create` / `fleet_trigger_update` /
-`fleet_trigger_delete`, and `fleet_trigger_logs` (mirroring the `fleet agent` and
-`fleet trigger` CLI commands).
+`fleet_down`, `fleet_destroy_fleet`, `fleet_clone`, `fleet_rebuild`,
+`fleet_job_status`, `fleet_exec`, `fleet_restore_backup`, the tmux session tools
+`fleet_session_spawn` / `fleet_session_exec` / `fleet_session_read` /
+`fleet_session_list`, the automation CRUD tools `fleet_automation_list`,
+`fleet_agent_create` / `fleet_agent_update` / `fleet_agent_delete`,
+`fleet_trigger_create` / `fleet_trigger_update` / `fleet_trigger_delete`, and
+`fleet_trigger_logs` (mirroring the `fleet agent` and `fleet trigger` CLI
+commands), the custom-mount tools `fleet_mount_list` / `fleet_mount_set` /
+`fleet_mount_delete` (`fleet mount`), and the Kubernetes tools
+`fleet_cluster_list` / `fleet_cluster_test` (`fleet cluster ls` / `test`).
 Interactive, open-ended commands (`fleet shell`, log following) are intentionally
 not exposed.
 
@@ -278,8 +291,10 @@ however it was created (by you, a clone, or an automation trigger).
   from a bash shell opened after the setting was turned on (a new session, an
   automation agent); a command that clears the environment (`sudo` without
   `-E`, `env -i`) loses it. Claude Code is the only agent supported so far.
-- Devcontainer instances on Linux hosts only. Instances an agent creates are
-  not cleaned up for it — it is told to `fleet_down` them when done.
+- Devcontainer instances on Linux hosts, and Kubernetes instances. An instance
+  of a fleet with it on can drive every connected cluster too. Instances an
+  agent creates are not cleaned up for it — it is told to `fleet_down` them
+  when done.
 
 ## Remote MCP
 
@@ -342,6 +357,19 @@ path/value match). The trigger's create/edit dialog renders its full URL ready t
 paste into the remote system. With the toggle off, fleetd never negotiates the
 webhook feature, so the gateway 404s the route for this daemon.
 
+A fourth toggle — **Enable Image Registry** (off by default) — serves the images
+this daemon builds to Kubernetes clusters whose image **Delivery** is Gateway (or
+Auto on a cluster with no registry that is not local), so they need no registry
+of their own. Nodes pull `<gateway host>/<registry id>/devcontainer@sha256:…`
+over HTTPS, each cluster with its own pull credential that never leaves fleetd
+and its namespace. The gateway must run with `--session-key` and an `https`
+`--public-url` at the host root; otherwise the row (and the cluster editor's
+greyed-out Gateway option) says why it serves nothing. The images go up your
+upload link (paced to 80% of it by default) and through the gateway, so a
+registry stays the better choice for heavy clusters; `fleet cluster test` checks
+the route from the daemon and `--deep` has a pod pull through it. See
+[Image delivery](doc/gateway.md#6a-image-delivery-the-v2-route).
+
 ### Use it from a remote agent
 
 Point the remote MCP client at the Public MCP URL, with the **same bearer token**
@@ -381,7 +409,7 @@ fleet gateway \
 | `--public-addr` | `:443` | MCP + `/healthz` listener — HTTP/1.1 (HTTPS when a cert is set, else HTTP) |
 | `--grpc-addr` | `:50051` | Native gRPC listener — HTTP/2 (h2c when cert-less, h2 under TLS). Hosts remote `fleet` control **and** fleetd registration. Empty disables both |
 | `--max-sessions` | `1024` | Cap on concurrent tunnels |
-| `--session-key` | (random per boot) | Secret key signing the session-resume tokens daemons present on reconnect. Set it (or `FLEET_GATEWAY_SESSION_KEY`) so daemons keep the **same session URL across gateway restarts**; left unset, a restart hands every daemon a fresh URL |
+| `--session-key` | (random per boot) | Secret key signing the session-resume tokens daemons present on reconnect. Set it (or `FLEET_GATEWAY_SESSION_KEY`) so daemons keep the **same session URL across gateway restarts**; left unset, a restart hands every daemon a fresh URL. The image registry route needs it (and an `https` `--public-url` with no path) |
 
 Every flag is also settable via environment variable — `FLEET_GATEWAY_<FLAG>` with
 dashes as underscores (e.g. `FLEET_GATEWAY_PUBLIC_URL`,
@@ -521,10 +549,10 @@ h2c with no TLS in front of it (a trusted private network).
 > model as remote MCP). Only enable this with a gateway you run or trust, and treat
 > the token as a high-value secret.
 
-> **Note:** interactive `fleet exec` (a remote shell) is **not yet supported** over
-> the gateway — it currently runs the command on the *client's* host. Every other
-> RPC works remotely today; remote interactive shell awaits a server-side `Exec`
-> handler.
+> **Note:** `fleet exec` is **not yet supported** over the gateway — it
+> currently runs the command on the *client's* host. `fleet shell` and the TUI's
+> shells stream the terminal over the daemon's `Exec` RPC and work remotely, as
+> does every other RPC.
 
 ### Remote control over SSH
 
@@ -620,6 +648,55 @@ The registry is stored on your own machine at `~/.fleet/armada.json` (mode
 `0600` — it holds bearer tokens) and always round-trips through your **local**
 daemon, even while the TUI is connected to a remote fleet.
 
+## Kubernetes
+
+An instance can run as a pod on a Kubernetes cluster instead of on the daemon
+host's Docker. It works like any other instance — sessions, shells, file
+copies, port forwards, the browser, the microphone, Fleet MCP, automation,
+VS Code — with its root on a persistent volume of its own, so installs survive
+stops and restarts.
+
+```bash
+fleet cluster contexts                   # contexts in fleetd's kubeconfig
+fleet cluster add prod-eu -n fleet       # connect one (fleetd creates a missing namespace)
+fleet cluster test prod-eu               # every check: ready, limited, or why not
+fleet up agent-1 --cluster prod-eu       # create an instance there
+```
+
+- **Where it runs from.** The daemon host builds the images (it needs `docker`
+  and the devcontainer CLI, as for Docker instances) and holds the kubeconfig
+  and its login plugin. Cluster credentials never leave it: a remote TUI or
+  CLI, through the gateway or Armada SSH, gets the same control without them.
+- **The cluster** needs a Role for fleet's identity in the connection's
+  namespace ([the Role](doc/kubernetes.md#2-what-you-need)), and fleet creates
+  that namespace when it does not exist (or prints its manifest when it may
+  not); `fleet cluster test` lists anything missing.
+- **In the TUI**, connect, edit and test clusters in **Settings →
+  Kubernetes**. Each cluster is then a Deploy option `☸ <name>` in the New
+  instance dialog, which says when the fleet's devcontainer.json will not work
+  there (compose, Docker-in-Docker without privileged pods, …). The target you
+  pick is remembered by the daemon: `fleet up` and `fleet_up` without
+  `--backend`/`backend` use it.
+- **What is different.** Shared folders (agent logins, `~/.claude.json`,
+  custom mounts) live on a per-fleet volume kept in sync with the daemon host
+  within seconds (`fleet sync status|wait|conflicts`); each cluster logs in to
+  the agents once per fleet. appPort and `-p` bind 127.0.0.1 on the daemon
+  host unless they name an address. Compose devcontainers are not supported.
+  Privileged pods (Docker-in-Docker) are off except on local clusters
+  (minikube, kind, k3d, Docker Desktop) until you allow them per cluster. On
+  an unprivileged pod an out-of-memory kill restarts the whole instance.
+- **Recovering.** `enter` on a failed or parked ☸ instance says what happened
+  and links the setting that fixes it; `R` (`fleet rebuild`) retries a failed
+  create.
+- **Trust.** The namespace is the boundary: anyone who can exec into its pods
+  is inside your instances, and anyone who can mount its volumes has your agent
+  logins. Allowing privileged pods makes the node the boundary.
+
+Everything else — the settings, storage classes and share modes, networking,
+Buildkit and the caches, clone and rebuild, automation limits, VS Code over
+Remote-SSH, the trust model and the environment variables — is in **[Fleet on
+Kubernetes](doc/kubernetes.md)**.
+
 ## Microphone
 
 Coding agents are growing voice input — Claude Code's voice mode transcribes what
@@ -677,7 +754,11 @@ How it fits together:
   the instance gets a warning saying so instead of a microphone that silently
   does nothing.
 
-Devcontainer instances only: Codespaces and Coder workspaces are skipped.
+An instance's virtual microphone reports in every 5 seconds; when the path to
+it dies, fleet closes your microphone within 15 seconds.
+
+Devcontainer and Kubernetes instances; Codespaces and Coder workspaces are
+skipped. On a cluster that runs no root, see [Audio](doc/kubernetes.md#10-audio).
 
 ## Audio output
 
@@ -723,9 +804,11 @@ Setup failures appear as instance warnings.
 Fleet also installs the ALSA configuration used by the microphone. Existing
 custom ALSA defaults are preserved; a warning explains when they may bypass
 Fleet's output. Audio uses 48 kHz stereo PCM, with bounded queues and mixing on
-the receiving client so multiple instances can play together. Devcontainer
-instances are supported; Coder and Codespaces workspaces are skipped, as for the
-microphone.
+the receiving client so multiple instances can play together. Silence is not
+sent: an instance's output streams only while it plays sound (and a few frames
+after), and each client buffers 80 ms per stream to absorb jitter. Devcontainer
+and Kubernetes instances are supported; Coder and Codespaces workspaces are
+skipped, as for the microphone.
 
 ```bash
 fleet output devices  # this client's playback devices
@@ -793,7 +876,8 @@ fleet's that draws its own band without handing on hides fleet's.
 `~/.fleet/fleet.rc` runs `fleet claude-mod-env`, which writes the mod (it ships
 inside the fleet binary) under `~/.cache/fleet/claude-mod` and adds it to
 `CLAUDE_CODE_PLUGIN_DIRS`; nothing is written to `~/.claude`. The daemon feeds
-it `/fleet-mounts/control/claude-status.json`. Devcontainer instances only.
+it `/fleet-mounts/control/claude-status.json`. Devcontainer and Kubernetes
+instances.
 
 ## Your SSH agent on a remote fleet
 
@@ -808,8 +892,9 @@ with it on only when your ssh config says `ForwardAgent yes` (or
 
 The TUI streams agent requests over the fleet connection itself, so it works for
 SSH and gateway remotes alike and needs nothing from the remote's `sshd`.
-`fleet up`, `clone`, `rebuild` and `fleet shell` against that
-remote carry your agent the same way for their duration; they step aside for a
+`fleet up`, `clone`, `rebuild`, `fleet shell` and a VS Code connection
+(`fleet ssh-proxy`) against that remote carry your agent the same way for their
+duration; they step aside for a
 TUI that is also providing, rather than taking over from it. On the remote, the
 daemon listens on a relay socket in each instance's control directory
 (`/fleet-mounts/control/ssh-agent.sock` inside the instance) and points its own
@@ -840,7 +925,10 @@ each use. With nobody connected, automation cannot use your agent: give the
 host its own deploy key for unattended work. The host's owner can refuse
 forwarding with `FLEET_SSH_AGENT_SOCK=off`. On a macOS host, instances keep
 Docker Desktop's agent (a host socket cannot cross into its VM); the host-side
-clone still uses yours.
+clone still uses yours. Kubernetes instances reach the agent through the same
+relay socket from any daemon host, macOS included; see
+[Networking](doc/kubernetes.md#8-networking) for how `FLEET_SSH_AGENT_SOCK`
+applies to them.
 
 When a daemon clone encounters an unknown git server's SSH host key, the
 connected TUI shows its key type, SHA256 fingerprint, and the `known_hosts`
@@ -869,7 +957,8 @@ Variables fleet **reads** (set them to configure behavior):
 | `FLEET_SERVER` | `host:port` | Drive a remote daemon over plain TCP (no gateway). |
 | `FLEET_DEVCONTAINER_BUILDKIT` | `auto` (default), `never` | BuildKit mode for Fleet-managed devcontainers. See [Devcontainer BuildKit](#devcontainer-buildkit). |
 | `FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID` | `default`, `never`, `on`, `off` | Remote-user UID/GID rewrite mode. See [Devcontainer UID Rewrite](#devcontainer-uid-rewrite). |
-| `FLEET_SSH_AGENT_SOCK` | absolute path, `off`, or `none` (case-insensitive) | How instances reach the SSH agent. By default they use the daemon's relay socket on Linux (see [Your SSH agent on a remote fleet](#your-ssh-agent-on-a-remote-fleet)) and Docker Desktop's VM-side `/run/host-services/ssh-auth.sock` on macOS (OrbStack and `colima --ssh-agent` are path-compatible). A path bind-mounts that socket instead — set it if your Docker backend exposes the agent elsewhere (default Colima, Podman machine, Rancher Desktop); instances then bypass the relay, so an agent forwarded by an Armada client reaches only the daemon's own git. `off`/`none` disables agent forwarding entirely, the relay and forwarding from Armada clients included. |
+| `FLEET_SSH_AGENT_SOCK` | absolute path, `off`, or `none` (case-insensitive) | How instances reach the SSH agent. By default they use the daemon's relay socket on Linux (see [Your SSH agent on a remote fleet](#your-ssh-agent-on-a-remote-fleet)) and Docker Desktop's VM-side `/run/host-services/ssh-auth.sock` on macOS (OrbStack and `colima --ssh-agent` are path-compatible). A path bind-mounts that socket instead — set it if your Docker backend exposes the agent elsewhere (default Colima, Podman machine, Rancher Desktop); instances then bypass the relay, so an agent forwarded by an Armada client reaches only the daemon's own git. `off`/`none` disables agent forwarding entirely, the relay and forwarding from Armada clients included. Kubernetes pods always use the relay socket: a path that is a live socket on the daemon host is what it serves them, a missing one falls back to the relay (with a `fleet.log` warning), and `off` leaves pods without an agent. |
+| `FLEET_KUBE_*_TIMEOUT` | Go duration or seconds | How long fleetd waits on a cluster before a create or start gives up (disk bind, scheduling, image pull, seed, pod start, agent, shared state, lifecycle hooks, clone snapshot and copy). Defaults and names in [Fleet on Kubernetes](doc/kubernetes.md#15-environment-variables). |
 | `FLEET_OPENER` | program (+ args, whitespace-split) | Program `fleet open` / in-instance `fo` hands a copied file to instead of the desktop opener (`xdg-open`, `open`, `wslview`), e.g. `imv -f`. Read by whichever process opens the file: the CLI for `fleet open`, the TUI for `fo`. Executables are never opened. |
 | `FLEET_MIC_CAPTURE` | shell command | Replace fleet's microphone recorder: the command's stdout must be raw 16 kHz mono signed 16-bit little-endian PCM. For audio stacks fleet can't drive itself (e.g. `sox -t coreaudio "My Mic" -t raw -r 16000 -e signed -b 16 -c 1 -`). Read by the process providing the microphone (the TUI / `fleet mic attach`). Fleet cannot pass your command a device, so the Device setting reaches it as `FLEET_MIC_DEVICE` (the raw configured id, empty for the system default) for it to honour or ignore. See [Microphone](#microphone). |
 | `FLEET_MIC_CLIENT` | name | The name this machine's microphone provider announces to the daemon — what its devices are listed under in **Settings → Microphone → Source** and what the selection is stored against. Defaults to the short hostname; set it to tell apart two machines that share one. Read by the process providing the microphone (the TUI / `fleet mic attach`). See [Microphone](#microphone). |
@@ -896,6 +985,8 @@ remote fleets with `[ agent: on ]`), and `WSL_DISTRO_NAME` / `WSL_INTEROP`
 - Linux (including Ubuntu on WSL2) or macOS
 - Docker
 - [devcontainer CLI](https://github.com/devcontainers/cli) (`npm install -g @devcontainers/cli`)
+- Optional: a Kubernetes cluster and a kubeconfig for it on the daemon host
+  ([Kubernetes](#kubernetes))
 
 ## Development
 
@@ -1090,7 +1181,8 @@ unique prefix is enough (so `fleet launch graf` opens "Grafana"). If a prefix
 matches more than one, the candidates are listed so you can type more.
 
 The browser lives on the **host** (it is proxied into the container by
-privoxy), so the in-instance TUI can't open it directly. Instead it drives the
+fleet's own browser proxy, `fleet browser-proxy`), so the in-instance TUI can't
+open it directly. Instead it drives the
 host browser over a **control socket** — a unix domain socket the host `fleet`
 TUI creates per instance and bind-mounts into the instance (the same mechanism
 as mounting `docker.sock`). The running host `fleet` TUI listens on that socket

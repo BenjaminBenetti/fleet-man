@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Codex CLI is installed by the startup script on an image WITHOUT node/npm.
 set -euo pipefail
 
@@ -47,7 +48,7 @@ info "asserting Codex starts with automatic approval review"
   config="${CODEX_HOME:-$HOME/.codex}/config.toml"
   grep -qx "approval_policy = \"on-request\"" "$config"
   grep -qx "approvals_reviewer = \"auto_review\"" "$config"
-  grep -qx "sandbox_mode = \"workspace-write\"" "$config"
+  grep -qx "sandbox_mode = \"danger-full-access\"" "$config"
   codex features list >/dev/null
 ' || fail "Codex automatic approval review was not configured"
 

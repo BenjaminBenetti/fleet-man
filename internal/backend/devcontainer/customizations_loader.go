@@ -27,11 +27,28 @@ type devcontainerConfig struct {
 // ignore it.
 func LoadFleetCustomizations(workspaceDir string) (FleetCustomizations, error) {
 	_, rawJSON, err := findDevcontainerJSON(workspaceDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+	return parseFoundFleetCustomizations(rawJSON, err)
+}
+
+// ReadFleetCustomizations is LoadFleetCustomizations over readFile, which
+// returns a workspace file's bytes by its slash-separated path relative to
+// the workspace root, and reports a missing file with an error satisfying
+// errors.Is(err, fs.ErrNotExist). The daemon passes a backend
+// WorkspaceReader's ReadWorkspaceFile, so the workspace is read wherever it
+// lives rather than assuming a checkout on this machine.
+func ReadFleetCustomizations(readFile func(relPath string) ([]byte, error)) (FleetCustomizations, error) {
+	_, rawJSON, err := findDevcontainerJSONWith(readFile)
+	return parseFoundFleetCustomizations(rawJSON, err)
+}
+
+// parseFoundFleetCustomizations decodes the fleet block from a
+// devcontainer.json lookup's result, treating a missing file as defaults.
+func parseFoundFleetCustomizations(rawJSON []byte, findErr error) (FleetCustomizations, error) {
+	if findErr != nil {
+		if errors.Is(findErr, os.ErrNotExist) {
 			return FleetCustomizations{}, nil
 		}
-		return FleetCustomizations{}, err
+		return FleetCustomizations{}, findErr
 	}
 
 	// devcontainer.json is JSONC (comments, trailing commas); reuse the

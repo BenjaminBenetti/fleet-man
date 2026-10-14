@@ -1,0 +1,989 @@
+{
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+    "annotations": {
+      "fleet.dev/info": "{\"v\":1,\"fleet\":\"fleet-man\"}"
+    },
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "anchor"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-anchor",
+    "namespace": "fleet"
+  }
+}
+---
+{
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "net"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-net",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "spec": {
+    "clusterIP": "None",
+    "publishNotReadyAddresses": true,
+    "selector": {
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/role": "instance"
+    }
+  }
+}
+---
+{
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "policy"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-instances",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "spec": {
+    "ingress": [
+      {
+        "from": [
+          {
+            "podSelector": {
+              "matchLabels": {
+                "fleet.dev/fleet": "tv5vpl4q",
+                "fleet.dev/role": "instance"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "podSelector": {
+      "matchExpressions": [
+        {
+          "key": "fleet.dev/role",
+          "operator": "NotIn",
+          "values": [
+            "cache"
+          ]
+        }
+      ],
+      "matchLabels": {
+        "fleet.dev/fleet": "tv5vpl4q"
+      }
+    },
+    "policyTypes": [
+      "Ingress"
+    ]
+  }
+}
+---
+{
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "policy"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-caches",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "spec": {
+    "ingress": [
+      {
+        "from": [
+          {
+            "podSelector": {
+              "matchLabels": {
+                "fleet.dev/fleet": "tv5vpl4q",
+                "fleet.dev/role": "instance"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 1234,
+            "protocol": "TCP"
+          },
+          {
+            "port": 3142,
+            "protocol": "TCP"
+          },
+          {
+            "port": 5000,
+            "protocol": "TCP"
+          }
+        ]
+      }
+    ],
+    "podSelector": {
+      "matchLabels": {
+        "fleet.dev/fleet": "tv5vpl4q",
+        "fleet.dev/role": "cache"
+      }
+    },
+    "policyTypes": [
+      "Ingress"
+    ]
+  }
+}
+---
+{
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "policy"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-egress",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "spec": {
+    "egress": [
+      {
+        "to": [
+          {
+            "ipBlock": {
+              "cidr": "0.0.0.0/0",
+              "except": [
+                "169.254.0.0/16"
+              ]
+            }
+          },
+          {
+            "ipBlock": {
+              "cidr": "::/0",
+              "except": [
+                "fd00:ec2::/64"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "to": [
+          {
+            "namespaceSelector": {}
+          }
+        ]
+      },
+      {
+        "ports": [
+          {
+            "port": 53,
+            "protocol": "UDP"
+          },
+          {
+            "port": 53,
+            "protocol": "TCP"
+          }
+        ]
+      }
+    ],
+    "podSelector": {
+      "matchLabels": {
+        "fleet.dev/fleet": "tv5vpl4q"
+      }
+    },
+    "policyTypes": [
+      "Egress"
+    ]
+  }
+}
+---
+{
+  "apiVersion": "v1",
+  "kind": "PersistentVolumeClaim",
+  "metadata": {
+    "annotations": {
+      "fleet.dev/info": "{\"v\":1,\"fleet\":\"fleet-man\",\"service\":\"buildkit\"}"
+    },
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "buildkit"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-buildkit",
+    "namespace": "fleet"
+  },
+  "spec": {
+    "accessModes": [
+      "ReadWriteOnce"
+    ],
+    "resources": {
+      "requests": {
+        "storage": "100Gi"
+      }
+    },
+    "storageClassName": "fast-rwo",
+    "volumeMode": "Filesystem"
+  }
+}
+---
+{
+  "apiVersion": "v1",
+  "data": {
+    "buildkitd.toml": "# Written by fleet: the shared Buildkit server of fleet \"fleet-man\".\n# Its cache stays under 80% of its 100Gi volume.\n[worker.oci]\n  gc = true\n  maxUsedSpace = \"85899345920\"\n[worker.containerd]\n  enabled = false\n"
+  },
+  "kind": "ConfigMap",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "buildkit"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-buildkit",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  }
+}
+---
+{
+  "apiVersion": "v1",
+  "data": {
+    "ca.pem": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCkNBCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K",
+    "cert.pem": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tClNFUlZFUgotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==",
+    "key.pem": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCktFWQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg=="
+  },
+  "kind": "Secret",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "buildkit"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-buildkit",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "type": "Opaque"
+}
+---
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "buildkit"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-buildkit",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "spec": {
+    "replicas": 1,
+    "revisionHistoryLimit": 2,
+    "selector": {
+      "matchLabels": {
+        "app.kubernetes.io/managed-by": "fleet",
+        "fleet.dev/cluster": "minikube-abc234",
+        "fleet.dev/fleet": "tv5vpl4q",
+        "fleet.dev/owner": "0123456789ab",
+        "fleet.dev/role": "cache",
+        "fleet.dev/service": "buildkit"
+      }
+    },
+    "strategy": {
+      "type": "Recreate"
+    },
+    "template": {
+      "metadata": {
+        "annotations": {
+          "consul.hashicorp.com/connect-inject": "false",
+          "fleet.dev/buildkit-gc": "85899345920",
+          "fleet.dev/buildkit-tls": "4a1e1c14794adfff",
+          "kuma.io/sidecar-injection": "disabled",
+          "linkerd.io/inject": "disabled",
+          "sidecar.istio.io/inject": "false"
+        },
+        "labels": {
+          "app.kubernetes.io/managed-by": "fleet",
+          "fleet.dev/cluster": "minikube-abc234",
+          "fleet.dev/fleet": "tv5vpl4q",
+          "fleet.dev/owner": "0123456789ab",
+          "fleet.dev/role": "cache",
+          "fleet.dev/service": "buildkit",
+          "istio.io/dataplane-mode": "none",
+          "sidecar.istio.io/inject": "false"
+        }
+      },
+      "spec": {
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "args": [
+              "--addr",
+              "tcp://0.0.0.0:1234",
+              "--addr",
+              "unix:///run/buildkit/buildkitd.sock",
+              "--tlscacert",
+              "/etc/fleet-buildkit-tls/ca.pem",
+              "--tlscert",
+              "/etc/fleet-buildkit-tls/cert.pem",
+              "--tlskey",
+              "/etc/fleet-buildkit-tls/key.pem",
+              "--config",
+              "/etc/buildkit/buildkitd.toml"
+            ],
+            "image": "docker.io/moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e18d9b39b68e2b0c2475cc1b6",
+            "name": "buildkit",
+            "ports": [
+              {
+                "containerPort": 1234,
+                "name": "service",
+                "protocol": "TCP"
+              }
+            ],
+            "readinessProbe": {
+              "failureThreshold": 3,
+              "periodSeconds": 5,
+              "tcpSocket": {
+                "port": 1234
+              }
+            },
+            "resources": {
+              "limits": {
+                "memory": "16Gi"
+              },
+              "requests": {
+                "cpu": "100m",
+                "memory": "256Mi"
+              }
+            },
+            "securityContext": {
+              "privileged": true
+            },
+            "terminationMessagePolicy": "File",
+            "volumeMounts": [
+              {
+                "mountPath": "/var/lib/buildkit",
+                "name": "data"
+              },
+              {
+                "mountPath": "/etc/buildkit",
+                "name": "config",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/etc/fleet-buildkit-tls",
+                "name": "tls",
+                "readOnly": true
+              }
+            ]
+          }
+        ],
+        "enableServiceLinks": false,
+        "nodeSelector": {
+          "pool": "fleet"
+        },
+        "restartPolicy": "Always",
+        "securityContext": {
+          "fsGroupChangePolicy": "OnRootMismatch",
+          "seccompProfile": {
+            "type": "RuntimeDefault"
+          }
+        },
+        "serviceAccountName": "fleet-pods",
+        "terminationGracePeriodSeconds": 10,
+        "tolerations": [
+          {
+            "effect": "NoSchedule",
+            "key": "dedicated",
+            "operator": "Equal",
+            "value": "fleet"
+          }
+        ],
+        "volumes": [
+          {
+            "name": "data",
+            "persistentVolumeClaim": {
+              "claimName": "fs-fleet-man-tv5vpl4q-buildkit"
+            }
+          },
+          {
+            "configMap": {
+              "name": "fs-fleet-man-tv5vpl4q-buildkit"
+            },
+            "name": "config"
+          },
+          {
+            "name": "tls",
+            "secret": {
+              "defaultMode": 256,
+              "secretName": "fs-fleet-man-tv5vpl4q-buildkit"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+---
+{
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "buildkit"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-buildkit",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "spec": {
+    "ports": [
+      {
+        "name": "buildkit",
+        "port": 1234,
+        "protocol": "TCP",
+        "targetPort": 1234
+      }
+    ],
+    "selector": {
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "buildkit"
+    },
+    "type": "ClusterIP"
+  }
+}
+---
+{
+  "apiVersion": "v1",
+  "kind": "PersistentVolumeClaim",
+  "metadata": {
+    "annotations": {
+      "fleet.dev/info": "{\"v\":1,\"fleet\":\"fleet-man\",\"service\":\"debcache\"}"
+    },
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "debcache"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-aptcache",
+    "namespace": "fleet"
+  },
+  "spec": {
+    "accessModes": [
+      "ReadWriteOnce"
+    ],
+    "resources": {
+      "requests": {
+        "storage": "4Gi"
+      }
+    },
+    "storageClassName": "fast-rwo",
+    "volumeMode": "Filesystem"
+  }
+}
+---
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "debcache"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-aptcache",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "spec": {
+    "replicas": 1,
+    "revisionHistoryLimit": 2,
+    "selector": {
+      "matchLabels": {
+        "app.kubernetes.io/managed-by": "fleet",
+        "fleet.dev/cluster": "minikube-abc234",
+        "fleet.dev/fleet": "tv5vpl4q",
+        "fleet.dev/owner": "0123456789ab",
+        "fleet.dev/role": "cache",
+        "fleet.dev/service": "debcache"
+      }
+    },
+    "strategy": {
+      "type": "Recreate"
+    },
+    "template": {
+      "metadata": {
+        "annotations": {
+          "consul.hashicorp.com/connect-inject": "false",
+          "kuma.io/sidecar-injection": "disabled",
+          "linkerd.io/inject": "disabled",
+          "sidecar.istio.io/inject": "false"
+        },
+        "labels": {
+          "app.kubernetes.io/managed-by": "fleet",
+          "fleet.dev/cluster": "minikube-abc234",
+          "fleet.dev/fleet": "tv5vpl4q",
+          "fleet.dev/owner": "0123456789ab",
+          "fleet.dev/role": "cache",
+          "fleet.dev/service": "debcache",
+          "istio.io/dataplane-mode": "none",
+          "sidecar.istio.io/inject": "false"
+        }
+      },
+      "spec": {
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "image": "registry.example.com/acng@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "name": "debcache",
+            "ports": [
+              {
+                "containerPort": 3142,
+                "name": "service",
+                "protocol": "TCP"
+              }
+            ],
+            "readinessProbe": {
+              "failureThreshold": 3,
+              "periodSeconds": 5,
+              "tcpSocket": {
+                "port": 3142
+              }
+            },
+            "resources": {
+              "limits": {
+                "memory": "512Mi"
+              },
+              "requests": {
+                "cpu": "50m",
+                "memory": "64Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "add": [
+                  "CHOWN",
+                  "DAC_OVERRIDE",
+                  "FOWNER",
+                  "SETGID",
+                  "SETUID"
+                ],
+                "drop": [
+                  "ALL"
+                ]
+              }
+            },
+            "terminationMessagePolicy": "File",
+            "volumeMounts": [
+              {
+                "mountPath": "/var/cache/apt-cacher-ng",
+                "name": "data"
+              }
+            ]
+          }
+        ],
+        "enableServiceLinks": false,
+        "nodeSelector": {
+          "pool": "fleet"
+        },
+        "restartPolicy": "Always",
+        "securityContext": {
+          "fsGroupChangePolicy": "OnRootMismatch",
+          "seccompProfile": {
+            "type": "RuntimeDefault"
+          }
+        },
+        "serviceAccountName": "fleet-pods",
+        "terminationGracePeriodSeconds": 10,
+        "tolerations": [
+          {
+            "effect": "NoSchedule",
+            "key": "dedicated",
+            "operator": "Equal",
+            "value": "fleet"
+          }
+        ],
+        "volumes": [
+          {
+            "name": "data",
+            "persistentVolumeClaim": {
+              "claimName": "fs-fleet-man-tv5vpl4q-aptcache"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+---
+{
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "debcache"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-aptcache",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "spec": {
+    "ports": [
+      {
+        "name": "debcache",
+        "port": 3142,
+        "protocol": "TCP",
+        "targetPort": 3142
+      }
+    ],
+    "selector": {
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "debcache"
+    },
+    "type": "ClusterIP"
+  }
+}
+---
+{
+  "apiVersion": "v1",
+  "kind": "PersistentVolumeClaim",
+  "metadata": {
+    "annotations": {
+      "fleet.dev/info": "{\"v\":1,\"fleet\":\"fleet-man\",\"service\":\"imagecache\"}"
+    },
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "imagecache"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-imgcache",
+    "namespace": "fleet"
+  },
+  "spec": {
+    "accessModes": [
+      "ReadWriteOnce"
+    ],
+    "resources": {
+      "requests": {
+        "storage": "50Gi"
+      }
+    },
+    "storageClassName": "fast-rwo",
+    "volumeMode": "Filesystem"
+  }
+}
+---
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "imagecache"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-imgcache",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "spec": {
+    "replicas": 1,
+    "revisionHistoryLimit": 2,
+    "selector": {
+      "matchLabels": {
+        "app.kubernetes.io/managed-by": "fleet",
+        "fleet.dev/cluster": "minikube-abc234",
+        "fleet.dev/fleet": "tv5vpl4q",
+        "fleet.dev/owner": "0123456789ab",
+        "fleet.dev/role": "cache",
+        "fleet.dev/service": "imagecache"
+      }
+    },
+    "strategy": {
+      "type": "Recreate"
+    },
+    "template": {
+      "metadata": {
+        "annotations": {
+          "consul.hashicorp.com/connect-inject": "false",
+          "kuma.io/sidecar-injection": "disabled",
+          "linkerd.io/inject": "disabled",
+          "sidecar.istio.io/inject": "false"
+        },
+        "labels": {
+          "app.kubernetes.io/managed-by": "fleet",
+          "fleet.dev/cluster": "minikube-abc234",
+          "fleet.dev/fleet": "tv5vpl4q",
+          "fleet.dev/owner": "0123456789ab",
+          "fleet.dev/role": "cache",
+          "fleet.dev/service": "imagecache",
+          "istio.io/dataplane-mode": "none",
+          "sidecar.istio.io/inject": "false"
+        }
+      },
+      "spec": {
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "env": [
+              {
+                "name": "REGISTRY_PROXY_REMOTEURL",
+                "value": "https://registry-1.docker.io"
+              },
+              {
+                "name": "REGISTRY_STORAGE_DELETE_ENABLED",
+                "value": "true"
+              }
+            ],
+            "image": "docker.io/library/registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
+            "name": "imagecache",
+            "ports": [
+              {
+                "containerPort": 5000,
+                "name": "service",
+                "protocol": "TCP"
+              }
+            ],
+            "readinessProbe": {
+              "failureThreshold": 3,
+              "periodSeconds": 5,
+              "tcpSocket": {
+                "port": 5000
+              }
+            },
+            "resources": {
+              "limits": {
+                "memory": "512Mi"
+              },
+              "requests": {
+                "cpu": "50m",
+                "memory": "64Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              }
+            },
+            "terminationMessagePolicy": "File",
+            "volumeMounts": [
+              {
+                "mountPath": "/var/lib/registry",
+                "name": "data"
+              }
+            ]
+          }
+        ],
+        "enableServiceLinks": false,
+        "nodeSelector": {
+          "pool": "fleet"
+        },
+        "restartPolicy": "Always",
+        "securityContext": {
+          "fsGroupChangePolicy": "OnRootMismatch",
+          "seccompProfile": {
+            "type": "RuntimeDefault"
+          }
+        },
+        "serviceAccountName": "fleet-pods",
+        "terminationGracePeriodSeconds": 10,
+        "tolerations": [
+          {
+            "effect": "NoSchedule",
+            "key": "dedicated",
+            "operator": "Equal",
+            "value": "fleet"
+          }
+        ],
+        "volumes": [
+          {
+            "name": "data",
+            "persistentVolumeClaim": {
+              "claimName": "fs-fleet-man-tv5vpl4q-imgcache"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+---
+{
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "fleet",
+      "fleet.dev/cluster": "minikube-abc234",
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/owner": "0123456789ab",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "imagecache"
+    },
+    "name": "fs-fleet-man-tv5vpl4q-imgcache",
+    "namespace": "fleet",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": "fs-fleet-man-tv5vpl4q-anchor",
+        "uid": "11111111-2222-3333-4444-555555555555"
+      }
+    ]
+  },
+  "spec": {
+    "ports": [
+      {
+        "name": "imagecache",
+        "port": 5000,
+        "protocol": "TCP",
+        "targetPort": 5000
+      }
+    ],
+    "selector": {
+      "fleet.dev/fleet": "tv5vpl4q",
+      "fleet.dev/role": "cache",
+      "fleet.dev/service": "imagecache"
+    },
+    "type": "ClusterIP"
+  }
+}
+---

@@ -3,7 +3,8 @@ package tui
 import (
 	"fmt"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -12,7 +13,19 @@ import (
 // Fleet Page
 // ===========================================
 
-var resolveWorkspaceBranch = gitutil.BranchName
+// instanceBranch is the branch shown on an instance row. The daemon reads it
+// from the workspace (InstanceRuntime.current_branch, pushed over Watch); the
+// TUI never reads a checkout itself, since it may run on another machine than
+// the daemon. Without a live read (no push yet, or a workspace that can't be
+// read while the instance is stopped) it falls back to the last branch seen,
+// then the requested one.
+func instanceBranch(rt *fleetgrpc.InstanceRuntime, instance *fleet.Instance) string {
+	var live *string
+	if rt != nil {
+		live = rt.CurrentBranch
+	}
+	return fleet.DisplayBranch(live, instance.LastBranch, instance.Branch)
+}
 
 // fleetPage holds fleet-list-specific state.
 type fleetPage struct {
@@ -40,6 +53,17 @@ type fleetPage struct {
 	browserDlg browserDialogState // switch-browser dialog
 	choosePR   choosePRState      // multi-PR chooser (open which PR?)
 	lpFlow     *layoutPresetFlow  // open preset creation/edit flow (nil unless mode == viewLayoutPreset)
+	// saveWarnings is what the daemon warned about the fleet settings it
+	// saved last (noteSaveWarnings).
+	saveWarnings []string
+	// removingFleets are the empty fleets whose removal job runs
+	// (removeEmptyFleet): kept off the list until it ends, though the
+	// daemon lists them until then.
+	removingFleets map[string]bool
+	// kubeRecovery is the Kubernetes recovery dialog (mode == viewKubeRecovery).
+	kubeRecovery kubeRecoveryState
+	// vscodeDlg is the VS Code Remote-SSH consent dialog (mode == viewEditorConsent).
+	vscodeDlg vscodeConsentState
 
 	// rightSelected is true when the cursor row's right-hand element is
 	// horizontally selected — →/l selects it (drawn pink), ←/h deselects, enter
@@ -53,11 +77,16 @@ type fleetPage struct {
 	branchInput        textinput.Model
 	homedirInput       textinput.Model
 	customMountInput   textinput.Model
+	mountHostInput     textinput.Model // edit-fleet Custom mounts: a mount's host folder
 	coderWsNameInput   textinput.Model // edit-fleet Coder section: workspace-name override
 	coderTemplateInput textinput.Model // edit-fleet Coder section: template
 	coderParamInput    textinput.Model // edit-fleet Coder section: shared input for the focused parameter row
 
 	pfCursor int
+	// pfHalfClose is the port-forward dialog's half-close toggle: the next
+	// forward it adds keeps a true half-close (`fleet port-forward add
+	// --half-close`).
+	pfHalfClose bool
 
 	split       splitState // open split pane + session-group restore bookkeeping
 	savedGroups map[string]savedGroup
@@ -80,6 +109,9 @@ type fleetPage struct {
 	triggerDlg    automationTriggerState // add/edit-trigger dialog
 	agentDlg      automationAgentState   // add/edit-agent dialog
 	autoDel       autoDeleteState        // pending trigger/agent delete (viewConfirmDeleteAutomation)
+	// pendingLogin is a Log in action waiting for the instance it created to
+	// run (automation_login.go); nil when none waits.
+	pendingLogin *pendingLogin
 }
 
 // newFleetPage creates a new fleet page with default state.
@@ -100,6 +132,10 @@ func newFleetPage() *fleetPage {
 	customMountInput.Placeholder = "/opt/data"
 	customMountInput.CharLimit = 256
 
+	mountHostInput := textinput.New()
+	mountHostInput.Placeholder = "/data/big (empty: the .mnt folder)"
+	mountHostInput.CharLimit = 512
+
 	coderWsNameInput := textinput.New()
 	coderWsNameInput.Placeholder = "workspace-name"
 	coderWsNameInput.CharLimit = 64
@@ -119,6 +155,7 @@ func newFleetPage() *fleetPage {
 		branchInput:        branchInput,
 		homedirInput:       homedirInput,
 		customMountInput:   customMountInput,
+		mountHostInput:     mountHostInput,
 		coderWsNameInput:   coderWsNameInput,
 		coderTemplateInput: coderTemplateInput,
 		coderParamInput:    coderParamInput,
@@ -181,6 +218,12 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 
+	case vscodeResolvedMsg:
+		return fleetPage.handleVSCodeResolved(m, msg.(vscodeResolvedMsg))
+
+	case vscodeOpenedMsg:
+		return fleetPage.handleVSCodeOpened(m, msg.(vscodeOpenedMsg))
+
 	case externalURLOpenedMsg:
 		if u := msg.(externalURLOpenedMsg); u.err != nil {
 			m.message = fmt.Sprintf("Could not open browser: %v", u.err)
@@ -195,6 +238,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 
 	case deleteCacheDoneMsg:
 		return fleetPage.handleDeleteCacheDone(m, msg.(deleteCacheDoneMsg))
+	case cacheUsageMsg:
+		return fleetPage.handleCacheUsage(msg.(cacheUsageMsg))
 
 	case devcontainerInspectedMsg:
 		return fleetPage.handleDevcontainerInspected(m, msg.(devcontainerInspectedMsg))
@@ -230,6 +275,10 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateCodespacesLimit(m, msg)
 	case viewCodespacesMachine:
 		return fleetPage.updateCodespacesMachine(m, msg)
+	case viewKubeRecovery:
+		return fleetPage.updateKubeRecovery(m, msg)
+	case viewEditorConsent:
+		return fleetPage.updateEditorConsent(m, msg)
 	case viewConfirmDeleteSession:
 		return fleetPage.updateConfirmDeleteSession(m, msg)
 	case viewConfirmBrowserSwitch:

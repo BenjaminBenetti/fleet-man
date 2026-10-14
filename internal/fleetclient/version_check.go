@@ -119,22 +119,9 @@ func restartServer(ctx context.Context, ep Endpoint, svc fleetgrpc.FleetServiceC
 	}
 	defer releaseSpawnLock(lockFD)
 
-	// Ask the current server to drain and exit. Best-effort: it may already be
-	// gone (a racing client restarted it while we waited for the lock) or not
-	// answering at all; either way we make sure a fresh one is up below.
-	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	_, _ = svc.Shutdown(sctx, &fleetgrpc.ShutdownRequest{
-		Drain:  true,
-		Reason: strptr(reason),
-	})
-	cancel()
-
-	// Wait for the old server's PROCESS to be gone, not just its socket: it
-	// stops answering as soon as it starts shutting down, but holds the
-	// lifetime lock until it exits, and the new server cannot start before
-	// then. One that never exits is killed. We already hold the spawn lock, so
-	// spawn directly rather than via ensureServerLocal (which would re-acquire it).
-	_, killed, err := clearServer(ctx, ep, shutdownGrace, false)
+	// We already hold the spawn lock, so spawn directly rather than via
+	// ensureServerLocal (which would re-acquire it).
+	killed, err := stopServer(ctx, ep, svc, reason)
 	if err != nil {
 		return err
 	}
@@ -142,6 +129,26 @@ func restartServer(ctx context.Context, ep Endpoint, svc fleetgrpc.FleetServiceC
 		return fmt.Errorf("relaunch server: %w", err)
 	}
 	return waitReady(ctx, ep, 5*time.Second)
+}
+
+// stopServer asks the running server to drain and exit, and waits for its
+// PROCESS to be gone, not just its socket: it stops answering as soon as it
+// starts shutting down, but holds the lifetime lock until it exits, and the
+// new server cannot start before then. It gets as long as its reply says its
+// shutdown may take (ShutdownGrace); one still there then is killed, and
+// killed says so.
+func stopServer(ctx context.Context, ep Endpoint, svc fleetgrpc.FleetServiceClient, reason string) (killed string, err error) {
+	// Best-effort: the server may already be gone (a racing client restarted
+	// it while we waited for the lock) or not answering at all; either way a
+	// fresh one is started after.
+	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	reply, _ := svc.Shutdown(sctx, &fleetgrpc.ShutdownRequest{
+		Drain:  true,
+		Reason: strptr(reason),
+	})
+	cancel()
+	_, killed, err = clearServer(ctx, ep, ShutdownGrace(reply), false)
+	return killed, err
 }
 
 func restartReason() string {

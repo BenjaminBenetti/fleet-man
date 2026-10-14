@@ -70,7 +70,7 @@ func TestManagerAddProxiesAndRemoves(t *testing.T) {
 	defer mgr.Shutdown()
 
 	localPort := freePort(t)
-	if err := mgr.Add("f/i", localPort, 80, tcpTarget(echo)); err != nil {
+	if err := mgr.Add("f/i", Forward{LocalPort: localPort, RemotePort: 80}, tcpTarget(echo)); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestManagerAddProxiesAndRemoves(t *testing.T) {
 		t.Fatalf("Remove: %v", err)
 	}
 	// The port is free again: a fresh forward can bind it.
-	if err := mgr.Add("f/i", localPort, 80, tcpTarget(echo)); err != nil {
+	if err := mgr.Add("f/i", Forward{LocalPort: localPort, RemotePort: 80}, tcpTarget(echo)); err != nil {
 		t.Fatalf("re-Add after Remove: %v", err)
 	}
 }
@@ -107,7 +107,7 @@ func TestStopForwardClosesLiveConnections(t *testing.T) {
 	defer mgr.Shutdown()
 
 	localPort := freePort(t)
-	if err := mgr.Add("f/i", localPort, 80, tcpTarget(echo)); err != nil {
+	if err := mgr.Add("f/i", Forward{LocalPort: localPort, RemotePort: 80}, tcpTarget(echo)); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -147,5 +147,27 @@ func TestAddBrowserProxyPicksPortAndIsFindable(t *testing.T) {
 	}
 	if got := mgr.FormatLabels("f/i"); got != fmt.Sprintf("%d->proxy", port) {
 		t.Fatalf("labels: %q", got)
+	}
+}
+
+// TestManagerKeepsTheHalfCloseMark: a half-close forward is listed as one; a
+// browser proxy never is.
+func TestManagerKeepsTheHalfCloseMark(t *testing.T) {
+	echo := startEcho(t)
+	mgr := NewManager()
+	defer mgr.Shutdown()
+	localPort := freePort(t)
+	if err := mgr.Add("f/i", Forward{LocalPort: localPort, RemotePort: 80, HalfClose: true, BrowserProxy: true}, tcpTarget(echo)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.AddBrowserProxy("f/i", 58888, tcpTarget(echo)); err != nil {
+		t.Fatal(err)
+	}
+	fwds := mgr.List("f/i")
+	if len(fwds) != 2 || !fwds[0].HalfClose || fwds[0].BrowserProxy || fwds[1].HalfClose || !fwds[1].BrowserProxy {
+		t.Fatalf("listed: %+v", fwds)
+	}
+	if all := mgr.ListAll()["f/i"]; len(all) != 2 || !all[0].HalfClose {
+		t.Fatalf("ListAll: %+v", all)
 	}
 }

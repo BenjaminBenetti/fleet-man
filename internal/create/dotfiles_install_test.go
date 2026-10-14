@@ -1,6 +1,8 @@
 package create
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"strings"
@@ -51,8 +53,9 @@ func TestInstallDotfilesRetriesOnHangThenWarns(t *testing.T) {
 	withShortDotfilesKnobs(t, 50*time.Millisecond, 3)
 
 	fe := &fakeExecer{cmdFor: func(int) *backend.Cmd { return sleepCmd() }}
+	var jobLog bytes.Buffer
 	start := time.Now()
-	installDotfiles(fe, "fleetx", "inst1", "/ws", "echo install")
+	installDotfiles(backend.WithJobLog(context.Background(), &jobLog), fe, "fleetx", "inst1", "/ws", "echo install")
 	elapsed := time.Since(start)
 
 	if len(fe.scripts) != 3 {
@@ -70,6 +73,10 @@ func TestInstallDotfilesRetriesOnHangThenWarns(t *testing.T) {
 	if !strings.Contains(string(warn), "after 3 attempt") {
 		t.Errorf("warning = %q, want it to mention the attempt count", string(warn))
 	}
+	// The same warning goes to the job's provisioning log.
+	if !strings.Contains(jobLog.String(), "warning: dotfiles install failed after 3 attempt") {
+		t.Errorf("job log = %q, want the warning", jobLog.String())
+	}
 }
 
 // TestInstallDotfilesSucceedsFirstTry verifies the common path: one successful
@@ -79,7 +86,7 @@ func TestInstallDotfilesSucceedsFirstTry(t *testing.T) {
 	withShortDotfilesKnobs(t, 5*time.Second, 3)
 
 	fe := &fakeExecer{cmdFor: func(int) *backend.Cmd { return okCmd() }}
-	installDotfiles(fe, "fleetx", "inst1", "/ws", "echo install")
+	installDotfiles(context.Background(), fe, "fleetx", "inst1", "/ws", "echo install")
 
 	if len(fe.scripts) != 1 {
 		t.Fatalf("install attempted %d times, want 1", len(fe.scripts))
@@ -105,7 +112,7 @@ func TestInstallDotfilesRecoversOnRetry(t *testing.T) {
 		}
 		return okCmd()
 	}}
-	installDotfiles(fe, "fleetx", "inst1", "/ws", "echo install")
+	installDotfiles(context.Background(), fe, "fleetx", "inst1", "/ws", "echo install")
 
 	if len(fe.scripts) != 2 {
 		t.Fatalf("install attempted %d times, want 2 (fail then succeed)", len(fe.scripts))

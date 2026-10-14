@@ -1,0 +1,451 @@
+{
+  "disk": {
+    "kind": "PersistentVolumeClaim",
+    "apiVersion": "v1",
+    "metadata": {
+      "name": "fi-fleet-man-web-mrm5ihjk",
+      "namespace": "fleet",
+      "labels": {
+        "app.kubernetes.io/managed-by": "fleet",
+        "fleet.dev/cluster": "minikube",
+        "fleet.dev/fleet": "cookcatg",
+        "fleet.dev/key": "mrm5ihjk",
+        "fleet.dev/owner": "0123456789ab",
+        "fleet.dev/role": "instance",
+        "fleet.dev/share-group": "cookcatg"
+      },
+      "annotations": {
+        "fleet.dev/info": "{\"v\":1,\"fleet\":\"fleet-man\",\"instance\":\"web\",\"created\":\"2026-10-10T12:00:00.123456789Z\"}"
+      }
+    },
+    "spec": {
+      "accessModes": [
+        "ReadWriteOnce"
+      ],
+      "resources": {
+        "requests": {
+          "storage": "50Gi"
+        }
+      },
+      "volumeMode": "Filesystem"
+    },
+    "status": {}
+  },
+  "specSecret": {
+    "metadata": {
+      "name": "fi-fleet-man-web-mrm5ihjk-spec-g1",
+      "namespace": "fleet",
+      "labels": {
+        "app.kubernetes.io/managed-by": "fleet",
+        "fleet.dev/cluster": "minikube",
+        "fleet.dev/fleet": "cookcatg",
+        "fleet.dev/key": "mrm5ihjk",
+        "fleet.dev/owner": "0123456789ab",
+        "fleet.dev/role": "instance",
+        "fleet.dev/share-group": "cookcatg"
+      },
+      "annotations": {
+        "fleet.dev/rebuild-gen": "1"
+      }
+    },
+    "data": {
+      "capture.json": "877 bytes",
+      "exec.json": "149 bytes",
+      "inspect.json": "1995 bytes",
+      "merged.json": "1868 bytes",
+      "pid1.json": "235 bytes"
+    }
+  },
+  "envSecret": {
+    "metadata": {
+      "name": "fi-fleet-man-web-mrm5ihjk-env-g1",
+      "namespace": "fleet",
+      "labels": {
+        "app.kubernetes.io/managed-by": "fleet",
+        "fleet.dev/cluster": "minikube",
+        "fleet.dev/fleet": "cookcatg",
+        "fleet.dev/key": "mrm5ihjk",
+        "fleet.dev/owner": "0123456789ab",
+        "fleet.dev/role": "instance",
+        "fleet.dev/share-group": "cookcatg"
+      },
+      "annotations": {
+        "fleet.dev/rebuild-gen": "1"
+      }
+    },
+    "data": {}
+  },
+  "statefulSet": {
+    "kind": "StatefulSet",
+    "apiVersion": "apps/v1",
+    "metadata": {
+      "name": "fi-fleet-man-web-mrm5ihjk",
+      "namespace": "fleet",
+      "labels": {
+        "app.kubernetes.io/managed-by": "fleet",
+        "fleet.dev/cluster": "minikube",
+        "fleet.dev/fleet": "cookcatg",
+        "fleet.dev/key": "mrm5ihjk",
+        "fleet.dev/owner": "0123456789ab",
+        "fleet.dev/role": "instance",
+        "fleet.dev/share-group": "cookcatg"
+      },
+      "annotations": {
+        "fleet.dev/container-created": "2026-10-10T12:00:00.123456789Z",
+        "fleet.dev/image-id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "fleet.dev/rebuild-gen": "1",
+        "fleet.dev/spec-hash": "sha256:522af9c6fe55246873b9c2b20f985d4397cddfe2d573f224c43ec26526f9b5c9"
+      }
+    },
+    "spec": {
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "app.kubernetes.io/managed-by": "fleet",
+          "fleet.dev/cluster": "minikube",
+          "fleet.dev/key": "mrm5ihjk",
+          "fleet.dev/owner": "0123456789ab",
+          "fleet.dev/role": "instance"
+        }
+      },
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "fleet",
+            "fleet.dev/cluster": "minikube",
+            "fleet.dev/fleet": "cookcatg",
+            "fleet.dev/key": "mrm5ihjk",
+            "fleet.dev/owner": "0123456789ab",
+            "fleet.dev/role": "instance",
+            "fleet.dev/share-group": "cookcatg",
+            "istio.io/dataplane-mode": "none",
+            "sidecar.istio.io/inject": "false"
+          },
+          "annotations": {
+            "cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
+            "consul.hashicorp.com/connect-inject": "false",
+            "karpenter.sh/do-not-disrupt": "true",
+            "kubectl.kubernetes.io/default-container": "dev",
+            "kuma.io/sidecar-injection": "disabled",
+            "linkerd.io/inject": "disabled",
+            "sidecar.istio.io/inject": "false"
+          }
+        },
+        "spec": {
+          "volumes": [
+            {
+              "name": "disk",
+              "persistentVolumeClaim": {
+                "claimName": "fi-fleet-man-web-mrm5ihjk"
+              }
+            },
+            {
+              "name": "spec",
+              "secret": {
+                "secretName": "fi-fleet-man-web-mrm5ihjk-spec-g1",
+                "defaultMode": 256
+              }
+            },
+            {
+              "name": "run",
+              "emptyDir": {}
+            },
+            {
+              "name": "control",
+              "emptyDir": {
+                "medium": "Memory"
+              }
+            }
+          ],
+          "containers": [
+            {
+              "name": "dev",
+              "image": "fleet.local/0123456789ab/devcontainer:111111111111",
+              "command": [
+                "/opt/fleet/bin/fleet",
+                "pod-init",
+                "--spec",
+                "/opt/fleet/spec/pid1.json"
+              ],
+              "env": [
+                {
+                  "name": "FLEET_POD_UID",
+                  "valueFrom": {
+                    "fieldRef": {
+                      "apiVersion": "v1",
+                      "fieldPath": "metadata.uid"
+                    }
+                  }
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "memory": "8Gi"
+                },
+                "requests": {
+                  "cpu": "500m",
+                  "memory": "2Gi"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "disk",
+                  "mountPath": "/etc",
+                  "subPath": "root/etc"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/home",
+                  "subPath": "root/home"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/opt",
+                  "subPath": "root/opt"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/root",
+                  "subPath": "root/root"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/srv",
+                  "subPath": "root/srv"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/tmp",
+                  "subPath": "root/tmp"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/usr",
+                  "subPath": "root/usr"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/var",
+                  "subPath": "root/var"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/workspaces",
+                  "subPath": "root-extra/workspaces"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/etc/resolv.conf",
+                  "subPath": "meta/resolv.conf"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/etc/hostname",
+                  "subPath": "meta/hostname"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/opt/fleet",
+                  "subPath": "fleet"
+                },
+                {
+                  "name": "spec",
+                  "readOnly": true,
+                  "mountPath": "/opt/fleet/spec"
+                },
+                {
+                  "name": "run",
+                  "mountPath": "/opt/fleet/run"
+                },
+                {
+                  "name": "control",
+                  "mountPath": "/fleet-mounts/control"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/workspaces/fixture-dind",
+                  "subPath": "ws"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/var/lib/docker",
+                  "subPath": "vol/dind-var-lib-docker-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide"
+                }
+              ],
+              "terminationMessagePolicy": "File",
+              "imagePullPolicy": "Never",
+              "securityContext": {
+                "privileged": true,
+                "runAsUser": 0,
+                "runAsGroup": 0
+              }
+            }
+          ],
+          "restartPolicy": "Always",
+          "terminationGracePeriodSeconds": 10,
+          "dnsPolicy": "ClusterFirst",
+          "nodeSelector": {
+            "kubernetes.io/arch": "amd64",
+            "kubernetes.io/os": "linux"
+          },
+          "automountServiceAccountToken": false,
+          "securityContext": {
+            "seLinuxOptions": {
+              "level": "s0:c312,c703"
+            },
+            "fsGroupChangePolicy": "OnRootMismatch",
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "enableServiceLinks": false
+        }
+      },
+      "serviceName": "fs-fleet-man-cookcatg-net",
+      "updateStrategy": {
+        "type": "OnDelete"
+      },
+      "revisionHistoryLimit": 2
+    },
+    "status": {
+      "replicas": 0,
+      "availableReplicas": 0
+    }
+  },
+  "seed": {
+    "kind": "Job",
+    "apiVersion": "batch/v1",
+    "metadata": {
+      "name": "fi-fleet-man-web-mrm5ihjk-seed-g1",
+      "namespace": "fleet",
+      "labels": {
+        "app.kubernetes.io/managed-by": "fleet",
+        "fleet.dev/cluster": "minikube",
+        "fleet.dev/fleet": "cookcatg",
+        "fleet.dev/key": "mrm5ihjk",
+        "fleet.dev/owner": "0123456789ab",
+        "fleet.dev/role": "seed",
+        "fleet.dev/share-group": "cookcatg"
+      },
+      "annotations": {
+        "fleet.dev/rebuild-gen": "1"
+      }
+    },
+    "spec": {
+      "parallelism": 1,
+      "completions": 1,
+      "activeDeadlineSeconds": 960,
+      "backoffLimit": 0,
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "fleet",
+            "fleet.dev/cluster": "minikube",
+            "fleet.dev/fleet": "cookcatg",
+            "fleet.dev/key": "mrm5ihjk",
+            "fleet.dev/owner": "0123456789ab",
+            "fleet.dev/role": "seed",
+            "fleet.dev/share-group": "cookcatg",
+            "istio.io/dataplane-mode": "none",
+            "sidecar.istio.io/inject": "false"
+          },
+          "annotations": {
+            "consul.hashicorp.com/connect-inject": "false",
+            "karpenter.sh/do-not-disrupt": "true",
+            "kubectl.kubernetes.io/default-container": "job",
+            "kuma.io/sidecar-injection": "disabled",
+            "linkerd.io/inject": "disabled",
+            "sidecar.istio.io/inject": "false"
+          }
+        },
+        "spec": {
+          "volumes": [
+            {
+              "name": "disk",
+              "persistentVolumeClaim": {
+                "claimName": "fi-fleet-man-web-mrm5ihjk"
+              }
+            },
+            {
+              "name": "tools",
+              "emptyDir": {}
+            }
+          ],
+          "containers": [
+            {
+              "name": "job",
+              "image": "fleet.local/0123456789ab/devcontainer:111111111111",
+              "command": [
+                "sh",
+                "-c",
+                "i=0; until [ -f /fleet-tools/.ready ]; do i=$((i+1)); [ $i -gt 600 ] && exit 70; sleep 1; done; exec /fleet-tools/fleet pod-job --spec /fleet-tools/job.json"
+              ],
+              "resources": {
+                "limits": {
+                  "memory": "8Gi"
+                },
+                "requests": {
+                  "cpu": "500m",
+                  "memory": "2Gi"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "disk",
+                  "mountPath": "/fleet-pvc"
+                },
+                {
+                  "name": "tools",
+                  "mountPath": "/fleet-tools"
+                }
+              ],
+              "terminationMessagePolicy": "File",
+              "imagePullPolicy": "Never",
+              "securityContext": {
+                "capabilities": {
+                  "add": [
+                    "AUDIT_WRITE",
+                    "CHOWN",
+                    "DAC_OVERRIDE",
+                    "FOWNER",
+                    "FSETID",
+                    "KILL",
+                    "MKNOD",
+                    "NET_BIND_SERVICE",
+                    "SETFCAP",
+                    "SETGID",
+                    "SETPCAP",
+                    "SETUID",
+                    "SYS_CHROOT"
+                  ]
+                },
+                "runAsUser": 0,
+                "runAsGroup": 0
+              }
+            }
+          ],
+          "restartPolicy": "Never",
+          "terminationGracePeriodSeconds": 10,
+          "dnsPolicy": "ClusterFirst",
+          "nodeSelector": {
+            "kubernetes.io/arch": "amd64",
+            "kubernetes.io/os": "linux"
+          },
+          "automountServiceAccountToken": false,
+          "securityContext": {
+            "seLinuxOptions": {
+              "level": "s0:c312,c703"
+            },
+            "fsGroupChangePolicy": "OnRootMismatch",
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "enableServiceLinks": false
+        }
+      },
+      "ttlSecondsAfterFinished": 600
+    },
+    "status": {}
+  }
+}

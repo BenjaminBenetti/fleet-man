@@ -42,6 +42,13 @@ func WarnPath(fleetName, instanceName string) string {
 	return fleetpaths.WarnPath(fleetName, instanceName)
 }
 
+// InstanceCreationLogPath returns the path of an instance's creation log, the
+// file a provisioning job writes its output to (see
+// fleetpaths.InstanceCreationLogPath; the TUI reads the same path).
+func InstanceCreationLogPath(fleetName, instanceName string) string {
+	return fleetpaths.InstanceCreationLogPath(fleetName, instanceName)
+}
+
 // TriggerLogsDir returns the host directory that holds an automation trigger's
 // recorded event logs: ~/.fleet/logs/<fleet>/trigger/<trigger>/. The daemon
 // writes one event-<timestamp>.log per firing here (keeping the most recent
@@ -51,6 +58,34 @@ func WarnPath(fleetName, instanceName string) string {
 // same directory.
 func TriggerLogsDir(fleetName, triggerName string) string {
 	return filepath.Join(FleetDir(), "logs", safeLogSegment(fleetName), "trigger", safeLogSegment(triggerName))
+}
+
+// AutomationWatchPath returns the file the automation scheduler persists its
+// watch list to (~/.fleet/automation/watch.json): the runs it has spawned and
+// still has to launch or reap, so a daemon restart picks them back up.
+func AutomationWatchPath() string {
+	return filepath.Join(FleetDir(), "automation", "watch.json")
+}
+
+// SyncLocationDir returns the host folder that keeps a fleet's own copy of
+// one location's agent login files (~/.fleet/sync/<fleet>/loc/<location>/,
+// location a cluster connection's id): each tool's credential file at its
+// path below the fleet's mount root (syncpolicy.Table.Credentials), written
+// by that location's sync and removed by a logout there. The automation
+// login check reads it, so a firing needs no cluster call. Both names are
+// reduced to safe single path segments, like TriggerLogsDir's.
+func SyncLocationDir(fleetName, location string) string {
+	return filepath.Join(SyncFleetDir(fleetName), "loc", safeLogSegment(location))
+}
+
+// SyncFleetDir returns the host folder of a fleet's shared-state sync
+// (~/.fleet/sync/<fleet>/): the sync hub's state (hub/, blobs/, conflicts/),
+// the daemon host's and each login store's manifests, and the login stores
+// (loc/, SyncLocationDir). Kept when the fleet is destroyed, like its shared
+// folders under WorkspacesDir, so a fleet made again under its name picks up
+// where it left off.
+func SyncFleetDir(fleetName string) string {
+	return filepath.Join(FleetDir(), "sync", safeLogSegment(fleetName))
 }
 
 // safeLogSegment reduces name to one filesystem-safe path segment: it keeps
@@ -157,4 +192,39 @@ func PrependWarn(fleetName, instanceName, warning string) {
 // use this so a persistently-failing per-tick warning cannot flood fleet.log.
 func WriteWarnQuiet(fleetName, instanceName, warning string) {
 	writeWarnFile(fleetName, instanceName, warning)
+}
+
+// ReplaceWarnLine keeps one line of the instance's banner up to date: every
+// line starting with prefix goes, and line (when not empty) goes in front,
+// the rest kept in their order. It reports whether the banner changed; a new
+// or changed line is recorded to the event log like WriteWarn, a line taken
+// off is not. For a warning a periodic check puts on and takes off again
+// (one whose text moves, say a count down to a deadline).
+func ReplaceWarnLine(fleetName, instanceName, prefix, line string) bool {
+	existing, _ := os.ReadFile(WarnPath(fleetName, instanceName))
+	var kept []string
+	old := ""
+	for _, l := range strings.Split(string(existing), "\n") {
+		switch {
+		case strings.HasPrefix(l, prefix):
+			old = l
+		case l != "":
+			kept = append(kept, l)
+		}
+	}
+	if old == line {
+		return false
+	}
+	if line != "" {
+		kept = append([]string{line}, kept...)
+	}
+	if len(kept) == 0 {
+		_ = os.Remove(WarnPath(fleetName, instanceName))
+	} else {
+		writeWarnFile(fleetName, instanceName, strings.Join(kept, "\n"))
+	}
+	if line != "" {
+		flog.Warn("instance warning", "fleet", fleetName, "instance", instanceName, "warn", line)
+	}
+	return true
 }

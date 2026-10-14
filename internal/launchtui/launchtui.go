@@ -6,7 +6,7 @@
 // square.
 //
 // The browser the TUI drives lives on the host (it is proxied into the
-// container by privoxy), so the TUI cannot open it directly. Instead it dials
+// container by the browser proxy), so the TUI cannot open it directly. Instead it dials
 // the control socket fleet bind-mounts into the instance (internal/control)
 // and asks the host fleet TUI to open or navigate the browser:
 //

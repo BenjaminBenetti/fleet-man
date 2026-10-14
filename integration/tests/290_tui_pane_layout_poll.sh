@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Pane layout stays in sync with tmux via the discovery poll (%/Ctrl+Q coverage).
 set -euo pipefail
 

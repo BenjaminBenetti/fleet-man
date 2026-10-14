@@ -33,6 +33,15 @@ const (
 	remoteDir  = "/usr/bin"
 )
 
+// MicSinkArgv is the in-instance command line of the virtual microphone's
+// sink (`fleet mic sink`). The staged binary is named by its absolute path, so
+// the command does not depend on the exec user's PATH.
+func MicSinkArgv() []string { return []string{RemotePath, "mic", "sink"} }
+
+// OutputSourceArgv is the in-instance command line of the audio output's
+// source (`fleet output source`), by the staged binary's absolute path.
+func OutputSourceArgv() []string { return []string{RemotePath, "output", "source"} }
+
 // EnsureFresh stages the host's fleet binary at RemotePath when the
 // remote copy is absent, predates the version subcommand, is a dev
 // build, or has a different version than the host. A host that is
@@ -46,7 +55,13 @@ const (
 // reliably takes effect on the next start. It is NOT called when the
 // binary is already up to date, so passing a hook that always kills a
 // service won't churn services unnecessarily.
+//
+// A backend that stages the binary its own way (Stager) does all of this
+// itself.
 func EnsureFresh(instanceBackend backend.Backend, workspaceDir string, beforeRefresh func() error) (bool, error) {
+	if stager, ok := instanceBackend.(Stager); ok {
+		return stager.StageFleet(workspaceDir, beforeRefresh)
+	}
 	refresh, err := needsRefresh(instanceBackend, workspaceDir)
 	if err != nil {
 		return false, err

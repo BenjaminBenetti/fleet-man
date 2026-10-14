@@ -37,6 +37,10 @@ type service struct {
 	// relay sockets the daemon's children and instances connect to.
 	agent       *agentHub
 	gitHostKeys gitHostKeyHub
+	// repoChecks keeps what InspectRepo's check/kubernetes read of each
+	// remote, for the Deploy row of a fleet with no checkout on this host
+	// yet (deploy_findings.go). Its zero value is ready.
+	repoChecks repoChecks
 	// instanceMCP serves the fleet MCP server into the instances of fleets
 	// with the Fleet MCP setting on (mcp_instance.go). Its sync loop is
 	// started by the serve loop; without it (newService() tests) it is inert.
@@ -46,6 +50,38 @@ type service struct {
 	// after the MCP listener binds (so it knows the loopback port); nil for tests
 	// that use newService() without a serve loop, so callers must nil-check.
 	remote *remote.Manager
+
+	// kube runs the Kubernetes connections: their probes, owner Leases and
+	// health push (kube_health.go; inert in a -tags nok8s build). The serve
+	// loop starts it once fleetd serves; without it (newService() tests) the
+	// kube RPCs still work and connections stay CHECKING.
+	kube *kubeManager
+	// kubePods drives the pool from fleetd's state and acts on what its
+	// informers see of the Kubernetes instances' pods: restarts the cluster
+	// made, crash loops, agent sessions (kube_pods.go; inert in a -tags nok8s
+	// build). Started by the serve loop once fleetd serves.
+	kubePods *kubePods
+	// podAgents is the daemon's side of the Kubernetes pods' in-pod sockets:
+	// what each pod binds and the connections they relay (podagent_hub.go;
+	// inert in a -tags nok8s build). Started by the serve loop.
+	podAgents *podAgentHub
+	// control is the control-socket registry: the host sockets, and the
+	// envelope handler the pods' relayed control connections share. Set by
+	// the serve loop; nil in newService() tests.
+	control *controlRegistry
+	// kubeRecovery reconciles the Kubernetes jobs a previous daemon died in
+	// and deletes known garbage (kube_reconcile.go; inert in a -tags nok8s
+	// build). failInterruptedJobs uses its journals at start; the serve
+	// loop starts its undo jobs and background passes.
+	kubeRecovery *kubeRecovery
+	// shareSync keeps each fleet's shared folders on its clusters converged
+	// with the daemon host's (share_sync.go; inert in a -tags nok8s build,
+	// and until a fleet has an instance on a cluster). Started by the serve
+	// loop; flushed and closed by the shutdown (shareFlush).
+	shareSync *shareSync
+	// shareMoves moves fleets' shares to their connection's shared
+	// StorageClass once it changed, each once its fleet is stopped there.
+	shareMoves *kubeShareMoves
 
 	// sshListen serves the token-gated gRPC server on a loopback port while
 	// remote fleet is enabled in SSH mode (sshlisten.go); sshTunnels maintains
@@ -70,10 +106,13 @@ type service struct {
 
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
+	// stopping is set as the shutdown begins (beginShutdown, shutdown.go).
+	stopping atomic.Bool
 
-	// buildkitReconciling coalesces the TUI-connect buildkit re-ensure so that
-	// several TUIs opening at once trigger one sweep, not one per client.
-	buildkitReconciling atomic.Bool
+	// sharedServicesReconciling coalesces the TUI-connect shared-service
+	// re-ensure so that several TUIs opening at once trigger one sweep, not one
+	// per client.
+	sharedServicesReconciling atomic.Bool
 
 	// triggerFires carries matched trigger fires from a concurrent producer — the
 	// webhook receiver or a bash trigger's probe goroutine — to the single-
@@ -84,7 +123,44 @@ type service struct {
 	// block the producer; a full channel makes the webhook receiver shed (503)
 	// rather than block (see webhook.go). Drained only while runScheduler is
 	// running (the real serve loop); tests that use newService() read it directly.
+	// Producers send through handFires, which refuses once the stopping
+	// scheduler has closed it (closeFires, under firesMu), so no batch lands
+	// after the scheduler's last look.
 	triggerFires chan []triggerFire
+	firesMu      sync.RWMutex
+	firesClosed  bool
+
+	// automation is the automation limiter (automation_limits.go): the
+	// cluster agents' limits and their triggers' queues, shared by the
+	// scheduler and the webhook receiver; made on first use (limiter), so a
+	// zero service in a test has one too.
+	automation     *automationLimiter
+	automationOnce sync.Once
+	// schedulerWake asks the scheduler to look at its queues and status
+	// again (a settings change) without waiting for its next tick.
+	schedulerWake chan struct{}
+}
+
+// limiter is the service's automation limiter.
+func (s *service) limiter() *automationLimiter {
+	s.automationOnce.Do(func() {
+		if s.automation == nil {
+			s.automation = newAutomationLimiter()
+		}
+	})
+	return s.automation
+}
+
+// wakeScheduler asks the running scheduler to look again at once; a no-op
+// without one.
+func (s *service) wakeScheduler() {
+	if s.schedulerWake == nil {
+		return
+	}
+	select {
+	case s.schedulerWake <- struct{}{}:
+	default:
+	}
 }
 
 func newService() *service {
@@ -98,8 +174,24 @@ func newService() *service {
 		shutdownCh:   make(chan struct{}),
 		bgCtx:        context.Background(),
 		triggerFires: make(chan []triggerFire, triggerFireBuffer),
+		// Buffered by one: a wake while the scheduler is busy is kept, more
+		// are the same wake.
+		schedulerWake: make(chan struct{}, 1),
 	}
 	svc.instanceMCP = newInstanceMCP(svc)
+	svc.kube = newKubeManager(svc)
+	svc.kubePods = newKubePods(svc)
+	svc.podAgents = newPodAgentHub(svc)
+	svc.kubeRecovery = newKubeRecovery(svc)
+	svc.shareSync = newShareSync(svc)
+	svc.shareMoves = newKubeShareMoves(svc)
+	svc.hub.stateListeners = append(svc.hub.stateListeners, svc.kubePods.onState, svc.podAgents.onState, svc.shareSync.onState, svc.shareMoves.onState)
+	// The in-flight jobs and their current steps are pushed over Watch. The
+	// set is taken on the hub loop, so pushes land in the order they happen
+	// and the last one is always current.
+	svc.jobs.onChange = func() {
+		svc.hub.post(func(h *hub) { h.broadcastActiveJobs(svc.jobs.activeJobs()) })
+	}
 	svc.output.configMu = &svc.muWrite
 	svc.output.onChange = func(snapshot *fleetgrpc.OutputTargets) {
 		svc.hub.post(func(h *hub) { h.broadcastOutputTargets(snapshot) })
@@ -117,9 +209,10 @@ func newService() *service {
 	return svc
 }
 
-// reconcileTimeout bounds the TUI-connect buildkit reconcile so a slow/wedged
-// docker daemon can't keep the coalescing flag held indefinitely (which would
-// lock out future reconciles). It also frees the flag on shutdown via bgCtx.
+// reconcileTimeout bounds the TUI-connect shared-service reconcile so a
+// slow/wedged runtime can't keep the coalescing flag held indefinitely (which
+// would lock out future reconciles). It also frees the flag on shutdown via
+// bgCtx.
 const reconcileTimeout = 3 * time.Minute
 
 // Hello is the authoritative version handshake. It reports the server's
@@ -141,8 +234,9 @@ func (s *service) FleetTUIConnected(_ context.Context, _ *fleetgrpc.FleetTUIConn
 }
 
 // onTUIConnected runs the once-per-connect, fire-and-forget reconciliation in a
-// background goroutine. Today it re-ensures configured shared buildkit servers
-// (recovering from an external kill / reboot).
+// background goroutine. Today it re-ensures the fleets' configured shared
+// services (recovering from an external kill / reboot; see
+// ensureConfiguredSharedServices).
 //
 // Coalesced via an atomic flag so N TUIs connecting simultaneously run the sweep
 // once, not N times. NOTE the in-flight sweep reflects state as of WHEN IT
@@ -157,7 +251,7 @@ func (s *service) FleetTUIConnected(_ context.Context, _ *fleetgrpc.FleetTUIConn
 // (the inner sweep goroutine may then outlive this one, but it dies with the
 // process and does no harm).
 func (s *service) onTUIConnected() {
-	if !s.buildkitReconciling.CompareAndSwap(false, true) {
+	if !s.sharedServicesReconciling.CompareAndSwap(false, true) {
 		return // a reconcile is already in flight; it covers this connect
 	}
 	go func() {
@@ -166,15 +260,13 @@ func (s *service) onTUIConnected() {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			ensureConfiguredBuildkitServers(ctx)
-			ensureConfiguredDebCacheServers(ctx)
-			ensureConfiguredImageCacheServers(ctx)
+			ensureConfiguredSharedServices(ctx)
 		}()
 		select {
 		case <-done:
 		case <-ctx.Done(): // timeout or shutdown
 		}
-		s.buildkitReconciling.Store(false)
+		s.sharedServicesReconciling.Store(false)
 	}()
 }
 
@@ -185,21 +277,29 @@ func (s *service) onTUIConnected() {
 // (cli up/down/... ) still mutate state.json directly until Phase 4, so a cached
 // snapshot here could clobber or hide their writes — a re-read can't. The
 // authoritative in-memory model (and the actual #63 fix) arrive in Phase 4 when
-// the last client-side writer is removed. Runtime + active_jobs are empty until
-// Phase 2 (Watch/pollers) and Phase 4 (jobs).
-func (s *service) GetState(_ context.Context, _ *fleetgrpc.GetStateRequest) (*fleetgrpc.GetStateReply, error) {
+// the last client-side writer is removed. The live runtime streams over Watch;
+// here it carries only current_branch, read on demand when the caller sets
+// fresh_branches (branches.go), since the runtime pollers run only while a TUI
+// watches.
+func (s *service) GetState(ctx context.Context, req *fleetgrpc.GetStateRequest) (*fleetgrpc.GetStateReply, error) {
 	st, err := state.Load()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load state: %v", err)
 	}
-	return &fleetgrpc.GetStateReply{State: protoconv.StateToProto(st), ActiveJobs: s.jobs.summaries()}, nil
+	reply := &fleetgrpc.GetStateReply{State: protoconv.StateToProto(st), ActiveJobs: s.jobs.summaries()}
+	if req.GetFreshBranches() {
+		reply.Runtime = s.hub.freshBranches(ctx, st)
+	}
+	return reply, nil
 }
 
-// Shutdown asks the server to stop. Phase 1 has no jobs, so a drain is
-// immediate. The serve loop watches shutdownCh; GracefulStop there waits for
-// THIS RPC to return before tearing the server down, so the caller still gets
-// its reply.
+// Shutdown asks the server to stop. Running jobs are not waited for (the
+// Kubernetes ones stop at a checkpoint, shutdown.go). The serve loop watches
+// shutdownCh; GracefulStop there waits for THIS RPC to return before tearing
+// the server down, so the caller still gets its reply, which says how long
+// the shutdown may take before the daemon exits regardless (its hard limit):
+// what a restarting client waits for before it kills the process.
 func (s *service) Shutdown(_ context.Context, _ *fleetgrpc.ShutdownRequest) (*fleetgrpc.ShutdownReply, error) {
 	s.shutdownOnce.Do(func() { close(s.shutdownCh) })
-	return &fleetgrpc.ShutdownReply{Accepted: true, DrainingJobs: 0}, nil
+	return &fleetgrpc.ShutdownReply{Accepted: true, DrainingJobs: 0, HardLimitMs: shutdownHardLimit.Milliseconds()}, nil
 }

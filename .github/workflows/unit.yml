@@ -44,3 +44,71 @@ jobs:
         env:
           FLEET_TEST_REQUIRE_PULSE: "1"
         run: go test ./...
+
+      # internal/safefs (sharesync's host writer) must never leave its tree or
+      # follow a symlink in it while another party swaps entries for links.
+      # Fuzz that race on both of Linux's walks (openat2 and the portable one)
+      # for a bounded time; minimization is bounded too, since the race makes
+      # coverage vary between runs and unbounded minimization stalls the job.
+      - name: safefs symlink-swap race fuzz
+        run: go test -run '^$' -fuzz '^FuzzSymlinkSwap$' -fuzztime 60s -fuzzminimizetime 10x ./internal/safefs
+
+      - name: Upload the safefs fuzz failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safefs-fuzz-linux
+          path: internal/safefs/testdata/fuzz
+          if-no-files-found: ignore
+
+      # The exec identity matrix switches users for real (setuid, initgroups,
+      # PTY chown), which needs root. FLEET_EXECAS_REQUIRE_ROOT turns the
+      # tests' skip into a failure, so they cannot quietly stop running.
+      - name: execas identity matrix as root
+        run: |
+          go test -c -o "$RUNNER_TEMP/execas.test" ./internal/execas
+          sudo FLEET_EXECAS_REQUIRE_ROOT=1 "$RUNNER_TEMP/execas.test" -test.run 'AsRoot' -test.v
+
+      # The seed copier keeps owners, file capabilities, root-owned setuid
+      # files, device nodes and ACLs, and pod-init drops to containerUser:
+      # both need root to be tested for real. FLEET_PODSEED_REQUIRE_ROOT turns
+      # the root tests' skip into a failure.
+      - name: podseed and podinit as root
+        run: |
+          go test -c -o "$RUNNER_TEMP/podseed.test" ./internal/podseed
+          go test -c -o "$RUNNER_TEMP/podinit.test" ./internal/podinit
+          sudo FLEET_PODSEED_REQUIRE_ROOT=1 "$RUNNER_TEMP/podseed.test" -test.v
+          sudo FLEET_PODSEED_REQUIRE_ROOT=1 "$RUNNER_TEMP/podinit.test" -test.v
+
+      # pod-init as PID 1 of a privileged container with a memory limit, in a
+      # private and in the host cgroup namespace (the shapes cri-dockerd and
+      # containerd give a privileged pod): the cgroup layout, an OOM that
+      # leaves the container running, the stop signal and the rolling file.
+      - name: pod-init as PID 1 in docker
+        env:
+          FLEET_PODINIT_DOCKER: "1"
+        run: go test -count=1 -run TestPodInitAsPID1InDocker -v ./internal/podinit
+
+      # The pod agent writes and reads files as the pod's users (a per-thread
+      # file system identity) and runs commands as them, under shepherds too;
+      # FLEET_PODAGENT_REQUIRE_ROOT turns the skip into a failure.
+      - name: pod agent identities as root
+        run: |
+          go test -c -o "$RUNNER_TEMP/podagent.test" ./internal/podagent
+          sudo FLEET_PODAGENT_REQUIRE_ROOT=1 "$RUNNER_TEMP/podagent.test" -test.run 'AsRoot' -test.v
+
+  # The unit suite under the race detector, beside the unit job rather than in
+  # its 10 minutes (about 5 minutes of tests on a 4-core runner, plus the
+  # race build).
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: go test -race
+        run: go test -race ./...

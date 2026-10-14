@@ -2,7 +2,10 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net"
+	"slices"
+	"strconv"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
 	"google.golang.org/grpc"
@@ -21,10 +24,21 @@ import (
 // There is still NO registration auth — isolation comes from the unguessable public
 // id and the end-to-end bearer token, exactly as before.
 
-// gatewayFeatures lists the optional tunnel features this gateway supports and
+// gatewayFeatures lists the optional tunnel features every gateway supports and
 // offers in the register handshake. fleetd advertises what IT supports; the
-// negotiated set is the intersection.
+// negotiated set is the intersection. FeatureRegistry joins them only on a
+// gateway configured to serve it (see supportedFeatures).
 var gatewayFeatures = []string{tunnel.FeatureGRPC, tunnel.FeatureWebhook}
+
+// supportedFeatures is the feature set this gateway offers: gatewayFeatures,
+// plus FeatureRegistry when the gateway can serve image pulls (it has a
+// session key and an https, path-free public URL; see registryHostFor).
+func (s *Server) supportedFeatures() []string {
+	if s.reg.registryHost == "" {
+		return gatewayFeatures
+	}
+	return append(slices.Clone(gatewayFeatures), tunnel.FeatureRegistry)
+}
 
 // tunnelServiceDesc registers the Register bidi method on the gateway's grpc.Server.
 // Its ServiceName/StreamName compose to tunnel.RegisterMethod.
@@ -81,6 +95,9 @@ func (s *Server) bindTunnel(ctx context.Context, conn net.Conn, remote string) e
 		s.log.Warn("gateway: read register", "remote", remote, "err", err)
 		return err
 	}
+	if req.Attach != "" {
+		return s.bindAttachment(ctx, conn, req, remote)
+	}
 
 	sess, reply, isNew, err := s.reg.claim(req)
 	if err != nil {
@@ -89,12 +106,12 @@ func (s *Server) bindTunnel(ctx context.Context, conn net.Conn, remote string) e
 		return err
 	}
 
-	// Negotiate optional tunnel features (gRPC, webhook). Only features BOTH ends
-	// support become active; an old fleetd (no Features) negotiates none. A daemon
-	// with a traffic kind disabled does not request its feature, so it is not
-	// negotiated and the matching gateway route stays dead for this session — its
-	// computed public URL is withheld accordingly.
-	reply.Features = tunnel.Negotiate(req.Features, gatewayFeatures)
+	// Negotiate optional tunnel features (gRPC, webhook, registry). Only features
+	// BOTH ends support become active; an old fleetd (no Features) negotiates
+	// none. A daemon with a traffic kind disabled does not request its feature,
+	// so it is not negotiated and the matching gateway route stays dead for this
+	// session — its computed public URL is withheld accordingly.
+	reply.Features = tunnel.Negotiate(req.Features, s.supportedFeatures())
 	grpcOn := tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC)
 	sess.grpc.Store(grpcOn)
 	if !grpcOn {
@@ -105,6 +122,20 @@ func (s *Server) bindTunnel(ctx context.Context, conn net.Conn, remote string) e
 	if !webhookOn {
 		reply.PublicWebhookURL = ""
 	}
+	registryOn := tunnel.HasFeature(reply.Features, tunnel.FeatureRegistry)
+	sess.registry.Store(registryOn)
+	if !registryOn {
+		reply.PublicRegistry = ""
+		if tunnel.HasFeature(req.Features, tunnel.FeatureRegistry) {
+			// Asked for and not offered: say why, so the daemon's settings
+			// can show it instead of guessing.
+			reply.RegistryOff = s.registryOff
+		}
+		// A re-registration that dropped the feature (Enable Image Registry
+		// turned off) leaves no use for a registry connection.
+		sess.closeRegistry()
+	}
+	sess.tagged.Store(tunnel.Tagged(reply.Features))
 
 	// Echo the gateway's build version so fleetd can surface it (over
 	// RemoteMcpStatus) to remote TUIs for control-chain version diagnostics.
@@ -139,5 +170,62 @@ func (s *Server) bindTunnel(ctx context.Context, conn net.Conn, remote string) e
 		_ = ym.Close()
 	}
 	s.log.Info("gateway: tunnel closed", "remote", remote, "public_url", sess.publicURL)
+	return nil
+}
+
+// errNoAttachTarget refuses a registry attach that names no bound session with
+// the registry feature negotiated. One message for every case, so the reply
+// says nothing about which secrets exist.
+var errNoAttachTarget = errors.New("gateway: no registry session for this attach")
+
+// bindAttachment binds an auxiliary registry connection (RegisterRequest.Attach
+// == tunnel.AttachRegistry) to the session its SessionID names, and serves it
+// until it closes or the gateway shuts down. It is the session's registryYm
+// slot: one per session (a newer attach supersedes an older one), never the
+// main tunnel, and never counted against MaxSessions. The gateway opens
+// registry streams on it while it is live and on the main tunnel otherwise.
+//
+// The secret is the only credential, as for a reclaim: whoever holds it owns
+// the session anyway. The connection runs the registry yamux config (4 MiB
+// stream window, 60s keepalive timeout).
+func (s *Server) bindAttachment(ctx context.Context, conn net.Conn, req tunnel.RegisterRequest, remote string) error {
+	if req.Attach != tunnel.AttachRegistry {
+		err := errors.New("gateway: unknown attach role " + strconv.Quote(req.Attach))
+		_ = tunnel.WriteFrame(conn, tunnel.RegisterReply{Error: err.Error()})
+		s.log.Warn("gateway: attach rejected", "remote", remote, "err", err)
+		return err
+	}
+	sess := s.reg.attachTarget(req.SessionID)
+	if sess == nil || !sess.registry.Load() {
+		_ = tunnel.WriteFrame(conn, tunnel.RegisterReply{Error: errNoAttachTarget.Error()})
+		s.log.Warn("gateway: attach rejected", "remote", remote, "err", errNoAttachTarget)
+		return errNoAttachTarget
+	}
+	reply := tunnel.RegisterReply{
+		Features:       []string{tunnel.FeatureRegistry},
+		GatewayVersion: s.cfg.Version,
+	}
+	if err := tunnel.WriteFrame(conn, reply); err != nil {
+		s.log.Warn("gateway: write attach reply", "remote", remote, "err", err)
+		return err
+	}
+	ym, err := tunnel.RegistryServerSession(conn, s.yamuxLog())
+	if err != nil {
+		s.log.Warn("gateway: yamux server (registry)", "remote", remote, "err", err)
+		return err
+	}
+	if !s.reg.attachRegistry(sess, ym) {
+		s.log.Warn("gateway: attach rejected", "remote", remote, "err", errNoAttachTarget)
+		return errNoAttachTarget
+	}
+	s.log.Info("gateway: registry connection attached", "remote", remote, "public_url", sess.publicURL)
+
+	select {
+	case <-ym.CloseChan():
+	case <-ctx.Done():
+		_ = ym.Close()
+	}
+	sess.clearRegistryYamux(ym)
+	s.log.Info("gateway: registry connection closed", "remote", remote, "public_url", sess.publicURL)
 	return nil
 }

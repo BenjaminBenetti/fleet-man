@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Auggie mount appears in the container at the expected path.
 set -euo pipefail
 
@@ -20,6 +21,6 @@ mountinfo=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /proc/self/m
 assert_contains "${mountinfo}" " /home/node/.augment " "auggie dir is not a mount point"
 
 info "asserting host-side fleet mount root exists"
-assert_file_exists "${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/.augment"
+assert_file_exists "$(itest_share_dir "${FIXTURE_REPO_NAME}" .augment)"
 
 pass "auggie mount applied"

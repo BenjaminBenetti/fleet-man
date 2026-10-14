@@ -1,0 +1,31 @@
+{
+  "name": "fleet-man integration network fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "postCreateCommand": "sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends tmux socat",
+  "customizations": {
+    "fleet": {
+      "fleetLaunch": {
+        "sites": [
+          {
+            "title": "Itest Web",
+            "subTitle": "itest-net.pl http",
+            "url": "http://localhost:17380/",
+            "healthCheck": "http://localhost:17380/health"
+          },
+          {
+            "title": "Itest Down",
+            "url": "http://localhost:17399/",
+            "healthCheck": "http://localhost:17399/health"
+          }
+        ],
+        "apps": [
+          {
+            "title": "Itest App",
+            "command": "perl itest-net.pl http 17381 >/tmp/itest-net-app.log 2>&1",
+            "port": 17381
+          }
+        ]
+      }
+    }
+  }
+}

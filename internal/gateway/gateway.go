@@ -12,8 +12,10 @@
 // # Two listeners
 //
 //   - Public (proxy.go): remote MCP agents connect here (HTTP/1.1) at
-//     <public-url>/mcp/<id>. Each request is reverse-proxied down the matching
-//     tunnel.
+//     <public-url>/mcp/<id>, webhook senders at <public-url>/webhook/<id>/<name>,
+//     and cluster nodes pull a daemon's images at <host>/v2/<rid>/... (when the
+//     gateway offers the registry feature). Each request is reverse-proxied down
+//     the matching tunnel.
 //   - gRPC (grpc.go + register.go): native gRPC over HTTP/2, serving TWO things —
 //     remote `fleet` control RPCs (routed by the fleet-session metadata header and
 //     proxied down the tunnel) AND fleetd registration (the Register bidi method,
@@ -47,6 +49,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -97,7 +100,7 @@ type Config struct {
 	TLSCert       string // path to the TLS certificate (PEM). Optional; both TLSCert and TLSKey together enable TLS.
 	TLSKey        string // path to the TLS private key (PEM). Optional; both TLSCert and TLSKey together enable TLS.
 	MaxSessions   int    // cap on concurrent tunnels. Default 1024.
-	SessionKey    string // secret key signing session-resume tokens (token.go). Empty = a random per-boot key, so session URLs do not survive a gateway restart.
+	SessionKey    string // secret key signing session-resume tokens (token.go). Empty = a random per-boot key, so session URLs do not survive a gateway restart, and the image registry route is not offered.
 	Version       string // gateway build version, echoed to fleetd in the register reply for diagnostics. Empty = unset (dev build).
 }
 
@@ -109,9 +112,13 @@ type Server struct {
 	tlsConfig *tls.Config
 	log       *slog.Logger
 	// pendingSem bounds concurrent Register handler goroutines (in-flight handshakes
-	// + established tunnels) on the unauthenticated registration surface. nil = no
-	// cap (used by some in-process tests).
+	// + established tunnels + registry attach connections) on the unauthenticated
+	// registration surface. nil = no cap (used by some in-process tests).
 	pendingSem chan struct{}
+	// registryOff is why the gateway does not offer FeatureRegistry ("" when it
+	// does), logged once at startup so an operator can tell why daemons cannot
+	// use gateway image delivery.
+	registryOff string
 }
 
 // New validates cfg, loads the TLS keypair when one is configured, and returns a
@@ -147,13 +154,53 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("gateway: session token key: %w", err)
 	}
 
+	reg := newRegistry(cfg.PublicURL, cfg.PublicGRPCURL, cfg.MaxSessions, signer)
+	registryOff := ""
+	reg.registryHost, registryOff = registryHostFor(cfg)
+	// Each session may hold one registry attach connection besides its main
+	// tunnel, and both occupy a Register handler for their lifetime, so a
+	// registry-serving gateway leaves room for MaxSessions of each.
+	handlers := cfg.MaxSessions + maxPendingHandshakes
+	if reg.registryHost != "" {
+		handlers += cfg.MaxSessions
+	}
 	return &Server{
-		cfg:        cfg,
-		reg:        newRegistry(cfg.PublicURL, cfg.PublicGRPCURL, cfg.MaxSessions, signer),
-		tlsConfig:  tlsConfig,
-		log:        slog.Default(),
-		pendingSem: make(chan struct{}, cfg.MaxSessions+maxPendingHandshakes),
+		cfg:         cfg,
+		reg:         reg,
+		tlsConfig:   tlsConfig,
+		log:         slog.Default(),
+		pendingSem:  make(chan struct{}, handlers),
+		registryOff: registryOff,
 	}, nil
+}
+
+// registryHostFor returns the host[:port] nodes pull a daemon's images from
+// (<host>/v2/<rid>/...) when cfg lets the gateway offer FeatureRegistry, or ""
+// and the reason it cannot:
+//   - a session key, because the registry id rides in the session-resume token,
+//     and a random per-boot key would change every daemon's image references on
+//     each gateway restart (including the one that loads a renewed certificate);
+//   - an https public URL, because a node's container runtime pulls only over
+//     HTTPS (from anything but localhost);
+//   - no path prefix, because registry paths always start at /v2/ on the host
+//     root.
+//
+// cfg.PublicURL has its trailing slashes trimmed already.
+func registryHostFor(cfg Config) (host, whyNot string) {
+	if cfg.SessionKey == "" {
+		return "", "no --session-key"
+	}
+	u, err := url.Parse(cfg.PublicURL)
+	if err != nil || u.Host == "" {
+		return "", "--public-url has no host"
+	}
+	if u.Scheme != "https" {
+		return "", "--public-url is not https"
+	}
+	if u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return "", "--public-url has a path prefix"
+	}
+	return strings.ToLower(u.Host), ""
 }
 
 // Serve is the convenience entrypoint used by the CLI: New + Run.
@@ -227,6 +274,11 @@ func (s *Server) ServeListeners(ctx context.Context, publicLn, grpcLn net.Listen
 		"public", s.cfg.PublicAddr, "grpc", s.cfg.GRPCAddr, "public_url", s.cfg.PublicURL)
 	if s.cfg.SessionKey == "" {
 		s.log.Warn("gateway: no --session-key set; session URLs will not survive a gateway restart")
+	}
+	if s.reg.registryHost != "" {
+		s.log.Info("gateway: image registry route on", "registry_host", s.reg.registryHost)
+	} else if s.registryOff != "" {
+		s.log.Info("gateway: image registry route off", "reason", s.registryOff)
 	}
 
 	select {

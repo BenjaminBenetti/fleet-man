@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+import "domain.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// DEPLOY TARGETS — where a new instance can be created
+// =====================================================================
+
+// DeployTarget names where an instance runs: a backend type and, for
+// KUBERNETES, the cluster connection. A create request resolves to one
+// (CreateInstanceRequest.backend and kube_cluster, or the remembered default
+// when the backend is UNSPECIFIED), and the New instance dialog cycles them.
+message DeployTarget {
+  BackendType backend = 1;
+  // kube_cluster is the cluster connection (KubeCluster.id) of a KUBERNETES
+  // target; empty for every other backend.
+  string kube_cluster = 2;
+}
+
+// DeployTargetOption is one entry of ListDeployTargets.
+message DeployTargetOption {
+  DeployTarget target = 1;
+  // available: a create can go to this target now. The daemon judges it on its
+  // own host (it looks up the CLI the target needs on its PATH), so a remote
+  // client sees what the daemon can do, not what its own machine has.
+  bool available = 2;
+  // reason says why the target is unavailable; empty when it is available.
+  string reason = 3;
+  // warnings are what a create in this fleet would meet on an available
+  // target, as the fleet's devcontainer.json reads (the inspector's
+  // check/kubernetes: Docker-in-Docker on a cluster that allows no
+  // privileged pods, a prebuilt image on one without root), each naming the
+  // target; the New instance dialog shows them when the target is picked.
+  repeated string warnings = 4;
+}
+
+// HostTool is one tool on the daemon host, as Settings -> Tool Status lists it.
+message HostTool {
+  string name = 1;
+  string binary = 2;
+  string description = 3;
+  string install_url = 4;
+  bool found = 5;
+}
+
+message ListDeployTargetsRequest {
+  // fleet narrows the list to the targets that fleet's remote can use: a
+  // file:// template fleet is copied into each instance, which only the
+  // devcontainer target and the clusters can consume. Its devcontainer.json
+  // (the newest checkout on the daemon host, else the last inspection of its
+  // remote) decides the cluster targets' warnings, and makes every one
+  // unavailable for a compose devcontainer. Empty or unknown: no narrowing.
+  string fleet = 1;
+}
+
+message ListDeployTargetsReply {
+  // targets lists every target this daemon knows, in dialog order, available
+  // or not.
+  repeated DeployTargetOption targets = 1;
+  // default_target is what a create in this fleet resolves to when it leaves
+  // the target unspecified: the remembered default
+  // (CreateInstanceRequest.remember_default) narrowed for the fleet, else
+  // devcontainer. It is not necessarily available.
+  DeployTarget default_target = 2;
+  // host_tools are the build tools on the daemon host (docker and the
+  // devcontainer CLI), for the fleetd rows of Settings -> Tool Status.
+  repeated HostTool host_tools = 3;
+  // host is the daemon host's name, shown as "on fleetd @ <host>".
+  string host = 4;
+}

@@ -77,15 +77,24 @@ func (c gatewayCreds) RequireTransportSecurity() bool { return false }
 func grpcStack(t *testing.T) (dial func(withToken bool) *grpc.ClientConn, token string) {
 	t.Helper()
 	isolateFleetDir(t)
+	svc := newService()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go svc.hub.run(ctx)
+	return grpcStackFor(t, svc)
+}
+
+// grpcStackFor is grpcStack serving the caller's svc (its hub already
+// running) under the caller's HOME, so a test can drive one daemon over the
+// gateway and its other transports.
+func grpcStackFor(t *testing.T, svc *service) (dial func(withToken bool) *grpc.ClientConn, token string) {
+	t.Helper()
 	if err := mkFleetDir(); err != nil {
 		t.Fatalf("mkdir fleet dir: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-
-	svc := newService()
-	go svc.hub.run(ctx)
 
 	mcpHTTP, mcpPort := startMCPServer(svc)
 	if mcpHTTP == nil {
@@ -148,7 +157,7 @@ func grpcStack(t *testing.T) (dial func(withToken bool) *grpc.ClientConn, token 
 	// Both toggles on: remote MCP (the tunnel's base traffic) AND remote fleet
 	// (without which the grpc feature is no longer advertised, and every
 	// remote-control RPC under test here would be refused).
-	mgr.Reconcile(true, true, false, "https://gw.example.com")
+	mgr.Reconcile(true, true, false, false, "https://gw.example.com")
 
 	// Wait for CONNECTED and derive the session id from the MCP public URL.
 	var publicURL string

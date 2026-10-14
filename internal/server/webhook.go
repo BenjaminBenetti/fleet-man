@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -117,20 +118,68 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Plan every matched firing before replying: the limiter reserves each
+	// one's runs (to start now, or in its trigger's queue), so the reply says
+	// what became of the delivery. A firing whose trigger's queue is full is
+	// dropped; when every one is, nothing is enqueued and the sender gets a
+	// 429 to retry later.
+	items := make([]firingItem, len(fires))
+	for i, f := range fires {
+		items[i] = firingItem{fleet: f.fleet, trigger: f.trigger}
+	}
+	lim := s.limiter()
+	plans := lim.plan(s.runChecks(), loadScheduleState, items, time.Now())
+	var fired, queued int
+	var dropped []string
+	retryAfter := time.Duration(0)
+	for i, p := range plans {
+		fires[i].plan = p
+		switch {
+		case p.dropped != "":
+			dropped = append(dropped, p.trigger.Name)
+			if retryAfter == 0 || p.retryAfter < retryAfter {
+				retryAfter = p.retryAfter
+			}
+		case p.fired():
+			fired++
+		default:
+			queued++
+		}
+	}
+	if len(dropped) == len(plans) {
+		secs := int((retryAfter + time.Second - 1) / time.Second)
+		flog.Warn("webhook: every matching trigger's queue is full", "name", name, "triggers", len(plans), "status", 429, "retry_after", secs)
+		w.Header().Set("Retry-After", strconv.Itoa(max(secs, 1)))
+		http.Error(w, fmt.Sprintf("the queue of every matching trigger is full (%s); retry later", strings.Join(dropped, ", ")), http.StatusTooManyRequests)
+		return
+	}
+
 	// Hand the WHOLE matched set to the scheduler as one batch — an all-or-nothing
 	// enqueue. Webhook senders retry on a non-2xx, so a partial enqueue (some fires
 	// in, then a 503) would re-fire the already-queued triggers on retry; a single
-	// send makes the request atomic, so a 503 means nothing fired and the retry is
-	// clean.
+	// send makes the request atomic, so a 503 means nothing fired (its
+	// reservations given back) and the retry is clean.
 	if !s.enqueueWebhookFires(r.Context(), fires) {
+		lim.discard(plans)
 		flog.Warn("webhook: enqueue shed", "name", name, "triggers", len(fires))
 		http.Error(w, "fleet scheduler busy, retry shortly", http.StatusServiceUnavailable)
 		return
 	}
 
-	flog.Info("webhook: received", "name", name, "fired", len(fires))
-	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprintf(w, "received: %d trigger(s) fired\n", len(fires))
+	flog.Info("webhook: received", "name", name, "fired", fired, "queued", queued, "dropped", len(dropped))
+	if queued == 0 && len(dropped) == 0 {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "received: %d trigger(s) fired\n", fired)
+		return
+	}
+	// Accepted, but not all of it runs now: 202, naming the dropped triggers
+	// (each drop is in that trigger's log too).
+	w.WriteHeader(http.StatusAccepted)
+	msg := fmt.Sprintf("received: %d fired, %d queued", fired, queued)
+	if len(dropped) > 0 {
+		msg += fmt.Sprintf("; dropped, their queues full: %s", strings.Join(dropped, ", "))
+	}
+	_, _ = io.WriteString(w, msg+"\n")
 }
 
 // collectWebhookFires scans every fleet for webhook triggers named name and
@@ -179,22 +228,13 @@ func bodyIsJSON(body []byte) bool {
 // enqueueWebhookFires hands a request's matched events to the scheduler goroutine
 // as ONE batch (so the enqueue is atomic — see serveWebhook), bounded by
 // webhookEnqueueTimeout and the request's own context. It returns false when the
-// scheduler can't accept the batch in time (overloaded) or the request was
-// cancelled — the caller turns that into a 503.
+// scheduler can't accept the batch in time (overloaded), has stopped, or the
+// request was cancelled — the caller turns that into a 503.
 func (s *service) enqueueWebhookFires(ctx context.Context, fires []triggerFire) bool {
 	if s.triggerFires == nil || len(fires) == 0 {
 		return false
 	}
-	timer := time.NewTimer(webhookEnqueueTimeout)
-	defer timer.Stop()
-	select {
-	case s.triggerFires <- fires:
-		return true
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return false
-	}
+	return s.handFires(ctx, fires, webhookEnqueueTimeout)
 }
 
 // clipName bounds an externally-supplied webhook name before it is written to

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI creates a tmux session inside an instance via the New session dialog
 set -euo pipefail
 

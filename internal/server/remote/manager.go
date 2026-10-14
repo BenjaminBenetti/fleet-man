@@ -38,26 +38,32 @@ const (
 	handshakeTimeout = 15 * time.Second
 )
 
-// desiredState is the latest config the manager should converge to. mcp, grpc
-// and webhook are the three independent exposure toggles ("Enable Remote MCP" /
-// "Enable Remote Fleet" / "Enable Webhook"); the tunnel connects while ANY is on,
-// and each gates its own traffic kind on that shared tunnel.
+// desiredState is the latest config the manager should converge to. mcp, grpc,
+// webhook and registry are the four independent exposure toggles ("Enable
+// Remote MCP" / "Enable Remote Fleet" / "Enable Webhook" / "Enable Image
+// Registry"); the tunnel connects while ANY is on, and each gates its own
+// traffic kind on that shared tunnel (registry: image pulls through the
+// gateway, FeatureRegistry).
 type desiredState struct {
 	mcp        bool
 	grpc       bool
 	webhook    bool
+	registry   bool
 	gatewayURL string
 }
 
 // on reports whether the tunnel should be up at all. It delegates to
 // state.RemoteMcpSettings.TunnelDesired so the dial decision here and the TUI's
-// remote-connection indicator share one definition and can't drift.
+// remote-connection indicator share one definition and can't drift. The image
+// registry alone brings the tunnel up too: a daemon that only serves images
+// to its clusters needs nothing else.
 func (d desiredState) on() bool {
 	return state.RemoteMcpSettings{
-		Enabled:        d.mcp,
-		FleetEnabled:   d.grpc,
-		WebhookEnabled: d.webhook,
-		GatewayURL:     d.gatewayURL,
+		Enabled:              d.mcp,
+		FleetEnabled:         d.grpc,
+		WebhookEnabled:       d.webhook,
+		ImageRegistryEnabled: d.registry,
+		GatewayURL:           d.gatewayURL,
 	}.TunnelDesired()
 }
 
@@ -83,6 +89,31 @@ type Manager struct {
 	// receiver: the Manager advertises FeatureWebhook, and on a gateway that
 	// negotiates it, demuxes TagWebhook streams to this listener. nil = no webhook.
 	webhookLis *ChanListener
+
+	// registryLis, when set, enables serving the daemon's pull-only image
+	// registry through the gateway: the Manager advertises FeatureRegistry, and
+	// on a gateway that negotiates it, demuxes TagRegistry streams that arrive
+	// on the main tunnel or the registry connection to this listener. nil = no
+	// registry.
+	registryLis *ChanListener
+	// onRegistry is told the registry prefix after each change
+	// (WithRegistryChange); onRegistryState the prefix and the reason for
+	// none after either changes (WithRegistryState).
+	onRegistry      func(prefix string)
+	onRegistryState func(prefix, why string)
+	// registryConnWrap wraps the registry connection before yamux runs on it
+	// (WithRegistryConnWrapper).
+	registryConnWrap func(net.Conn) net.Conn
+	// registryIdle closes the registry connection once it has carried no
+	// stream, and nobody asked for it, for this long (registryIdleTimeout;
+	// tests shorten it).
+	registryIdle time.Duration
+
+	// reg is the image registry's state, guarded by regMu (registry.go).
+	regMu sync.Mutex
+	reg   registryState
+	// regWake nudges the registry connection's loop (WarmRegistry).
+	regWake chan struct{}
 
 	mu            sync.Mutex
 	desired       desiredState
@@ -118,6 +149,39 @@ func WithWebhookListener(lis *ChanListener) Option {
 	return func(m *Manager) { m.webhookLis = lis }
 }
 
+// WithRegistryListener enables serving the daemon's image registry through the
+// gateway. lis is fed demuxed TagRegistry streams and is Served by the daemon's
+// image server (which checks the per-cluster pull credential itself). Without
+// this option the Manager never requests FeatureRegistry.
+func WithRegistryListener(lis *ChanListener) Option {
+	return func(m *Manager) { m.registryLis = lis }
+}
+
+// WithRegistryChange registers fn to be told the image registry prefix
+// ("<host[:port]>/<rid>", the gateway's PublicRegistry) whenever it changes:
+// a first registration, a new registry id or host, or "" when the registry is
+// no longer negotiated. fn runs on the Manager's goroutine and must not block
+// (the image server re-points its references in the background).
+func WithRegistryChange(fn func(prefix string)) Option {
+	return func(m *Manager) { m.onRegistry = fn }
+}
+
+// WithRegistryState registers fn to be told the image registry's state, its
+// prefix and why there is none (Registry), whenever either changes, and
+// after a registration that confirmed the prefix kept while the tunnel was
+// down: the cluster connections re-judge Gateway delivery. Like
+// WithRegistryChange, fn runs on the Manager's goroutine and must not block.
+func WithRegistryState(fn func(prefix, why string)) Option {
+	return func(m *Manager) { m.onRegistryState = fn }
+}
+
+// WithRegistryConnWrapper wraps the dedicated registry connection before the
+// tunnel runs on it: the image server meters its writes to measure the
+// daemon host's uplink.
+func WithRegistryConnWrapper(wrap func(net.Conn) net.Conn) Option {
+	return func(m *Manager) { m.registryConnWrap = wrap }
+}
+
 // features lists the tunnel capabilities this Manager requests in its
 // RegisterRequest for the attempt's desired state. Each feature is advertised
 // only when its listener is wired AND the user enabled that traffic kind — NOT
@@ -131,6 +195,9 @@ func (m *Manager) features(d desiredState) []string {
 	}
 	if m.webhookLis != nil && d.webhook {
 		f = append(f, tunnel.FeatureWebhook)
+	}
+	if m.registryLis != nil && d.registry {
+		f = append(f, tunnel.FeatureRegistry)
 	}
 	return f
 }
@@ -148,6 +215,8 @@ func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.Remot
 		logOut:        io.Discard,
 		dial:          dialGateway,
 		wake:          make(chan struct{}, 1),
+		regWake:       make(chan struct{}, 1),
+		reg:           registryState{emitted: unemitted},
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -156,8 +225,9 @@ func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.Remot
 }
 
 // Reconcile records the desired config and nudges the supervisor. mcpEnabled,
-// fleetEnabled and webhookEnabled are the three exposure toggles (remote MCP /
-// remote fleet control / automation webhooks). It is NON-BLOCKING: it sets state,
+// fleetEnabled, webhookEnabled and registryEnabled are the four exposure
+// toggles (remote MCP / remote fleet control / automation webhooks / image
+// pulls through the gateway). It is NON-BLOCKING: it sets state,
 // cancels any in-flight attempt so it re-evaluates, and signals the loop — so it
 // is safe to call while holding other locks (e.g. the service's config-write lock
 // in SetConfig).
@@ -168,8 +238,11 @@ func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.Remot
 // FLEET_GATEWAY) that tunnel carries the SetConfig RPC's own reply: cancelling
 // the attempt would tear down the yamux session mid-RPC and the client would
 // see its successful save fail with an Unavailable/EOF.
-func (m *Manager) Reconcile(mcpEnabled, fleetEnabled, webhookEnabled bool, gatewayURL string) {
-	next := desiredState{mcp: mcpEnabled, grpc: fleetEnabled, webhook: webhookEnabled, gatewayURL: strings.TrimSpace(gatewayURL)}
+//
+// All four toggles arrive together, so a save that flips several bounces the
+// tunnel once.
+func (m *Manager) Reconcile(mcpEnabled, fleetEnabled, webhookEnabled, registryEnabled bool, gatewayURL string) {
+	next := desiredState{mcp: mcpEnabled, grpc: fleetEnabled, webhook: webhookEnabled, registry: registryEnabled, gatewayURL: strings.TrimSpace(gatewayURL)}
 	m.mu.Lock()
 	if next == m.desired {
 		m.mu.Unlock()
@@ -224,7 +297,8 @@ func (m *Manager) Run(ctx context.Context) {
 			m.mu.Lock()
 			m.attemptCancel = nil
 			m.mu.Unlock()
-			m.publish(statusDisabled())
+			m.registryTunnelOff(d)
+			m.emit(statusDisabled(), d)
 			if !m.wait(ctx) {
 				return
 			}
@@ -232,7 +306,11 @@ func (m *Manager) Run(ctx context.Context) {
 			continue
 		}
 
-		m.publish(statusConnecting())
+		// The registry state first, so the CONNECTING status names this
+		// attempt's, not the last one's (e.g. "Enable Image Registry is off"
+		// just after it was turned on).
+		m.registryConnecting(d)
+		m.emit(statusConnecting(), d)
 		registered, err := m.connectAndServe(attemptCtx, d)
 		cancel()
 
@@ -258,7 +336,7 @@ func (m *Manager) Run(ctx context.Context) {
 		} else {
 			// Never connected this attempt — surface the failure while we back off.
 			flog.Warn("remote gateway connect failed", "gateway", d.gatewayURL, "err", err)
-			m.publish(statusError(err))
+			m.emit(statusError(err), d)
 		}
 		if !m.sleep(ctx, jitter(backoff)) {
 			return
@@ -282,6 +360,7 @@ func (m *Manager) connectAndServe(ctx context.Context, d desiredState) (register
 	if m.mcpPort == 0 {
 		return false, fmt.Errorf("local MCP server is not running (required for remote MCP, remote fleet, and webhooks)")
 	}
+	m.registryConnecting(d)
 
 	conn, err := m.dial(ctx, gatewayURL)
 	if err != nil {
@@ -321,10 +400,22 @@ func (m *Manager) connectAndServe(ctx context.Context, d desiredState) (register
 		PublicURL:        reply.PublicURL,
 		PublicGRPCURL:    reply.PublicGRPCURL,
 		PublicWebhookURL: reply.PublicWebhookURL,
+		PublicRegistry:   reply.PublicRegistry,
 		GatewayURL:       gatewayURL,
 	})
-	flog.Info("remote gateway connected", "gateway", gatewayURL, "publicURL", reply.PublicURL, "publicGrpcURL", reply.PublicGRPCURL, "publicWebhookURL", reply.PublicWebhookURL, "gatewayVersion", reply.GatewayVersion)
-	m.publish(statusConnected(reply.PublicURL, reply.PublicGRPCURL, reply.PublicWebhookURL, reply.GatewayVersion))
+	flog.Info("remote gateway connected", "gateway", gatewayURL, "publicURL", reply.PublicURL, "publicGrpcURL", reply.PublicGRPCURL, "publicWebhookURL", reply.PublicWebhookURL, "publicRegistry", reply.PublicRegistry, "gatewayVersion", reply.GatewayVersion)
+	// Streams go only to the kinds this attempt requested, even if a
+	// gateway's reply claims more; the wire itself follows the reply, which
+	// is what the gateway tags by. The registry state is settled before the
+	// CONNECTED status goes out, so whoever sees it sees the registry too.
+	negotiated := tunnel.Negotiate(req.Features, reply.Features)
+	registryOn := tunnel.HasFeature(negotiated, tunnel.FeatureRegistry)
+	if registryOn {
+		m.setRegistry(gatewayURL, reply.PublicRegistry, "", true)
+	} else {
+		m.registryNotNegotiated(d, reply.RegistryOff)
+	}
+	m.emit(statusConnected(reply.PublicURL, reply.PublicGRPCURL, reply.PublicWebhookURL, reply.GatewayVersion), d)
 
 	session, err := tunnel.ClientSession(conn, m.logOut)
 	if err != nil {
@@ -333,22 +424,30 @@ func (m *Manager) connectAndServe(ctx context.Context, d desiredState) (register
 	defer session.Close()
 	// The serve loop unblocks when the session/conn closes — on a peer drop, or
 	// when stopOnCancel closes the conn on ctx cancel (shutdown / Reconcile
-	// teardown). Use the demuxing path when the gateway negotiated gRPC and/or
-	// webhook (each only requested when its toggle is on AND its listener is
-	// wired); pass nil for a NON-negotiated kind so its streams are rejected.
-	// Otherwise the streams are untagged (legacy MCP wire). Either path serves a
-	// traffic kind only while its toggle is on — a toggle flip mid-connection
-	// lands here again via Reconcile's attempt cancel + reconnect.
-	grpcLis := m.grpcLis
-	if !tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
-		grpcLis = nil
+	// teardown). Use the demuxing path when the gateway negotiated a tagging
+	// feature (gRPC, webhook or registry, each only requested when its toggle is
+	// on AND its listener is wired) — tunnel.Tagged, the same predicate the
+	// gateway tags by; pass nil for a NON-negotiated kind so its streams are
+	// rejected. Otherwise the streams are untagged (legacy MCP wire). Either path
+	// serves a traffic kind only while its toggle is on — a toggle flip
+	// mid-connection lands here again via Reconcile's attempt cancel + reconnect.
+	var lis tunnelListeners
+	if tunnel.HasFeature(negotiated, tunnel.FeatureGRPC) {
+		lis.grpc = m.grpcLis
 	}
-	webhookLis := m.webhookLis
-	if !tunnel.HasFeature(reply.Features, tunnel.FeatureWebhook) {
-		webhookLis = nil
+	if tunnel.HasFeature(negotiated, tunnel.FeatureWebhook) {
+		lis.webhook = m.webhookLis
 	}
-	if grpcLis != nil || webhookLis != nil {
-		return registered, serveTunnel(session, m.mcpPort, grpcLis, webhookLis, d.mcp)
+	if registryOn {
+		lis.registry = m.registryLis
+		// A pull on the main tunnel is one fleetd did not start (an
+		// eviction, the kubelet's image GC): open the registry connection for
+		// the rest of it.
+		lis.registryHit = m.WarmRegistry
+		go m.runRegistryConnection(ctx, gatewayURL, reply.SessionID)
+	}
+	if tunnel.Tagged(reply.Features) {
+		return registered, serveTunnel(session, m.mcpPort, lis, d.mcp)
 	}
 	if !d.mcp {
 		// Remote-fleet/webhook-only, but the gateway negotiated no tagging feature
@@ -365,9 +464,9 @@ func (m *Manager) connectAndServe(ctx context.Context, d desiredState) (register
 func logDesiredChange(prev, d desiredState) {
 	switch {
 	case d.on() && !prev.on():
-		flog.Info("remote gateway enabled", "gateway", d.gatewayURL, "mcp", d.mcp, "fleet", d.grpc)
+		flog.Info("remote gateway enabled", "gateway", d.gatewayURL, "mcp", d.mcp, "fleet", d.grpc, "registry", d.registry)
 	case d.on() && prev.on():
-		flog.Info("remote gateway reconfigured", "gateway", d.gatewayURL, "mcp", d.mcp, "fleet", d.grpc)
+		flog.Info("remote gateway reconfigured", "gateway", d.gatewayURL, "mcp", d.mcp, "fleet", d.grpc, "registry", d.registry)
 	case prev.on():
 		flog.Info("remote gateway disabled")
 	}

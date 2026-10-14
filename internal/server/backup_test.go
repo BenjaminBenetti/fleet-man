@@ -351,8 +351,8 @@ func TestMcpRestoreBackupDocuments(t *testing.T) {
 	if out.BackupDir != base {
 		t.Errorf("BackupDir = %s, want %s", out.BackupDir, base)
 	}
-	if len(out.Contents) != 7 {
-		t.Errorf("documented %d files, want 7", len(out.Contents))
+	if len(out.Contents) != 17 {
+		t.Errorf("documented %d files, want 17", len(out.Contents))
 	}
 	if len(out.Procedure) == 0 {
 		t.Error("Procedure should not be empty")
@@ -363,6 +363,19 @@ func TestMcpRestoreBackupDocuments(t *testing.T) {
 	// The procedure must lead with stopping the daemon.
 	if !strings.Contains(out.Procedure[0], "fleet server") {
 		t.Errorf("first step should stop the daemon, got %q", out.Procedure[0])
+	}
+	// The warning names every file the contents mark as a secret.
+	for _, c := range out.Contents {
+		if !strings.Contains(c.Description, "SECRET") {
+			continue
+		}
+		want := c.Name
+		if strings.Contains(c.Name, "buildkit") {
+			want = "Buildkit CA keys"
+		}
+		if !strings.Contains(out.Warning, want) {
+			t.Errorf("the warning does not name the secret %s (%q): %q", c.Name, want, out.Warning)
+		}
 	}
 }
 

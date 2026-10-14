@@ -1,0 +1,121 @@
+{
+  "cli": "0.89.0",
+  "workspaceDir": "/home/dev/src/fixture-dockerfile",
+  "workspaceFolder": "/workspaces/fixture-dockerfile",
+  "capture": {
+    "format": 1,
+    "verb": "run",
+    "args": [
+      "--sig-proxy=false",
+      "-a",
+      "STDOUT",
+      "-a",
+      "STDERR",
+      "--mount",
+      "type=bind,source=/home/dev/src/fixture-dockerfile,target=/workspaces/fixture-dockerfile",
+      "-l",
+      "devcontainer.local_folder=/home/dev/src/fixture-dockerfile",
+      "-l",
+      "devcontainer.config_file=/home/dev/src/fixture-dockerfile/.devcontainer/devcontainer.json",
+      "-e",
+      "ITEST_CONTAINER_ENV=from-containerEnv",
+      "--entrypoint",
+      "/bin/sh",
+      "vsc-fixture-dockerfile-0000000000000000000000000000000000000000000000000000000000000000",
+      "-c",
+      "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+      "-"
+    ],
+    "env": [
+      {
+        "name": "ITEST_CONTAINER_ENV",
+        "value": "from-containerEnv",
+        "source": "flag"
+      }
+    ],
+    "labels": {
+      "devcontainer.config_file": "/home/dev/src/fixture-dockerfile/.devcontainer/devcontainer.json",
+      "devcontainer.local_folder": "/home/dev/src/fixture-dockerfile"
+    }
+  },
+  "image": {
+    "Id": "sha256:8b4e3c3b6443b107a4c6b24312a0235622e2d534113a883e9d2c07c5ec0d05a2",
+    "RepoTags": [
+      "vsc-fixture-dockerfile-0000000000000000000000000000000000000000000000000000000000000000:latest"
+    ],
+    "RepoDigests": [
+      "vsc-fixture-dockerfile-0000000000000000000000000000000000000000000000000000000000000000@sha256:8b4e3c3b6443b107a4c6b24312a0235622e2d534113a883e9d2c07c5ec0d05a2"
+    ],
+    "Architecture": "amd64",
+    "Os": "linux",
+    "Config": {
+      "User": "root",
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "ITEST_FEATURE_ENV=from-feature",
+        "ITEST_CONTAINER_ENV=from-containerEnv"
+      ],
+      "Cmd": [
+        "bash"
+      ],
+      "Labels": {
+        "dev.containers.id": "base-debian",
+        "dev.containers.release": "v0.4.19",
+        "dev.containers.source": "https://github.com/devcontainers/images",
+        "dev.containers.timestamp": "Thu, 16 Oct 2025 10:40:40 GMT",
+        "dev.containers.variant": "bookworm",
+        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"}, {\"id\":\"./itest-feature\"}, {\"containerEnv\":{\"ITEST_CONTAINER_ENV\":\"from-containerEnv\"},\"remoteUser\":\"vscode\",\"remoteEnv\":{\"ITEST_REMOTE_ENV\":\"from-remoteEnv\"}} ]",
+        "version": "2.0.2"
+      }
+    }
+  },
+  "merged": {
+    "name": "fleet-man Dockerfile + features fixture",
+    "build": {
+      "dockerfile": "Dockerfile",
+      "context": "..",
+      "args": {
+        "ITEST_BUILD_ARG": "from-build-args"
+      }
+    },
+    "features": {
+      "./itest-feature": {
+        "greeting": "hello-from-feature-option"
+      }
+    },
+    "containerEnv": {
+      "ITEST_CONTAINER_ENV": "from-containerEnv"
+    },
+    "remoteEnv": {
+      "ITEST_REMOTE_ENV": "from-remoteEnv"
+    },
+    "remoteUser": "vscode",
+    "configFilePath": {
+      "$mid": 1,
+      "fsPath": "/home/dev/src/fixture-dockerfile/.devcontainer/devcontainer.json",
+      "path": "/home/dev/src/fixture-dockerfile/.devcontainer/devcontainer.json",
+      "scheme": "vscode-fileHost"
+    },
+    "init": false,
+    "privileged": false,
+    "customizations": {
+      "vscode": [
+        {
+          "settings": {
+            "github.copilot.chat.codeGeneration.instructions": [
+              {
+                "text": "This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "onCreateCommands": [],
+    "updateContentCommands": [],
+    "postCreateCommands": [],
+    "postStartCommands": [],
+    "postAttachCommands": [],
+    "portsAttributes": {}
+  }
+}

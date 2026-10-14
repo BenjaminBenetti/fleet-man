@@ -55,6 +55,9 @@ type instanceCreateErrMsg struct {
 	fleet    string
 	instance string
 	err      error
+	// cluster is the Kubernetes connection the create was for ("" for any
+	// other target), for the recovery dialog of a refusal.
+	cluster string
 }
 
 type pollCreatingTickMsg struct{}
@@ -132,16 +135,18 @@ func rebuildInstanceCmd(fleetName, instanceName string) tea.Cmd {
 func deleteInstanceCmd(fleetName, instanceName string, pf *portforward.Manager) tea.Cmd {
 	return func() tea.Msg {
 		pf.RemoveAll(fleetName + "/" + instanceName)
-		if err := destroyInstanceRemote(fleetName, instanceName, false); err != nil {
+		warnings, err := destroyInstanceRemote(fleetName, instanceName, false)
+		if err != nil {
 			return operationDoneMsg{fleetName, instanceName, "", err}
 		}
-		return operationDoneMsg{fleetName, instanceName, fmt.Sprintf("Removed %s/%s", fleetName, instanceName), nil}
+		return operationDoneMsg{fleetName, instanceName, withWarningLine(fmt.Sprintf("Removed %s/%s", fleetName, instanceName), warnings), nil}
 	}
 }
 
 // deleteFleetCmd tears down every instance in the fleet plus the fleet record
-// via a single server job (destroy_fleet). TUI-owned port forwards are removed
-// here first.
+// via a single server job (destroy_fleet), an empty fleet's too: the job, not
+// the UI loop, waits for the fleet's caches and shares to go, on every
+// cluster it reached. TUI-owned port forwards are removed here first.
 func deleteFleetCmd(fleetName string, instances []*fleet.Instance, pf *portforward.Manager) tea.Cmd {
 	names := make([]string, len(instances))
 	for i, instance := range instances {
@@ -151,10 +156,11 @@ func deleteFleetCmd(fleetName string, instances []*fleet.Instance, pf *portforwa
 		for _, name := range names {
 			pf.RemoveAll(fleetName + "/" + name)
 		}
-		if err := destroyInstanceRemote(fleetName, "", true); err != nil {
+		warnings, err := destroyInstanceRemote(fleetName, "", true)
+		if err != nil {
 			return operationDoneMsg{fleetName, "", "", err}
 		}
-		return operationDoneMsg{fleetName, "", fmt.Sprintf("Removed fleet %s", fleetName), nil}
+		return operationDoneMsg{fleetName, "", withWarningLine(fmt.Sprintf("Removed fleet %s", fleetName), warnings), nil}
 	}
 }
 
@@ -249,13 +255,14 @@ func repoFromRemote(remoteURL string) string {
 }
 
 // logsCommand returns an *exec.Cmd for viewing instance logs.
-// It always shows the creation log file first (devcontainer up output),
-// then appends container runtime logs for running instances.
+// It always shows the creation log file first (the latest provisioning job's
+// output, steps and warnings, which the daemon writes as the job runs), then
+// appends container runtime logs for running instances.
 // Output is always followed by a "press Enter" prompt so the user
 // has time to read before the TUI redraws.
 func logsCommand(fleetName string, instance *fleet.Instance) *exec.Cmd {
-	logPath := filepath.Join(fleetpaths.Dir(), "logs", fleetName+"-"+instance.Name+".log")
-	creationLog := fmt.Sprintf("cat %q 2>/dev/null", logPath)
+	logPath := fleetpaths.InstanceCreationLogPath(fleetName, instance.Name)
+	creationLog := fmt.Sprintf("cat %s 2>/dev/null", shQuote(logPath))
 
 	var inner string
 	switch instance.Status {
@@ -264,14 +271,16 @@ func logsCommand(fleetName string, instance *fleet.Instance) *exec.Cmd {
 	default:
 		// Show creation log, then container runtime logs. The runtime-logs argv
 		// is resolved by the server (it owns backend access); embed it in the
-		// pager script. A resolve failure degrades to just the creation log.
+		// pager script, every word quoted since a backend's argv may carry
+		// paths with spaces or shell metacharacters. A resolve failure degrades
+		// to just the creation log.
 		argv, err := resolveLogsArgv(fleetName, instance.Name)
 		if err != nil || len(argv) == 0 {
 			inner = fmt.Sprintf("%s || echo 'No creation log found.'", creationLog)
 		} else {
 			inner = fmt.Sprintf(
 				"%s; echo; echo '=== Container runtime logs ==='; echo; %s",
-				creationLog, strings.Join(argv, " "),
+				creationLog, quoteArgs(argv),
 			)
 		}
 	}
@@ -313,7 +322,7 @@ func daemonLogStreamCommand(level daemonLogLevel) *exec.Cmd {
 	// the import-boundary lint bars clients (the TUI) from importing the
 	// server-owned flog package; the filename mirrors flog's logFileName.
 	path := filepath.Join(fleetpaths.Dir(), "fleet.log")
-	stream := fmt.Sprintf("tail -n 200 -F %q", path)
+	stream := fmt.Sprintf("tail -n 200 -F %s", shQuote(path))
 	if level.grep != "" {
 		stream += fmt.Sprintf(" | grep --line-buffered -E '%s'", level.grep)
 	}
@@ -358,10 +367,10 @@ func daemonLogStreamCmd(level daemonLogLevel) tea.Cmd {
 // pre-creates the StatusCreating record (no client-side state write — the #63
 // fix) and provisions in a server-owned goroutine. The cmd returns once the job
 // has started; pollCreating + reload track it to running.
-func createInstanceCmd(fleetName, instanceName, remoteURL, branch, color string, backendType fleet.BackendType) tea.Cmd {
+func createInstanceCmd(fleetName, instanceName, remoteURL, branch, color string, target fleet.DeployTarget) tea.Cmd {
 	return func() tea.Msg {
-		if err := createInstanceRemote(fleetName, instanceName, remoteURL, branch, backendType); err != nil {
-			return instanceCreateErrMsg{fleetName, instanceName, err}
+		if err := createInstanceRemote(fleetName, instanceName, remoteURL, branch, target); err != nil {
+			return instanceCreateErrMsg{fleet: fleetName, instance: instanceName, err: err, cluster: target.KubeCluster}
 		}
 		// CreateInstance doesn't carry the UI color; once the record exists
 		// (the job has started) apply it as instance metadata.
@@ -378,7 +387,7 @@ func createInstanceCmd(fleetName, instanceName, remoteURL, branch, color string,
 func cloneInstanceCmd(fleetName, srcInstance, destInstance string) tea.Cmd {
 	return func() tea.Msg {
 		if err := cloneInstanceRemote(fleetName, srcInstance, destInstance); err != nil {
-			return instanceCreateErrMsg{fleetName, destInstance, err}
+			return instanceCreateErrMsg{fleet: fleetName, instance: destInstance, err: err}
 		}
 		return instanceSpawnedMsg{fleetName, destInstance}
 	}

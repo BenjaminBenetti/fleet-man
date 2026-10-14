@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -301,7 +302,7 @@ func TestProbeAndConfigureScripts(t *testing.T) {
 
 func TestConfigureInstanceAptSkipsWhenAbsent(t *testing.T) {
 	fe := &fakeExecer{probeOut: probeMarkerAbsent}
-	configured, err := ConfigureInstanceApt(fe, "/ws", ProxyURL("alpha"))
+	configured, err := ConfigureInstanceApt(fe, "/ws", Proxy{URL: ProxyURL("alpha")})
 	if err != nil {
 		t.Fatalf("ConfigureInstanceApt (absent) = %v, want nil", err)
 	}
@@ -315,7 +316,7 @@ func TestConfigureInstanceAptSkipsWhenAbsent(t *testing.T) {
 
 func TestConfigureInstanceAptConfiguresWhenPresent(t *testing.T) {
 	fe := &fakeExecer{probeOut: probeMarkerPresent}
-	configured, err := ConfigureInstanceApt(fe, "/ws", ProxyURL("alpha"))
+	configured, err := ConfigureInstanceApt(fe, "/ws", Proxy{URL: ProxyURL("alpha")})
 	if err != nil {
 		t.Fatalf("ConfigureInstanceApt (present) = %v, want nil", err)
 	}
@@ -327,5 +328,89 @@ func TestConfigureInstanceAptConfiguresWhenPresent(t *testing.T) {
 	}
 	if !strings.Contains(fe.calls[1], proxyConfFile) {
 		t.Fatalf("configure call did not write the proxy drop-in: %v", fe.calls[1])
+	}
+	if strings.Contains(fe.calls[1], ProxyDetector) {
+		t.Fatalf("a cache docker revives on every start got a detector: %v", fe.calls[1])
+	}
+}
+
+// A cache that may be down while the instance is up (a cluster's) is apt's
+// proxy only while it answers: the configure writes the detector and names
+// it, instead of the proxy itself.
+func TestConfigureInstanceAptDetectsACacheThatMayBeDown(t *testing.T) {
+	fe := &fakeExecer{probeOut: probeMarkerPresent}
+	const url = "http://fs-alpha-1a2b3c4d-aptcache:3142"
+	configured, err := ConfigureInstanceApt(fe, "/ws", Proxy{URL: url, Detect: true})
+	if err != nil || !configured {
+		t.Fatalf("ConfigureInstanceApt (detect) = %v, %v; want configured", configured, err)
+	}
+	if len(fe.calls) != 2 {
+		t.Fatalf("expected probe + configure, got %d: %v", len(fe.calls), fe.calls)
+	}
+	cfg := fe.calls[1]
+	for _, want := range []string{
+		`Acquire::http::Proxy-Auto-Detect "` + ProxyDetector + `";`,
+		proxyConfFile,
+		fleetlaunch.RemotePath + " net-probe '" + url + "'",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("detect configure missing %q: %s", want, cfg)
+		}
+	}
+	if strings.Contains(cfg, `Acquire::http::Proxy "`) {
+		t.Errorf("detect configure also set a fixed proxy: %s", cfg)
+	}
+}
+
+// TestDetectScript runs detectScript for real, in a temp root: it writes an
+// executable detector and the drop-in naming it, and the detector prints
+// the cache's URL while fleet net-probe answers it, else DIRECT, whatever
+// goes wrong with fleet (missing, failing, printing something else).
+func TestDetectScript(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc/apt/apt.conf.d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := filepath.Join(root, "fleet")
+	const url = "http://fs-alpha-1a2b3c4d-aptcache:3142"
+	script := detectScript(url)
+	for old, new := range map[string]string{"/etc/apt": root + "/etc/apt", fleetlaunch.RemotePath: fake} {
+		if !strings.Contains(script, old) {
+			t.Fatalf("the script has no %q to point at the test's root", old)
+		}
+		script = strings.ReplaceAll(script, old, new)
+	}
+	if out, err := exec.Command("/bin/sh", "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("detectScript: %v\n%s", err, out)
+	}
+	detector := root + ProxyDetector
+	if fi, err := os.Stat(detector); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("detector %v, %v: apt's _apt user must run it", fi, err)
+	}
+	conf, err := os.ReadFile(root + proxyConfFile)
+	if want := `Acquire::http::Proxy-Auto-Detect "` + detector + `";` + "\n"; err != nil || string(conf) != want {
+		t.Fatalf("drop-in %q, %v; want %q", conf, err, want)
+	}
+	if left, _ := filepath.Glob(filepath.Join(root, "etc/apt/*.tmp")); len(left) != 0 {
+		t.Fatalf("temp files left: %v", left)
+	}
+
+	for _, tt := range []struct{ name, fleet, want string }{
+		{"the cache answers", "#!/bin/sh\n[ \"$1 $2\" = \"net-probe " + url + "\" ] && echo \"$2\"\n", url},
+		{"it does not", "#!/bin/sh\necho DIRECT\n", "DIRECT"},
+		{"fleet fails", "#!/bin/sh\necho 'Usage: fleet'\nexit 1\n", "DIRECT"},
+		{"fleet prints something else", "#!/bin/sh\necho 'Error: unknown command'\n", "DIRECT"},
+		{"no fleet", "", "DIRECT"},
+	} {
+		_ = os.Remove(fake)
+		if tt.fleet != "" {
+			if err := os.WriteFile(fake, []byte(tt.fleet), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := exec.Command(detector, "http://deb.debian.org/debian/dists/bookworm/InRelease").Output()
+		if err != nil || strings.TrimSpace(string(out)) != tt.want {
+			t.Errorf("%s: detector printed %q, %v; want %q", tt.name, out, err, tt.want)
+		}
 	}
 }

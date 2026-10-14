@@ -18,10 +18,10 @@ import (
 )
 
 // backup.go is the server-side state backup loop. fleetd periodically snapshots
-// the handful of files that constitute its own durable state (~/.fleet/*.json
-// and the mcp.* discovery/secret files) into a single compressed archive, so a
-// botched write, an errant `fleet destroy`, or a corrupted state.json can be
-// recovered from a recent point in time.
+// the handful of files that constitute its own durable state (~/.fleet/*.json,
+// the mcp.* discovery/secret files and its Kubernetes state) into a single
+// compressed archive, so a botched write, an errant `fleet destroy`, or a
+// corrupted state.json can be recovered from a recent point in time.
 //
 // Archives are written to ~/.fleet/backup/<date>/<hour>.tar.xz — one per UTC
 // clock hour, bucketed by day. xz is used (the most-compressing of the common
@@ -47,10 +47,16 @@ var (
 
 // backupSources returns the absolute paths of the ~/.fleet files captured in
 // each snapshot. Resolved per call (not cached) because the paths derive from
-// $HOME, which tests rebind. Missing files are skipped at archive time, so a
-// pristine ~/.fleet that has not yet grown all of these is fine.
+// $HOME, which tests rebind, and because the Kubernetes job journal and image
+// indexes are one file per job and per connection. Missing files are skipped
+// at archive time, so a pristine ~/.fleet that has not yet grown all of these
+// is fine.
+//
+// The incarnation nonce (kube/incarnation.json) is deliberately left out: a
+// restore onto another machine must not carry it, so the restored daemon is a
+// new incarnation the clusters' owner Leases can tell from the original.
 func backupSources() []string {
-	return []string{
+	sources := []string{
 		state.ConfigPath(),              // config.json
 		fleetpaths.GatewaySessionPath(), // gateway_session.json
 		fleetpaths.McpEnvPath(),         // mcp.env
@@ -58,7 +64,43 @@ func backupSources() []string {
 		fleetpaths.McpTokenPath(),       // mcp.token
 		state.StatePath(),               // state.json
 		state.ArmadaPath(),              // armada.json (remote-fleet registry; embeds bearer tokens)
+		state.EditorEndpointsPath(),     // editor_endpoints.json (remotes editor aliases lead to; may embed bearer tokens)
+		state.KubeClustersPath(),        // kube_clusters.json (Kubernetes connections; embeds the gateway pull credential)
+		state.DaemonIDPath(),            // daemon_id (names and labels this daemon's cluster objects)
+		state.KubeFootprintPath(),       // kube/footprint.json
 	}
+	sources = append(sources, globFiles(filepath.Join(state.KubeJobsDir(), "*.json"))...)           // kube/jobs/<key>.json
+	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "images.json"))...)     // kube/<cluster>/images.json
+	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "seedcaches.json"))...) // kube/<cluster>/seedcaches.json
+	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "storage.json"))...)    // kube/<cluster>/storage.json
+	// kube/<cluster>/instances/<key>.json: what a restored daemon verifies its
+	// instances' pods against.
+	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "instances", "*.json"))...)
+	// kube/<cluster>/buildkit/<fleet h8>.json: each fleet's shared Buildkit
+	// CA there, so a restored daemon's instances keep their certificates.
+	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "buildkit", "*.json"))...)
+	return sources
+}
+
+// globFiles returns pattern's matches in sorted order (none on a bad pattern).
+func globFiles(pattern string) []string {
+	matches, _ := filepath.Glob(pattern)
+	sort.Strings(matches)
+	return matches
+}
+
+// backupEntryName is a source's name inside the archive: its path relative to
+// ~/.fleet, slash-separated. The top-level files are therefore their base
+// names, as they always were, and the Kubernetes files keep their directories
+// (kube/jobs/<key>.json, kube/<cluster>/images.json), so `tar -xJf <archive>
+// -C ~/.fleet` puts every file back where it came from and two connections'
+// images.json never collide.
+func backupEntryName(path string) string {
+	rel, err := filepath.Rel(fleetpaths.Dir(), path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.Base(path)
+	}
+	return filepath.ToSlash(rel)
 }
 
 // backupBaseDir is the root of the backup tree (~/.fleet/backup). Server-only,
@@ -76,7 +118,7 @@ func (s *service) runBackupLoop(ctx context.Context) {
 	ticker := time.NewTicker(backupInterval)
 	defer ticker.Stop()
 	for {
-		backupTick(time.Now())
+		runBackupTick(time.Now())
 		select {
 		case <-ctx.Done():
 			return
@@ -84,6 +126,9 @@ func (s *service) runBackupLoop(ctx context.Context) {
 		}
 	}
 }
+
+// runBackupTick is the loop's tick (a var so a test can hold one).
+var runBackupTick = backupTick
 
 // backupTick performs one snapshot + prune. Both steps are best-effort: a
 // failure is logged and the loop continues, since a backup miss must never take
@@ -154,8 +199,9 @@ func writeBackup(now time.Time) (string, int, error) {
 		}
 		tw := tar.NewWriter(xw)
 		count := 0
+		dirs := map[string]bool{}
 		for _, src := range present {
-			added, err := addFileToTar(tw, src)
+			added, err := addFileToTar(tw, src, dirs, now)
 			if err != nil {
 				return 0, err
 			}
@@ -196,10 +242,10 @@ func writeBackup(now time.Time) (string, int, error) {
 	return finalPath, n, nil
 }
 
-// addFileToTar writes one regular file into tw under its base name (the archive
-// is a flat bag of ~/.fleet files, not a directory tree). A file that vanished
-// between the stat above and here is skipped rather than failing the whole
-// snapshot.
+// addFileToTar writes one regular file into tw under backupEntryName, preceded
+// by a 0700 entry for each of its directories not yet in the archive (dirs
+// records those written). A file that vanished between the stat above and here
+// is skipped rather than failing the whole snapshot.
 //
 // The header Size is taken from the bytes actually read, NOT from the stat, so
 // the header always matches the archived bytes even if a source changes size
@@ -208,7 +254,7 @@ func writeBackup(now time.Time) (string, int, error) {
 // are kept whole by the writers: every backup source is now written via
 // atomicfile.Write (temp+rename), so a concurrent rewrite yields the old or new
 // file in full, never a torn one.
-func addFileToTar(tw *tar.Writer, path string) (bool, error) {
+func addFileToTar(tw *tar.Writer, path string, dirs map[string]bool, now time.Time) (bool, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -230,8 +276,11 @@ func addFileToTar(tw *tar.Writer, path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	hdr.Name = filepath.Base(path)
+	hdr.Name = backupEntryName(path)
 	hdr.Size = int64(len(data)) // must match the bytes written below
+	if err := addDirsToTar(tw, hdr.Name, dirs, now); err != nil {
+		return false, err
+	}
 	if err := tw.WriteHeader(hdr); err != nil {
 		return false, err
 	}
@@ -239,6 +288,24 @@ func addFileToTar(tw *tar.Writer, path string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// addDirsToTar writes a 0700 directory entry for each parent of the entry
+// name that dirs does not hold yet, outermost first, so an unpack recreates
+// the kube/ tree owner-only.
+func addDirsToTar(tw *tar.Writer, name string, dirs map[string]bool, now time.Time) error {
+	parts := strings.Split(name, "/")
+	for i := 1; i < len(parts); i++ {
+		dir := strings.Join(parts[:i], "/") + "/"
+		if dirs[dir] {
+			continue
+		}
+		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: dir, Mode: 0o700, ModTime: now}); err != nil {
+			return err
+		}
+		dirs[dir] = true
+	}
+	return nil
 }
 
 // parseArchiveHour reports whether name is a "<hour>.tar.xz" backup archive
@@ -354,6 +421,7 @@ type RestoreBackupOutput struct {
 	PathLayout  string                 `json:"path_layout"`
 	Compression string                 `json:"compression"`
 	Contents    []restoreBackupFile    `json:"contents"`
+	Kubernetes  string                 `json:"kubernetes"`       // what a restore means for cluster instances
 	Available   []restoreBackupArchive `json:"available"`        // newest first; empty if none yet
 	Latest      string                 `json:"latest,omitempty"` // path of the newest archive
 	Procedure   []string               `json:"procedure"`        // ordered manual restore steps
@@ -418,26 +486,37 @@ func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ 
 		BackupDir:   backupBaseDir(),
 		RestoreInto: fleetDir,
 		PathLayout:  "<backup_dir>/<date>/<hour>.tar.xz — one archive per UTC clock hour (e.g. 2026-06-23/14.tar.xz, where 14 is the UTC hour), kept ~30 days.",
-		Compression: "xz; each archive is a flat tar of the files below (base names, no directory tree), so it unpacks straight into the settings dir with `tar -xJf <archive> -C " + fleetDir + "`.",
+		Compression: "xz; each archive is a tar of the files below under their paths relative to the settings dir (top-level files by base name, the Kubernetes ones under kube/), so it unpacks straight into the settings dir with `tar -xJf <archive> -C " + fleetDir + "`.",
 		Contents: []restoreBackupFile{
 			{Name: "config.json", Description: "user/global fleet configuration (settings, backends, remote-MCP/gateway config)."},
 			{Name: "state.json", Description: "the fleet & instance registry — fleetd's core durable state."},
 			{Name: "armada.json", Description: "registry of remote fleetd connections (gateway URL + bearer token per fleet) — SECRET."},
+			{Name: "editor_endpoints.json", Description: "remote fleetd connections that VS Code Remote-SSH aliases lead to, recorded by `fleet code` when FLEET_GATEWAY/FLEET_SSH/FLEET_SERVER chose them (a FLEET_TOKEN bearer token when one was given) — SECRET."},
 			{Name: "gateway_session.json", Description: "sticky remote-MCP gateway session (session id + public URL)."},
 			{Name: "mcp.env", Description: "sourceable shell exports for the local MCP endpoint (FLEET_MCP_URL/PORT/TOKEN)."},
 			{Name: "mcp.port", Description: "TCP port the local MCP HTTP server bound to."},
 			{Name: "mcp.token", Description: "bearer token for the local MCP HTTP server — SECRET; treat the archive as sensitive."},
+			{Name: "kube_clusters.json", Description: "Kubernetes connections: context, kubeconfig paths on this host, namespace and every per-cluster setting — holds each cluster's gateway image pull credential, SECRET."},
+			{Name: "daemon_id", Description: "this daemon's id, which names and labels everything it created in Kubernetes clusters."},
+			{Name: "kube/footprint.json", Description: "what this daemon created and destroyed in its clusters."},
+			{Name: "kube/jobs/<key>.json", Description: "journal of the Kubernetes create, clone and rebuild jobs that were running, one file per instance."},
+			{Name: "kube/<cluster>/images.json", Description: "index of the images this daemon delivered to one Kubernetes connection."},
+			{Name: "kube/<cluster>/seedcaches.json", Description: "index of the seed caches (cached image roots automation disks are cloned from) on one Kubernetes connection, and which instances each made."},
+			{Name: "kube/<cluster>/storage.json", Description: "storage test cache of one Kubernetes connection: each StorageClass's multi-node test result (which decides where fleet shares live), keyed by its provisioner and parameters, and the deep test's two-pod probe of one ReadWriteOnce volume."},
+			{Name: "kube/<cluster>/instances/<key>.json", Description: "what this daemon rendered and delivered for each of its Kubernetes instances, which their pods are verified against."},
+			{Name: "kube/<cluster>/buildkit/<fleet>.json", Description: "the CA of one fleet's shared Buildkit on one Kubernetes connection, which signs its server's and its instances' certificates — holds the CA's private key, SECRET."},
 		},
-		Available: archives,
-		Latest:    latest,
+		Kubernetes: "Instance disks live in their clusters, not in the archive: a restore brings back the connections and fleetd's records, and every disk stays where it is. Instances created in a cluster after the snapshot are kept there, never deleted, and `fleet cluster gc` lists them; job records older than the live objects are discarded when fleetd starts. The restored daemon_id owns the same cluster objects as the original: while both daemons run, the clusters' owner Leases let only the first act as owner and show OWNER_CONFLICT on the other.",
+		Available:  archives,
+		Latest:     latest,
 		Procedure: []string{
 			"1. Stop every running fleet process so nothing rewrites " + fleetDir + " mid-restore — the daemon (`fleet server` / fleetd) above all, since it owns these files and keeps snapshotting them. Run `pkill -f 'fleet server'`, then `pkill -x fleet` for any client/TUI, and confirm none remain with `pgrep -af fleet` (an empty result).",
 			"2. Pick the archive to restore from `available` (newest first); `latest` is the most recent. Each is an absolute path to a <date>/<hour>.tar.xz.",
 			"3. (Recommended) Snapshot the current settings dir before overwriting, e.g. `cp -a " + fleetDir + " " + fleetDir + ".pre-restore`.",
-			"4. Unpack the archive over the settings dir: `tar -xJf <archive> -C " + fleetDir + "`. The archive holds base names only, so each file lands back at its original ~/.fleet/<file> path, overwriting the current copy.",
+			"4. Unpack the archive over the settings dir: `tar -xJf <archive> -C " + fleetDir + "`. Each file lands back at its original path under the settings dir (kube/ files included), overwriting the current copy; files the archive does not hold are left alone.",
 			"5. Restart the daemon — run any `fleet` command (it auto-spawns fleetd) or start `fleet server` directly — then verify with the `fleet_version` and `fleet_status` tools.",
 		},
-		Warning: "Stop fleetd BEFORE unpacking. It rewrites these files continuously and snapshots hourly, so restoring under a live daemon can corrupt state.json or have your restore immediately overwritten. The archives contain mcp.token (a secret) — handle them accordingly.",
+		Warning: "Stop fleetd BEFORE unpacking. It rewrites these files continuously and snapshots hourly, so restoring under a live daemon can corrupt state.json or have your restore immediately overwritten. The archives contain secrets (mcp.token, armada.json's tokens, editor_endpoints.json's tokens, kube_clusters.json's gateway pull credentials, the fleets' Buildkit CA keys) — handle them accordingly.",
 	}
 	if len(archives) == 0 {
 		out.Summary = "No backups exist yet under " + out.BackupDir + " (the daemon writes the first within an hour of starting). " + out.Summary

@@ -33,6 +33,9 @@ func fillValue(t *testing.T, v reflect.Value, path string) {
 	case reflect.TypeFor[fleet.BackendType]():
 		v.Set(reflect.ValueOf(fleet.BackendCoder))
 		return
+	case reflect.TypeFor[state.EditorEndpointKind]():
+		v.Set(reflect.ValueOf(state.EditorEndpointSSH))
+		return
 	case reflect.TypeFor[time.Time]():
 		// UTC wall-clock time: timestamppb round-trips to a UTC time.Time, so a
 		// zoned or monotonic-clock-carrying value would fail DeepEqual for
@@ -48,6 +51,8 @@ func fillValue(t *testing.T, v reflect.Value, path string) {
 		v.SetBool(true)
 	case reflect.Int, reflect.Int32, reflect.Int64:
 		v.SetInt(7)
+	case reflect.Uint8: // []byte elements
+		v.SetUint(7)
 	case reflect.Pointer:
 		p := reflect.New(v.Type().Elem())
 		// Leave a *bool pointing at false: presence-vs-value is exactly the
@@ -243,7 +248,8 @@ func TestInstancePresenceRules(t *testing.T) {
 	if pi.ContainerId == nil || pi.Config == nil || pi.WorkspaceDir == nil {
 		t.Error("container_id/config/workspace_dir must always be present")
 	}
-	if pi.DisplayName != nil || pi.Error != nil || pi.Tag != nil || pi.Color != nil || pi.Branch != nil {
+	if pi.DisplayName != nil || pi.Error != nil || pi.Tag != nil || pi.Color != nil || pi.Branch != nil || pi.LastBranch != nil ||
+		pi.KubeCluster != nil || pi.KubeKey != nil {
 		t.Error("unset omitempty scalars must be absent from the wire")
 	}
 	if pi.CreatedAt != nil {
@@ -303,5 +309,27 @@ func TestConfigFromProtoMicClientPresence(t *testing.T) {
 	// ConfigToProto always sends it — that is what makes "" explicit.
 	if sent := ConfigToProto(&state.Config{}).GetMic(); sent.Client == nil {
 		t.Error("ConfigToProto must always set mic.client, the empty string included")
+	}
+}
+
+// Enable Image Registry has presence on the wire: a client built before the
+// field saves the remote group without it, which must leave the daemon's
+// setting alone (clusters set to Gateway delivery depend on it), while a
+// current client's explicit false turns it off.
+func TestConfigFromProtoImageRegistryPresence(t *testing.T) {
+	base := func() *state.Config {
+		return &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{GatewayURL: "https://gw", ImageRegistryEnabled: true}}
+	}
+	absent := &fleetgrpc.Config{RemoteMcp: &fleetgrpc.RemoteMcpSettings{GatewayUrl: "https://gw2", WebhookEnabled: true}}
+	if got := ConfigFromProto(absent, base()).RemoteMcpSettings; !got.ImageRegistryEnabled || got.GatewayURL != "https://gw2" || !got.WebhookEnabled {
+		t.Errorf("absent field: got %+v, want the base's image registry kept and the rest applied", got)
+	}
+	off := false
+	explicit := &fleetgrpc.Config{RemoteMcp: &fleetgrpc.RemoteMcpSettings{GatewayUrl: "https://gw", ImageRegistryEnabled: &off}}
+	if got := ConfigFromProto(explicit, base()).RemoteMcpSettings; got.ImageRegistryEnabled {
+		t.Error("an explicit false must turn the image registry off")
+	}
+	if sent := ConfigToProto(&state.Config{}).GetRemoteMcp(); sent.ImageRegistryEnabled == nil {
+		t.Error("ConfigToProto must always set remote_mcp.image_registry_enabled, false included")
 	}
 }

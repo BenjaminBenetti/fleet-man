@@ -1,6 +1,7 @@
 package create
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,8 +17,9 @@ import (
 //
 // Like git clone, it refuses a non-empty destination: a stale workspace dir (a
 // destroy whose RemoveAll only warned, a hand-edited state.json) must surface
-// as an error, not be silently merged under the template.
-func copyTemplateTree(remoteURL, wsDir string) error {
+// as an error, not be silently merged under the template. Cancelling ctx kills
+// the copy, as it kills a git clone.
+func copyTemplateTree(ctx context.Context, remoteURL, wsDir string) error {
 	dir, err := fleet.ResolveTemplateDir(remoteURL)
 	if err != nil {
 		return err
@@ -28,7 +30,7 @@ func copyTemplateTree(remoteURL, wsDir string) error {
 	if entries, err := os.ReadDir(wsDir); err == nil && len(entries) > 0 {
 		return fmt.Errorf("workspace dir %s already exists and is not empty", wsDir)
 	}
-	if err := copyWorkspaceTree(dir, wsDir); err != nil {
+	if err := copyWorkspaceTree(ctx, dir, wsDir); err != nil {
 		return fmt.Errorf("copy template %s: %w", dir, err)
 	}
 	return nil

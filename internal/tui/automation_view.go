@@ -99,7 +99,7 @@ func (fleetPage *fleetPage) renderAutomationRow(m *model, r row, cursor string, 
 		if isSelected {
 			style = selectedStyle
 		}
-		return fmt.Sprintf("%s        %s%s", cursor, style.Render(a.Name), dimStyle.Render("  "+agentSummary(f, *a)))
+		return fmt.Sprintf("%s        %s%s", cursor, style.Render(a.Name), dimStyle.Render("  "+agentSummary(m, f, *a)))
 
 	case rowNewTrigger:
 		return renderAutomationAction(cursor, "+ add trigger", isSelected)
@@ -145,16 +145,24 @@ func triggerSummary(t fleet.Trigger) string {
 	return detail
 }
 
-// agentSummary is the dim description shown beside an agent's name, including
-// how many triggers reference it (the issue's "<- x" indicator).
-func agentSummary(f *fleet.Fleet, a fleet.Agent) string {
+// agentSummary is the dim description shown beside an agent's name: where it
+// runs ("☸ <cluster>" for a cluster agent, "(missing)" once that connection
+// is gone) and how many triggers reference it (the issue's "<- x" indicator).
+//
+// The daemon's automation status adds the agent's runs ("2 running",
+// "3 queued") and, when the login check refuses its firings, why and the
+// key that logs in ("⚠ log in to Claude once for this fleet on ☸ prod (L)").
+func agentSummary(m *model, f *fleet.Fleet, a fleet.Agent) string {
 	n := triggerCountForAgent(f, a.Name)
-	parts := []string{backendTypeLabel(a.Backend)}
+	parts := []string{boundTargetLabel(m, a.DeployTarget())}
 	suffix := "s"
 	if n == 1 {
 		suffix = ""
 	}
 	parts = append(parts, fmt.Sprintf("← %d trigger%s", n, suffix))
+	if f != nil {
+		parts = append(parts, agentStatusParts(m.automationAgentStatus(f.Name, a.Name))...)
+	}
 	return strings.Join(parts, " · ")
 }
 
@@ -181,10 +189,12 @@ func (fleetPage *fleetPage) persistAutomationSettings(m *model, fleetName string
 	}
 	prev := f.Settings
 	f.Settings = newSettings
-	if err := setFleetSettingsRemote(fleetName, newSettings); err != nil {
+	warnings, err := setFleetSettingsRemote(fleetName, newSettings)
+	if err != nil {
 		f.Settings = prev
 		return err
 	}
+	fleetPage.noteSaveWarnings(m, warnings)
 	fleetPage.buildRows(m)
 	return nil
 }
@@ -207,9 +217,9 @@ func (fleetPage *fleetPage) toggleTriggerDisabled(m *model, fleetName string, id
 		return nil
 	}
 	if disabled {
-		m.message = fmt.Sprintf("Disabled trigger %q", name)
+		m.message = fleetPage.savedMessage(fmt.Sprintf("Disabled trigger %q", name))
 	} else {
-		m.message = fmt.Sprintf("Enabled trigger %q", name)
+		m.message = fleetPage.savedMessage(fmt.Sprintf("Enabled trigger %q", name))
 	}
 	return nil
 }
@@ -273,7 +283,7 @@ func (fleetPage *fleetPage) deleteTrigger(m *model, fleetName string, idx int) t
 		m.message = fmt.Sprintf("Delete failed: %v", err)
 		return nil
 	}
-	m.message = fmt.Sprintf("Deleted trigger %q", name)
+	m.message = fleetPage.savedMessage(fmt.Sprintf("Deleted trigger %q", name))
 	return nil
 }
 
@@ -295,7 +305,7 @@ func (fleetPage *fleetPage) deleteAgent(m *model, fleetName string, idx int) tea
 		m.message = fmt.Sprintf("Delete failed: %v", err)
 		return nil
 	}
-	m.message = fmt.Sprintf("Deleted agent %q", name)
+	m.message = fleetPage.savedMessage(fmt.Sprintf("Deleted agent %q", name))
 	return nil
 }
 

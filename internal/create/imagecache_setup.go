@@ -4,29 +4,35 @@ import (
 	"fmt"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleetnet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime"
 )
 
 // setupImageCache wires an instance into the fleet's shared docker image cache:
-// it ensures the registry pull-through server is up, joins the instance to the
-// fleet's shared docker network, and points the instance's own dockerd at the
-// mirror. Runs AFTER Up (the container id is needed to join the network).
+// it ensures the registry pull-through server is up on services (the instance's
+// shared-service runtime), connects the instance to it (on docker, joins the
+// fleet's shared network), and points the instance's own dockerd at the mirror.
+// Runs AFTER Up (the container id is needed to connect the instance).
 //
 // It is a no-op when the feature does not apply. Errors are returned so the
 // caller can surface a warning; best-effort and must NOT abort provisioning.
 // ConfigureInstanceDocker silently skips instances without their own dockerd
 // (docker-outside-of-docker / no docker), so an error here is a genuine failure.
-func setupImageCache(instanceBackend backend.Backend, fleetName, instanceName, containerID, workspaceDir string) error {
-	if !instanceBackend.SupportsCustomMounts() || !fleetImageCacheEnabled(fleetName) {
+func setupImageCache(services svcruntime.Runtime, instanceBackend backend.Backend, fleetName, instanceName, containerID, workspaceDir string) error {
+	if services == nil || !fleetImageCacheEnabled(fleetName) {
 		return nil
 	}
-	if _, err := imagecache.EnsureSharedServer(fleetName); err != nil {
+	if err := services.EnsureService(fleetName, fleet.ServiceImageCache); err != nil {
 		return err
 	}
-	if err := fleetnet.ConnectInstance(fleetName, containerID); err != nil {
+	if err := services.ConnectInstance(fleetName, containerID); err != nil {
+		return err
+	}
+	endpoint, err := services.Endpoint(fleetName, fleet.ServiceImageCache)
+	if err != nil {
 		return err
 	}
 	// Point the instance's own dockerd at the mirror. A docker-in-docker daemon
@@ -36,7 +42,7 @@ func setupImageCache(instanceBackend backend.Backend, fleetName, instanceName, c
 	// rest of the window. Best-effort — an instance with no dockerd never
 	// configures, which is fine.
 	imagecache.ConfigureInstanceDockerPolling(instanceBackend, workspaceDir,
-		imagecache.MirrorURL(fleetName), imagecache.MirrorHostPort(fleetName),
+		endpoint.URL, endpoint.HostPort,
 		imageCacheConfigureResult(fleetName, instanceName))
 	return nil
 }

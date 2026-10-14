@@ -1,0 +1,195 @@
+{
+  "cli": "0.89.0",
+  "workspaceDir": "/home/dev/src/runargs",
+  "workspaceFolder": "/work/kubeshim",
+  "capture": {
+    "format": 1,
+    "verb": "run",
+    "args": [
+      "--sig-proxy=false",
+      "-a",
+      "STDOUT",
+      "-a",
+      "STDERR",
+      "-p",
+      "127.0.0.1:3000:3000",
+      "-p",
+      "127.0.0.1:4000:4000",
+      "--mount",
+      "source=/home/dev/src/runargs,target=/work/kubeshim,type=bind",
+      "--mount",
+      "source=kubeshim-fixture-volume,target=/kubeshim-volume,type=volume",
+      "--mount",
+      "type=bind,src=/home/dev/src/runargs/.devcontainer,dst=/kubeshim-bind",
+      "-l",
+      "devcontainer.local_folder=/home/dev/src/runargs",
+      "-l",
+      "devcontainer.config_file=/home/dev/src/runargs/.devcontainer/devcontainer.json",
+      "-e",
+      "KUBESHIM_A=a",
+      "-e",
+      "KUBESHIM_SPACES=x y",
+      "-u",
+      "vscode",
+      "--hostname=kubeshim-host",
+      "--shm-size=256m",
+      "--ulimit",
+      "nofile=4096:8192",
+      "--add-host=host.docker.internal:host-gateway",
+      "--label",
+      "kubeshim.fixture=runargs",
+      "--env-file",
+      "/home/dev/src/runargs/.devcontainer/kubeshim.env",
+      "-e",
+      "KUBESHIM_FROM_HOST",
+      "--init",
+      "--privileged",
+      "--cap-add",
+      "SYS_PTRACE",
+      "--security-opt",
+      "seccomp=unconfined",
+      "--entrypoint",
+      "/bin/sh",
+      "-l",
+      "devcontainer.metadata=[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"},{\"mounts\":[\"source=kubeshim-fixture-volume,target=/kubeshim-volume,type=volume\",{\"source\":\"${localWorkspaceFolder}/.devcontainer\",\"target\":\"/kubeshim-bind\",\"type\":\"bind\"}],\"containerEnv\":{\"KUBESHIM_A\":\"a\",\"KUBESHIM_SPACES\":\"x y\"},\"containerUser\":\"vscode\",\"init\":true,\"privileged\":true,\"capAdd\":[\"SYS_PTRACE\"],\"securityOpt\":[\"seccomp=unconfined\"],\"remoteUser\":\"vscode\",\"overrideCommand\":true,\"hostRequirements\":{\"cpus\":2,\"memory\":\"4gb\",\"gpu\":\"optional\"}}]",
+      "mcr.microsoft.com/devcontainers/base:debian-12",
+      "-c",
+      "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+      "-"
+    ],
+    "env": [
+      {
+        "name": "KUBESHIM_ENV_FILE",
+        "value": "from-env-file",
+        "source": "file:/home/dev/src/runargs/.devcontainer/kubeshim.env"
+      },
+      {
+        "name": "KUBESHIM_A",
+        "value": "a",
+        "source": "flag"
+      },
+      {
+        "name": "KUBESHIM_SPACES",
+        "value": "x y",
+        "source": "flag"
+      },
+      {
+        "name": "KUBESHIM_FROM_HOST",
+        "value": "from-host",
+        "source": "host"
+      }
+    ],
+    "labels": {
+      "devcontainer.config_file": "/home/dev/src/runargs/.devcontainer/devcontainer.json",
+      "devcontainer.local_folder": "/home/dev/src/runargs",
+      "devcontainer.metadata": "[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"},{\"mounts\":[\"source=kubeshim-fixture-volume,target=/kubeshim-volume,type=volume\",{\"source\":\"${localWorkspaceFolder}/.devcontainer\",\"target\":\"/kubeshim-bind\",\"type\":\"bind\"}],\"containerEnv\":{\"KUBESHIM_A\":\"a\",\"KUBESHIM_SPACES\":\"x y\"},\"containerUser\":\"vscode\",\"init\":true,\"privileged\":true,\"capAdd\":[\"SYS_PTRACE\"],\"securityOpt\":[\"seccomp=unconfined\"],\"remoteUser\":\"vscode\",\"overrideCommand\":true,\"hostRequirements\":{\"cpus\":2,\"memory\":\"4gb\",\"gpu\":\"optional\"}}]",
+      "kubeshim.fixture": "runargs"
+    }
+  },
+  "image": {
+    "Id": "sha256:23fa69fed758b7927c60061317d73baf7d66b9fca5c344e80bce3a940b229af0",
+    "RepoTags": [
+      "mcr.microsoft.com/devcontainers/base:debian-12"
+    ],
+    "RepoDigests": [
+      "mcr.microsoft.com/devcontainers/base@sha256:23fa69fed758b7927c60061317d73baf7d66b9fca5c344e80bce3a940b229af0"
+    ],
+    "Architecture": "amd64",
+    "Os": "linux",
+    "Config": {
+      "User": "root",
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Cmd": [
+        "bash"
+      ],
+      "Labels": {
+        "dev.containers.id": "base-debian",
+        "dev.containers.release": "v0.4.19",
+        "dev.containers.source": "https://github.com/devcontainers/images",
+        "dev.containers.timestamp": "Thu, 16 Oct 2025 10:40:40 GMT",
+        "dev.containers.variant": "bookworm",
+        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"} ]",
+        "version": "2.0.2"
+      }
+    }
+  },
+  "merged": {
+    "name": "kubeshim run-options fixture",
+    "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+    "containerUser": "vscode",
+    "remoteUser": "vscode",
+    "init": true,
+    "privileged": true,
+    "capAdd": [
+      "SYS_PTRACE"
+    ],
+    "securityOpt": [
+      "seccomp=unconfined"
+    ],
+    "containerEnv": {
+      "KUBESHIM_A": "a",
+      "KUBESHIM_SPACES": "x y"
+    },
+    "appPort": [
+      3000,
+      "127.0.0.1:4000:4000"
+    ],
+    "mounts": [
+      "source=kubeshim-fixture-volume,target=/kubeshim-volume,type=volume",
+      {
+        "source": "/home/dev/src/runargs/.devcontainer",
+        "target": "/kubeshim-bind",
+        "type": "bind"
+      }
+    ],
+    "runArgs": [
+      "--hostname=kubeshim-host",
+      "--shm-size=256m",
+      "--ulimit",
+      "nofile=4096:8192",
+      "--add-host=host.docker.internal:host-gateway",
+      "--label",
+      "kubeshim.fixture=runargs",
+      "--env-file",
+      "/home/dev/src/runargs/.devcontainer/kubeshim.env",
+      "-e",
+      "KUBESHIM_FROM_HOST"
+    ],
+    "hostRequirements": {
+      "cpus": 2,
+      "memory": "4294967296",
+      "gpu": "optional"
+    },
+    "overrideCommand": true,
+    "workspaceMount": "source=/home/dev/src/runargs,target=/work/kubeshim,type=bind",
+    "workspaceFolder": "/work/kubeshim",
+    "configFilePath": {
+      "$mid": 1,
+      "fsPath": "/home/dev/src/runargs/.devcontainer/devcontainer.json",
+      "path": "/home/dev/src/runargs/.devcontainer/devcontainer.json",
+      "scheme": "vscode-fileHost"
+    },
+    "customizations": {
+      "vscode": [
+        {
+          "settings": {
+            "github.copilot.chat.codeGeneration.instructions": [
+              {
+                "text": "This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "onCreateCommands": [],
+    "updateContentCommands": [],
+    "postCreateCommands": [],
+    "postStartCommands": [],
+    "postAttachCommands": [],
+    "remoteEnv": {},
+    "portsAttributes": {}
+  }
+}

@@ -1,17 +1,43 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: end-to-end automation (issue #188) — a fired Schedule trigger
 # spawns an instance, launches the agent (which RUNS with the trigger's prompt),
-# and then the idle instance is reaped. The fixture installs a fake `claude`
-# under ~/.local/bin (on PATH only via .bashrc, like the real install) that
-# records its args to /tmp/automation_agent_out then sleeps; we assert the prompt
-# reaches it AND that the idle agent's instance is torn down. This is the real
-# proof of the whole scheduler -> spawn -> launch -> reap lifecycle.
+# and then the idle instance is reaped; `fleet trigger logs`, fleet_trigger_logs
+# and the TUI's L on the trigger row record each outcome (the instance it got,
+# then the reap). The fixture installs a fake
+# `claude` under ~/.local/bin (on PATH only via .bashrc, like the real install)
+# that records its args to /tmp/automation_agent_out then sleeps; we assert the
+# prompt reaches it AND that the idle agent's instance is torn down. This is the
+# real proof of the whole scheduler -> spawn -> launch -> reap lifecycle.
+#
+# On kubernetes the agent runs on the run's connection, and the cluster limits
+# are proven too: a burst of 5 webhook deliveries to one trigger is queued
+# (202) and every event gets its run, spaced by the connection's fire interval
+# and at most automation_max_per_agent at once; a runaway webhook never holds
+# more instances than the connection's max_instances, its extra firings queued
+# and run later; a full queue answers 429 with Retry-After; an agent whose tool
+# has no login on the cluster, and one whose connection was forgotten, are
+# refused with the reason in its trigger log and on its agent row.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
+
+GW_PID=""
+GONE_NS=""
 # Kill our daemon on exit so its short idle-timeout env (set below) can't bleed
-# into a later test's scheduler. Mirrors 601/611.
-itest_cleanup() { pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true; }
+# into a later test's scheduler (mirrors 601/611), and the gateway and the
+# second connection's namespace the kubernetes half makes.
+itest_cleanup() {
+  tui_kill
+  pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
+  if [ -n "${GW_PID}" ]; then
+    kill "${GW_PID}" 2>/dev/null || true
+    wait "${GW_PID}" 2>/dev/null || true
+  fi
+  if [ -n "${GONE_NS}" ]; then
+    _be_kubectl delete namespace "${GONE_NS}" --wait=false >/dev/null 2>&1 || true
+  fi
+}
 itest_begin
 
 
@@ -31,15 +57,30 @@ setup_automation_test
 # and its own scheduler — left alive it would race ours (firing the trigger,
 # reaping on the wrong clock). Kill it so the `fleet ls` below cold-spawns
 # exactly one fresh daemon that inherits our short-timeout env.
+kill_daemons() {
+  pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
+  local deadline=$(( $(date +%s) + $(_scale_timeout 5) ))
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    [ "$(server_count)" = "0" ] && break
+    sleep 0.2
+  done
+}
 info "killing any lingering daemon so we cold-spawn one with our env"
-pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
-deadline=$(( $(date +%s) + $(_scale_timeout 5) ))
-while [ "$(date +%s)" -lt "${deadline}" ]; do
-  [ "$(server_count)" = "0" ] && break
-  sleep 0.2
-done
+kill_daemons
 
+FLEET="${FIXTURE_REPO_NAME}"
 MARKER="AUTOMATIONPROMPTMARKER42"
+
+# The agent's target: devcontainer, or the run's connection on kubernetes. Its
+# command sets the tool's API key, which signs it in wherever it runs (the
+# automation login check refuses a claude agent on a cluster where Claude was
+# never logged in for the fleet; the fake claude ignores the key).
+agent_target='"backend": "devcontainer"'
+target_label="devcontainer"
+if itest_backend_is kubernetes; then
+  agent_target="\"backend\": \"kubernetes\", \"kube_cluster\": \"$(_be_cluster_id)\""
+  target_label="☸ itest"
+fi
 
 # A cron matching the CURRENT minute fires exactly once (its only match is this
 # minute of this hour; next is tomorrow), so the daemon's immediate startup tick
@@ -59,16 +100,16 @@ info "seeding automation: agent 'writer' + schedule trigger ('${CRON}') prompt='
 cat > "${HOME}/.fleet/state.json" <<EOF
 {
   "fleets": {
-    "${FIXTURE_REPO_NAME}": {
-      "name": "${FIXTURE_REPO_NAME}",
+    "${FLEET}": {
+      "name": "${FLEET}",
       "remote": "${FIXTURE_REPO_URL}",
       "settings": {
         "agents": [
           {
             "name": "writer",
-            "command": "claude --system-prompt '\${SYS_PROMPT}' '\${PROMPT}'",
+            "command": "ANTHROPIC_API_KEY=itest claude --system-prompt '\${SYS_PROMPT}' '\${PROMPT}'",
             "systemPrompt": "be-terse",
-            "backend": "devcontainer"
+            ${agent_target}
           }
         ],
         "triggers": [
@@ -90,7 +131,7 @@ EOF
 # Start the daemon (and its scheduler). The immediate startup tick fires the
 # due trigger, which creates the instance.
 info "starting the daemon + scheduler ('fleet ls')"
-"${FLEET_BIN}" ls "${FIXTURE_REPO_NAME}" >/dev/null 2>&1 || true
+"${FLEET_BIN}" ls "${FLEET}" >/dev/null 2>&1 || true
 
 # Wait for the scheduler to spawn the automation instance (name: writer-<HHMMSS>-<n>).
 info "waiting for the scheduler to spawn an instance"
@@ -106,10 +147,13 @@ info "spawned instance: ${inst}"
 # Wait for the instance to provision + the agent to launch + write the marker.
 # This implicitly waits for the instance to reach 'running' ('fleet exec' fails
 # until then) and for launchAutomationCommand to have run the agent.
+# A cluster's first create also delivers the image to the node, so the
+# budget is generous.
 info "waiting for the agent to launch and receive the prompt"
 out=""
-for _ in $(seq 1 80); do
-  out=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/${inst}" -- cat /tmp/automation_agent_out 2>/dev/null || true)
+deadline=$(( $(date +%s) + $(_scale_timeout 600) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
+  out=$("${FLEET_BIN}" exec "${FLEET}/${inst}" -- cat /tmp/automation_agent_out 2>/dev/null || true)
   [ -n "${out}" ] && break
   sleep 3
 done
@@ -138,4 +182,302 @@ for _ in $(seq 1 60); do
 done
 [ -n "${reaped}" ] || fail "idle automation instance was never reaped (still present after the idle timeout)"
 
-pass "automation: fired trigger ran the agent with the prompt, then reaped the idle instance"
+# The firing's event log says what became of it: the instance, then the reap.
+logs=$("${FLEET_BIN}" trigger logs "${FLEET}" fire 2>&1) || fail "fleet trigger logs fire failed: ${logs}"
+assert_contains "${logs}" "writer: instance ${inst} (${target_label})" "the trigger log should name the run's instance"
+assert_contains "${logs}" "writer: instance ${inst} reaped after" "the trigger log should record the reap"
+
+# The same outcome lines through the MCP tool and the TUI's L on the trigger
+# row (both page the daemon's TriggerLogs).
+info "the firing's outcomes through fleet_trigger_logs"
+mcp_logs=$(itest_mcp_call fleet_trigger_logs "{\"fleet\":\"${FLEET}\",\"trigger\":\"fire\"}" structuredContent.logs) \
+  || fail "fleet_trigger_logs failed"
+assert_contains "${mcp_logs}" "writer: instance ${inst} (${target_label})" "fleet_trigger_logs should name the run's instance"
+assert_contains "${mcp_logs}" "writer: instance ${inst} reaped after" "fleet_trigger_logs should record the reap"
+
+info "the firing's outcomes through the TUI's L on the trigger row"
+tui_spawn
+tui_wait_for "${FLEET}" 15
+tui_send m
+tui_wait_for "triggers" 10
+tui_cursor_to "fire"
+tui_send L
+tui_wait_for "writer: instance ${inst} reaped after" 15 \
+  || fail "the TUI's L on the trigger row should page the reap outcome"
+tui_assert_contains "# outcome:" "L should page the outcome lines"
+tui_assert_contains "writer: instance ${inst} (${target_label})" "L should page the run's instance outcome"
+tui_send q
+tui_kill
+
+if ! itest_backend_is kubernetes; then
+  pass "automation: fired trigger ran the agent with the prompt, then reaped the idle instance; trigger logs record both (CLI, MCP, TUI L)"
+  exit 0
+fi
+
+# ===================== kubernetes: limits, queue, logins =====================
+
+# free_port prints a free localhost TCP port (python3 binds :0; /dev/tcp fallback).
+free_port() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
+    return
+  fi
+  local p
+  for _ in $(seq 1 100); do
+    p=$(( (RANDOM % 20000) + 30000 ))
+    if ! (exec 3<>"/dev/tcp/127.0.0.1/${p}") 2>/dev/null; then
+      printf '%s' "${p}"
+      return
+    fi
+    exec 3>&- 2>/dev/null || true
+  done
+  fail "could not find a free port"
+}
+
+# fleetd delivers webhooks through a gateway; the next daemon reads the
+# setting at its start.
+info "kubernetes: starting a gateway for webhook deliveries"
+kill_daemons
+PUBLIC_PORT="$(free_port)"
+GRPC_PORT="$(free_port)"
+while [ "${GRPC_PORT}" = "${PUBLIC_PORT}" ]; do GRPC_PORT="$(free_port)"; done
+cfg="${HOME}/.fleet/config.json"
+jq --arg gw "http://127.0.0.1:${GRPC_PORT}" '.remote_mcp_settings = {webhook_enabled: true, gateway_url: $gw}' "${cfg}" > "${cfg}.tmp"
+mv "${cfg}.tmp" "${cfg}"
+gw_log="${TEST_SCRATCH_DIR}/gateway.log"
+"${FLEET_BIN}" gateway \
+  --public-url "http://127.0.0.1:${PUBLIC_PORT}" \
+  --public-addr "127.0.0.1:${PUBLIC_PORT}" \
+  --grpc-addr "127.0.0.1:${GRPC_PORT}" \
+  >"${gw_log}" 2>&1 &
+GW_PID=$!
+gw_up=false
+for _ in $(seq 1 "$(_scale_timeout 50)"); do
+  if curl -fsS "http://127.0.0.1:${PUBLIC_PORT}/healthz" >/dev/null 2>&1; then
+    gw_up=true
+    break
+  fi
+  kill -0 "${GW_PID}" 2>/dev/null || { cat "${gw_log}" || true; fail "gateway process exited early"; }
+  sleep 0.2
+done
+[ "${gw_up}" = true ] || { cat "${gw_log}" || true; fail "gateway /healthz never came up"; }
+
+# Runs of one trigger 8s apart, at most 3 of one agent at once, in pods small
+# enough for three on the QA minikube. (This cold-spawns the daemon.)
+INTERVAL=8
+out=$("${FLEET_BIN}" cluster set itest automation_fire_interval=${INTERVAL}s automation_max_per_agent=3 \
+  resources.cpu_request=100m resources.memory_request=256Mi 2>&1) || fail "fleet cluster set itest: ${out}"
+
+out=$("${FLEET_BIN}" agent create "${FLEET}" burster --cluster itest \
+  --command "ANTHROPIC_API_KEY=itest claude '\${PROMPT}'" 2>&1) || fail "agent create burster: ${out}"
+out=$("${FLEET_BIN}" trigger create "${FLEET}" burst --type webhook --agent burster \
+  --webhook-name itest-burst --filter-type regex --regex '.*' --prompt BURST 2>&1) || fail "trigger create burst: ${out}"
+
+session_file="${HOME}/.fleet/gateway_session.json"
+for _ in $(seq 1 "$(_scale_timeout 100)"); do
+  [ -f "${session_file}" ] && grep -q '"public_webhook_url"' "${session_file}" && break
+  sleep 0.2
+done
+webhook_base=$(grep -oE '"public_webhook_url"[[:space:]]*:[[:space:]]*"[^"]+"' "${session_file}" 2>/dev/null \
+  | sed -E 's/.*"([^"]+)"$/\1/' || true)
+[ -n "${webhook_base}" ] || fail "fleetd never registered a webhook URL with the gateway: $(cat "${session_file}" 2>/dev/null || true)"
+
+# deliver <webhook> <n> — POST event n; prints the HTTP status, leaving the
+# body in ${TEST_SCRATCH_DIR}/reply.<n> and the headers in .../headers.<n>.
+deliver() {
+  curl -sS -o "${TEST_SCRATCH_DIR}/reply.$2" -D "${TEST_SCRATCH_DIR}/headers.$2" -w '%{http_code}' \
+    -X POST -H 'Content-Type: application/json' --data-binary "{\"n\":$2}" "${webhook_base}/$1" 2>/dev/null || printf '000'
+}
+
+# The first delivery is retried while the tunnel can still be coming up (an
+# HTTP error fires nothing); fleetd's 200 is its verdict.
+info "kubernetes: a burst of 5 deliveries to one trigger"
+code=""
+for _ in $(seq 1 "$(_scale_timeout 10)"); do
+  code=$(deliver itest-burst 1)
+  [ "${code}" = "200" ] && break
+  sleep 1
+done
+assert_equals "200" "${code}" "the first delivery should fire at once: $(cat "${TEST_SCRATCH_DIR}/reply.1" 2>/dev/null)"
+assert_contains "$(cat "${TEST_SCRATCH_DIR}/reply.1")" "received: 1 trigger(s) fired" "the first delivery's reply"
+for n in 2 3 4 5; do
+  code=$(deliver itest-burst "${n}")
+  assert_equals "202" "${code}" "delivery ${n} should be queued: $(cat "${TEST_SCRATCH_DIR}/reply.${n}" 2>/dev/null)"
+  assert_contains "$(cat "${TEST_SCRATCH_DIR}/reply.${n}")" "received: 0 fired, 1 queued" "delivery ${n}'s reply"
+done
+
+# Every event gets its run: five "instance" outcomes in the trigger's log, one
+# per firing, however long the queue makes the last one wait (three run at
+# once; the fourth waits for the first to be reaped).
+info "kubernetes: waiting for every queued event to get its run"
+started=0
+deadline=$(( $(date +%s) + $(_scale_timeout 600) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
+  logs=$("${FLEET_BIN}" trigger logs "${FLEET}" burst 2>/dev/null || true)
+  started=$(printf '%s\n' "${logs}" | grep -cE '^# outcome: [^ ]+ burster: instance burster-[0-9]+-[0-9]+ \(☸ itest\)$' || true)
+  [ "${started}" -ge 5 ] && break
+  sleep 5
+done
+printf '%s\n' "${logs}" | grep '^# outcome:' || true
+assert_equals "5" "${started}" "every delivery of the burst should get its run"
+events=$(printf '%s\n' "${logs}" | grep -c '^===== event-' || true)
+assert_equals "5" "${events}" "the burst should be 5 firings"
+queued=$(printf '%s\n' "${logs}" | grep -c 'burster: queued: ' || true)
+assert_equals "4" "${queued}" "four of the burst should have waited in the queue"
+refused=$(printf '%s\n' "${logs}" | grep -cE 'burster: (refused|dropped|expired|not created)' || true)
+assert_equals "0" "${refused}" "no run of the burst should be lost"
+
+# The runs started at least the fire interval apart (outcome times are whole
+# seconds, so allow one second of rounding).
+prev=""
+while read -r stamp; do
+  t=$(date -u -d "${stamp}" +%s)
+  if [ -n "${prev}" ] && [ $(( t - prev )) -lt $(( INTERVAL - 1 )) ]; then
+    fail "two runs of the burst started $(( t - prev ))s apart, under the ${INTERVAL}s fire interval"
+  fi
+  prev="${t}"
+done < <(printf '%s\n' "${logs}" | sed -nE 's/^# outcome: ([^ ]+) burster: instance burster-[0-9]+-[0-9]+ \(☸ itest\)$/\1/p' | sort)
+
+# A runaway webhook against the connection's max_instances: with the fire
+# interval and the per-agent limit off, only max_instances holds it back. Two
+# runs start at once, the rest wait in the queue (202), never more than two
+# instances hold the cluster at a time, and every event still gets its run.
+info "kubernetes: max_instances caps a runaway webhook"
+# The burst's runs count until they are reaped.
+deadline=$(( $(date +%s) + $(_scale_timeout 300) ))
+while grep -qE '"burster-[0-9]+-[0-9]+"' "${HOME}/.fleet/state.json" 2>/dev/null; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the burst's runs were never reaped"
+  sleep 3
+done
+out=$("${FLEET_BIN}" cluster set itest max_instances=2 automation_fire_interval=0 automation_max_per_agent=0 2>&1) \
+  || fail "fleet cluster set itest max_instances=2: ${out}"
+out=$("${FLEET_BIN}" agent create "${FLEET}" runner --cluster itest \
+  --command "ANTHROPIC_API_KEY=itest claude '\${PROMPT}'" 2>&1) || fail "agent create runner: ${out}"
+out=$("${FLEET_BIN}" trigger create "${FLEET}" runaway --type webhook --agent runner \
+  --webhook-name itest-runaway --filter-type regex --regex '.*' --prompt RUNAWAY 2>&1) || fail "trigger create runaway: ${out}"
+for n in 51 52; do
+  code=$(deliver itest-runaway "${n}")
+  assert_equals "200" "${code}" "runaway delivery ${n} should fire under max_instances: $(cat "${TEST_SCRATCH_DIR}/reply.${n}" 2>/dev/null)"
+done
+for n in 53 54; do
+  code=$(deliver itest-runaway "${n}")
+  assert_equals "202" "${code}" "runaway delivery ${n} should wait for max_instances: $(cat "${TEST_SCRATCH_DIR}/reply.${n}" 2>/dev/null)"
+  assert_contains "$(cat "${TEST_SCRATCH_DIR}/reply.${n}")" "received: 0 fired, 1 queued" "runaway delivery ${n}'s reply"
+done
+# runners — the runaway's instances holding the cluster now (a record with
+# an instance key, not on its way out: what max_instances counts).
+runners() {
+  jq -r --arg f "${FLEET}" '[.fleets[$f].instances[]? | select((.name | startswith("runner-")) and (.kube_key // "") != "" and .status != "deleting")] | length' \
+    "${HOME}/.fleet/state.json" 2>/dev/null || echo 0
+}
+most=0
+started=0
+deadline=$(( $(date +%s) + $(_scale_timeout 600) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
+  now=$(runners)
+  [ "${now}" -gt "${most}" ] && most=${now}
+  logs=$("${FLEET_BIN}" trigger logs "${FLEET}" runaway 2>/dev/null || true)
+  started=$(printf '%s\n' "${logs}" | grep -cE '^# outcome: [^ ]+ runner: instance runner-[0-9]+-[0-9]+ \(☸ itest\)$' || true)
+  [ "${started}" -ge 4 ] && break
+  sleep 2
+done
+printf '%s\n' "${logs}" | grep '^# outcome:' || true
+assert_equals "4" "${started}" "every runaway delivery should get its run"
+[ "${most}" -le 2 ] || fail "${most} runaway instances held the cluster at once, over max_instances=2"
+[ "${most}" -ge 1 ] || fail "no runaway instance was ever seen"
+queued=$(printf '%s\n' "${logs}" | grep -c 'runner: queued: ' || true)
+assert_equals "2" "${queued}" "two runaway firings should have waited for max_instances"
+# Nothing of it may start again: the trigger goes, its runs are reaped.
+out=$("${FLEET_BIN}" trigger delete "${FLEET}" runaway 2>&1) || fail "trigger delete runaway: ${out}"
+out=$("${FLEET_BIN}" cluster set itest max_instances=0 automation_fire_interval=${INTERVAL}s automation_max_per_agent=3 2>&1) \
+  || fail "fleet cluster set itest (limits back): ${out}"
+
+# A full queue: with an hour between runs every delivery waits, the queue
+# holds 20 firings, and the next is refused with 429 and Retry-After,
+# enqueueing nothing.
+info "kubernetes: filling the trigger's queue"
+out=$("${FLEET_BIN}" cluster set itest automation_fire_interval=1h 2>&1) || fail "fleet cluster set itest: ${out}"
+for n in $(seq 101 120); do
+  code=$(deliver itest-burst "${n}")
+  assert_equals "202" "${code}" "delivery ${n} should be queued: $(cat "${TEST_SCRATCH_DIR}/reply.${n}" 2>/dev/null)"
+done
+code=$(deliver itest-burst 121)
+assert_equals "429" "${code}" "a delivery to a full queue should get 429: $(cat "${TEST_SCRATCH_DIR}/reply.121" 2>/dev/null)"
+grep -qi '^retry-after: [1-9]' "${TEST_SCRATCH_DIR}/headers.121" \
+  || fail "the 429 should carry Retry-After: $(cat "${TEST_SCRATCH_DIR}/headers.121")"
+# burst_firings — how many firings the burst trigger's log records.
+burst_firings() {
+  "${FLEET_BIN}" trigger logs "${FLEET}" burst 2>/dev/null | grep -c '^===== event-' || true
+}
+# The scheduler records a delivery's firing a moment after its reply, so the
+# last of the 20 can still be on their way to the log: wait for them.
+events=0
+deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
+  events=$(burst_firings)
+  [ "${events}" -ge 25 ] && break
+  sleep 1
+done
+assert_equals "25" "${events}" "the 20 queued deliveries should be 20 firings (5 + 20)"
+
+# An agent whose tool was never logged in for this fleet on the cluster: its
+# save warns, and each firing is refused with the reason.
+info "kubernetes: an agent with no login on the cluster"
+out=$("${FLEET_BIN}" agent create "${FLEET}" needlogin --cluster itest \
+  --command "claude '\${PROMPT}'" 2>&1) || fail "agent create needlogin: ${out}"
+assert_contains "${out}" "warning: agent needlogin: log in to Claude once for this fleet on ☸ itest" \
+  "saving an agent with no login where it runs should warn"
+out=$("${FLEET_BIN}" trigger create "${FLEET}" nologin --type webhook --agent needlogin \
+  --webhook-name itest-nologin --filter-type regex --regex '.*' 2>&1) || fail "trigger create nologin: ${out}"
+code=$(deliver itest-nologin 200)
+assert_equals "200" "${code}" "the no-login delivery: $(cat "${TEST_SCRATCH_DIR}/reply.200" 2>/dev/null)"
+
+# An agent whose connection was forgotten: refused with the reason.
+info "kubernetes: an agent on a forgotten connection"
+GONE_NS="${FLEET_ITEST_NAMESPACE}-gone"
+out=$("${FLEET_BIN}" cluster add "${FLEET_ITEST_CLUSTER}" --name gone -n "${GONE_NS}" 2>&1) \
+  || fail "fleet cluster add gone: ${out}"
+gone_id=$(jq -r '.clusters[] | select(.display_name == "gone") | .id' "${HOME}/.fleet/kube_clusters.json")
+[ -n "${gone_id}" ] || fail "connection gone has no id: $(cat "${HOME}/.fleet/kube_clusters.json")"
+out=$("${FLEET_BIN}" agent create "${FLEET}" goner --cluster gone --command "true" 2>&1) || fail "agent create goner: ${out}"
+out=$("${FLEET_BIN}" trigger create "${FLEET}" forgot --type webhook --agent goner \
+  --webhook-name itest-forgot --filter-type regex --regex '.*' 2>&1) || fail "trigger create forgot: ${out}"
+out=$("${FLEET_BIN}" cluster rm gone --forget 2>&1) || fail "fleet cluster rm gone --forget: ${out}"
+code=$(deliver itest-forgot 300)
+assert_equals "200" "${code}" "the forgotten-cluster delivery: $(cat "${TEST_SCRATCH_DIR}/reply.300" 2>/dev/null)"
+
+# Both refusals are in their trigger logs (the firings are recorded by the
+# scheduler a moment after the reply), and neither made an instance.
+wait_log() {  # <trigger> <text>
+  local deadline=$(( $(date +%s) + $(_scale_timeout 30) )) logs=""
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    logs=$("${FLEET_BIN}" trigger logs "${FLEET}" "$1" 2>/dev/null || true)
+    case "${logs}" in *"$2"*) return 0 ;; esac
+    sleep 1
+  done
+  printf '%s\n' "${logs}" >&2
+  fail "trigger $1's log never said: $2"
+}
+wait_log nologin "needlogin: refused: log in to Claude once for this fleet on ☸ itest"
+# The scheduler takes deliveries in the order they came: having recorded the
+# no-login one, it would have recorded the 429'd one too, had it been handed
+# over.
+assert_equals "25" "$(burst_firings)" "the 429'd delivery should fire nothing (5 + 20 firings)"
+wait_log forgot "goner: refused: cluster ${gone_id} is no longer connected"
+if grep -qE '"(needlogin|goner)-[0-9]+-[0-9]+"' "${HOME}/.fleet/state.json"; then
+  fail "a refused agent got an instance: $(grep -oE '"(needlogin|goner)-[0-9]+-[0-9]+"' "${HOME}/.fleet/state.json")"
+fi
+
+# The agents' rows say why: the login it lacks (L logs in), the connection
+# it names that is gone.
+info "kubernetes: the refused agents' rows name why"
+tui_spawn
+tui_wait_for "${FLEET}" 15
+tui_send m
+tui_wait_for "agents (" 10
+tui_wait_for "⚠ log in to Claude once for this fleet on ☸ itest (L)" 20 \
+  || fail "the needlogin agent's row should name the login it lacks"
+tui_assert_contains "☸ ${gone_id} (missing)" "the goner agent's row should name its forgotten connection"
+tui_kill
+
+pass "automation on kubernetes: the run is reaped and logged (CLI, MCP, TUI L); a 5-delivery burst queues (202) and every event runs ${INTERVAL}s apart; max_instances caps a runaway webhook; a full queue gets 429; no-login and forgotten-cluster agents are refused with the reason in their trigger logs and on their rows"

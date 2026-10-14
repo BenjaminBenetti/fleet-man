@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet status` reports fleet and instance running/stopped counts.
 set -euo pipefail
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI fleet delete double-confirm warn dialog (cancel + destroy paths)
 set -euo pipefail
 

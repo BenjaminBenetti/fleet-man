@@ -11,75 +11,134 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// TestListIncludesBranchColumnAndValues checks the BRANCH column comes from
+// the server (GetState fresh_branches), never a checkout read on this machine:
+// the live read wins, and without one the row falls back to the last branch
+// the server saw, then the requested branch.
 func TestListIncludesBranchColumnAndValues(t *testing.T) {
 	sp := func(s string) *string { return &s }
+	instance := func(name, last, requested string) *fleetgrpc.Instance {
+		inst := &fleetgrpc.Instance{
+			Name:         name,
+			ContainerId:  sp("abc123456789999"),
+			WorkspaceDir: sp("/workspace/alpha/" + name),
+			CreatedAt:    timestamppb.New(time.Unix(0, 0)),
+			Status:       fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING,
+		}
+		if last != "" {
+			inst.LastBranch = sp(last)
+		}
+		if requested != "" {
+			inst.Branch = sp(requested)
+		}
+		return inst
+	}
 
-	// Inject a canned snapshot through the server seam so the test doesn't need
-	// a live fleet server (Phase 1 routes list through fleetclient.Dial+GetState).
-	st := &fleetgrpc.State{
-		Fleets: map[string]*fleetgrpc.Fleet{
-			"alpha": {
-				Name: "alpha",
-				Instances: []*fleetgrpc.Instance{
-					{
-						Name:         "agent-1",
-						ContainerId:  sp("abc123456789999"),
-						WorkspaceDir: sp("/workspace/alpha/agent-1"),
-						CreatedAt:    timestamppb.New(time.Unix(0, 0)),
-						Status:       fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING,
-					},
-					{
-						Name:         "agent-2",
-						ContainerId:  sp("def987654321000"),
-						WorkspaceDir: sp("/workspace/alpha/agent-2"),
-						CreatedAt:    timestamppb.New(time.Unix(0, 0)),
-						Status:       fleetgrpc.InstanceStatus_INSTANCE_STATUS_STOPPED,
+	// Inject a canned reply through the server seam so the test doesn't need
+	// a live fleet server.
+	reply := &fleetgrpc.GetStateReply{
+		State: &fleetgrpc.State{
+			Fleets: map[string]*fleetgrpc.Fleet{
+				"alpha": {
+					Name: "alpha",
+					Instances: []*fleetgrpc.Instance{
+						instance("agent-1", "old-branch", "requested"),
+						instance("agent-2", "", ""),
+						instance("agent-3", "last-seen", "requested"),
+						instance("agent-4", "", "requested-only"),
 					},
 				},
 			},
 		},
+		Runtime: []*fleetgrpc.InstanceRuntime{
+			{Fleet: "alpha", Instance: "agent-1", CurrentBranch: sp("feature/status-line")},
+			// A live read on a detached HEAD: blank, not a fallback.
+			{Fleet: "alpha", Instance: "agent-2", CurrentBranch: sp("")},
+			// No live read possible: the fallbacks apply.
+			{Fleet: "alpha", Instance: "agent-3"},
+		},
 	}
-	prevFetch := fetchFleetState
-	fetchFleetState = func(context.Context) (*fleetgrpc.State, error) { return st, nil }
-	defer func() { fetchFleetState = prevFetch }()
+	prevFetch := fetchListState
+	var asked bool
+	fetchListState = func(context.Context) (*fleetgrpc.GetStateReply, error) {
+		asked = true
+		return reply, nil
+	}
+	defer func() { fetchListState = prevFetch }()
 
 	var out bytes.Buffer
 	prevOutput := listOutput
 	listOutput = &out
 	defer func() { listOutput = prevOutput }()
 
-	prevBranchName := listBranchName
-	listBranchName = func(workspaceDir string) string {
-		if workspaceDir == "/workspace/alpha/agent-1" {
-			return "feature/status-line"
-		}
-		return ""
-	}
-	defer func() { listBranchName = prevBranchName }()
-
 	cmd := newListCmd()
 	if err := cmd.RunE(cmd, []string{"alpha"}); err != nil {
 		t.Fatalf("RunE() error = %v", err)
+	}
+	if !asked {
+		t.Fatal("list must fetch through fetchListState (GetState with fresh_branches)")
 	}
 
 	output := out.String()
 	if !strings.Contains(output, "BRANCH") {
 		t.Fatalf("output missing BRANCH header:\n%s", output)
 	}
-	if !strings.Contains(output, "feature/status-line") {
-		t.Fatalf("output missing branch value:\n%s", output)
+	for name, want := range map[string]string{
+		"agent-1": "feature/status-line",
+		"agent-3": "last-seen",
+		"agent-4": "requested-only",
+	} {
+		if line := findLine(output, name); !strings.HasSuffix(strings.TrimRight(line, " "), want) {
+			t.Fatalf("%s row should end with branch %q:\n%s", name, want, output)
+		}
 	}
 
 	agentTwoLine := findLine(output, "agent-2")
 	if agentTwoLine == "" {
 		t.Fatalf("output missing agent-2 line:\n%s", output)
 	}
-	if strings.Contains(agentTwoLine, "feature/status-line") {
-		t.Fatalf("agent-2 line unexpectedly contains branch value:\n%s", agentTwoLine)
-	}
 	expectedCreated := time.Unix(0, 0).Local().Format("2006-01-02 15:04")
 	if !strings.HasSuffix(strings.TrimRight(agentTwoLine, " "), expectedCreated) {
 		t.Fatalf("agent-2 line should end at CREATED column when branch is empty:\n%s", agentTwoLine)
+	}
+}
+
+// TestListShortensContainerIDs checks the CONTAINER column goes through
+// fleet.ShortContainerID: docker's 12-character short ID, and <ns>/<sts> for a
+// Kubernetes ContainerID instead of a cut-off "k8s:<cluster>/..." prefix.
+func TestListShortensContainerIDs(t *testing.T) {
+	sp := func(s string) *string { return &s }
+	st := &fleetgrpc.State{
+		Fleets: map[string]*fleetgrpc.Fleet{
+			"alpha": {
+				Name: "alpha",
+				Instances: []*fleetgrpc.Instance{
+					{Name: "docker-1", ContainerId: sp("abc123456789999")},
+					{Name: "kube-1", ContainerId: sp("k8s:c-7f3a9b/fleet/fi-alpha-kube-1-0a1b2c3d@g2")},
+				},
+			},
+		},
+	}
+	prevFetch := fetchListState
+	fetchListState = func(context.Context) (*fleetgrpc.GetStateReply, error) {
+		return &fleetgrpc.GetStateReply{State: st}, nil
+	}
+	defer func() { fetchListState = prevFetch }()
+	var out bytes.Buffer
+	prevOutput := listOutput
+	listOutput = &out
+	defer func() { listOutput = prevOutput }()
+
+	cmd := newListCmd()
+	if err := cmd.RunE(cmd, []string{"alpha"}); err != nil {
+		t.Fatalf("RunE() error = %v", err)
+	}
+	output := out.String()
+	if line := findLine(output, "docker-1"); !strings.Contains(line, " abc123456789 ") || strings.Contains(line, "abc1234567899") {
+		t.Errorf("docker-1 line should show the 12-char short ID:\n%s", line)
+	}
+	if line := findLine(output, "kube-1"); !strings.Contains(line, " fleet/fi-alpha-kube-1-0a1b2c3d ") || strings.Contains(line, "k8s:") {
+		t.Errorf("kube-1 line should show <ns>/<sts>:\n%s", line)
 	}
 }
 

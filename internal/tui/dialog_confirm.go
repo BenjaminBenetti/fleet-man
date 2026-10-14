@@ -20,12 +20,9 @@ func (fleetPage *fleetPage) updateConfirmDelete(m *model, msg tea.Msg) tea.Cmd {
 					fleetPage.mode = viewConfirmDeleteFleetWarn
 					return nil
 				}
-				// Empty fleet, just remove it
-				delete(m.st.Fleets, fleetPage.dlg.fleet)
-				delete(fleetPage.collapsed, fleetPage.dlg.fleet)
-				_ = destroyFleetRemote(fleetPage.dlg.fleet)
-				fleetPage.buildRows(m)
-				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dlg.fleet)
+				// Empty fleet, just remove it.
+				fleetPage.mode = viewNormal
+				return fleetPage.removeEmptyFleet(m, fleetPage.dlg.fleet)
 			} else {
 				// Instance-level delete runs as a server job. Flip an optimistic
 				// in-memory Deleting status for the spinner (NOT persisted — the
@@ -50,6 +47,24 @@ func (fleetPage *fleetPage) updateConfirmDelete(m *model, msg tea.Msg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// removeEmptyFleet takes a fleet with no instances off the list at once and
+// removes it on the daemon off the UI loop: the destroy_fleet job tears its
+// caches, network and shares down on every runtime it has (a cluster may be
+// slow, or away), and operationDoneMsg reloads what is left. The daemon lists
+// the fleet until the job ends, so the list leaves it out until then
+// (removingFleets).
+func (fleetPage *fleetPage) removeEmptyFleet(m *model, name string) tea.Cmd {
+	delete(m.st.Fleets, name)
+	delete(fleetPage.collapsed, name)
+	if fleetPage.removingFleets == nil {
+		fleetPage.removingFleets = map[string]bool{}
+	}
+	fleetPage.removingFleets[name] = true
+	fleetPage.buildRows(m)
+	m.message = fmt.Sprintf("Removing fleet %s…", name)
+	return deleteFleetCmd(name, nil, m.portForwards)
 }
 
 // updateConfirmRebuild handles the instance rebuild confirmation dialog.
@@ -101,11 +116,8 @@ func (fleetPage *fleetPage) updateConfirmDeleteFleetWarn(m *model, msg tea.Msg) 
 				fleetPage.mode = viewNormal
 				return deleteFleetCmd(fleetPage.dlg.fleet, f.Instances, m.portForwards)
 			} else if ok {
-				delete(m.st.Fleets, fleetPage.dlg.fleet)
-				delete(fleetPage.collapsed, fleetPage.dlg.fleet)
-				_ = destroyFleetRemote(fleetPage.dlg.fleet)
-				fleetPage.buildRows(m)
-				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dlg.fleet)
+				fleetPage.mode = viewNormal
+				return fleetPage.removeEmptyFleet(m, fleetPage.dlg.fleet)
 			}
 			fleetPage.mode = viewNormal
 
@@ -208,6 +220,10 @@ func (fleetPage *fleetPage) renderConfirmRebuildDialog(m *model) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	body := fmt.Sprintf("Rebuild %s/%s? This recreates the container from its devcontainer config. Your workspace — the git checkout and any uncommitted changes — is preserved.", fleetPage.dlg.fleet, fleetPage.dlg.inst)
+	if inst := fleetPage.dlgInstance(m); inst != nil && inst.ContainerID == "" && kubeRetryRecord(inst) {
+		// A failed cluster create: the rebuild is its retry.
+		body = fmt.Sprintf("Retry the create of %s/%s? What the failed create left on the cluster is deleted, and the instance is created again from its checkout.", fleetPage.dlg.fleet, fleetPage.dlg.inst)
+	}
 	dialog := fmt.Sprintf(
 		"%s\n\n%s\n\n%s",
 		dialogTitle.Render("Rebuild instance"),
@@ -281,4 +297,21 @@ func (fleetPage *fleetPage) renderConfirmDeleteSessionDialog(m *model) string {
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+// dlgInstance is the instance the open dialog is about, as the TUI has it,
+// or nil.
+func (fleetPage *fleetPage) dlgInstance(m *model) *fleet.Instance {
+	if m.st == nil {
+		return nil
+	}
+	f, ok := m.st.Fleets[fleetPage.dlg.fleet]
+	if !ok {
+		return nil
+	}
+	inst, err := f.GetInstance(fleetPage.dlg.inst)
+	if err != nil {
+		return nil
+	}
+	return inst
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Claude Code CLI is installed in the container by the startup script.
 set -euo pipefail
 
@@ -26,5 +27,14 @@ claude_path=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- bash -lc 'comm
   || fail "claude is not on the user's PATH after install — output: ${claude_path}"
 info "claude resolved at: ${claude_path}"
 assert_contains "${claude_path}" "claude" "command -v claude returned no path"
+
+# The installer's download scratch dir is ~/.claude/downloads, and ~/.claude
+# is the fleet's shared Claude folder: instances provisioning together raced
+# on one download there (#149). The installer runs under a throwaway HOME, so
+# it never makes that folder.
+info "asserting the install never used the shared ~/.claude/downloads"
+leftover=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- sh -c '[ ! -e "$HOME/.claude/downloads" ] || ls -la "$HOME/.claude/downloads"') \
+  || fail "could not check ~/.claude/downloads in the instance"
+assert_equals "" "${leftover}" "the install downloaded into the fleet's shared ~/.claude/downloads"
 
 pass "claude installed"

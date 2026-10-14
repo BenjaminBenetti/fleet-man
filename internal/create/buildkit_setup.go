@@ -1,41 +1,52 @@
 package create
 
 import (
+	"errors"
+
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
-	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime"
 )
 
-// prepareBuildkitMount ensures the fleet's shared buildkit server is up and
-// returns the bind mount that exposes its socket directory inside the instance.
+// prepareBuildkitMounts ensures the fleet's shared buildkit server is up on
+// services (the instance's shared-service runtime) and returns the mounts the
+// instance reaches it through (on docker, the bind mount of its socket
+// directory).
 //
-// It returns ok=false (with no error) when the feature does not apply — the
-// backend cannot honor custom mounts (cloud backends) or the fleet has the
+// It returns no mounts and no error when the feature does not apply — the
+// instance has no shared-service runtime (cloud backends) or the fleet has the
 // BuildkitServer setting off. A genuine failure to start the server is returned
 // so the caller can surface a warning; per the feature contract this is
 // best-effort and must NOT abort provisioning.
-func prepareBuildkitMount(instanceBackend backend.Backend, fleetName string) (backend.Mount, bool, error) {
-	if !instanceBackend.SupportsCustomMounts() || !fleetBuildkitEnabled(fleetName) {
-		return backend.Mount{}, false, nil
+func prepareBuildkitMounts(services svcruntime.Runtime, fleetName string) ([]backend.Mount, error) {
+	if services == nil || !fleetBuildkitEnabled(fleetName) {
+		return nil, nil
 	}
-	if _, err := buildkit.EnsureSharedServer(fleetName); err != nil {
-		return backend.Mount{}, false, err
+	if err := services.EnsureService(fleetName, fleet.ServiceBuildkit); err != nil {
+		return nil, err
 	}
-	return buildkit.InstanceMount(fleetName), true, nil
+	return services.InstanceMounts(fleetName, fleet.ServiceBuildkit), nil
 }
 
 // configureBuildkit points the instance's docker buildx at the fleet's shared
-// buildkit server. It is a no-op (nil) when the feature does not apply. When it
-// does, ConfigureInstanceBuildx itself silently skips images that lack
-// docker/buildx, so an error here is only a real configuration failure — which
-// the caller should treat as non-fatal.
-func configureBuildkit(instanceBackend backend.Backend, fleetName, workspaceDir string) error {
-	if !instanceBackend.SupportsCustomMounts() || !fleetBuildkitEnabled(fleetName) {
+// buildkit server (svcruntime.ConfigureBuildkit: on a cluster, after giving
+// the instance a client certificate of its own). It is a no-op (nil) when the
+// feature does not apply, and when the runtime points no instance at its
+// server (prepareBuildkitMounts already warned why there is none). When it
+// does apply, an image that lacks docker/buildx is skipped silently, so an
+// error here is only a real configuration failure — which the caller should
+// treat as non-fatal.
+func configureBuildkit(services svcruntime.Runtime, instanceBackend backend.Backend, fleetName, instanceName, workspaceDir string) error {
+	if services == nil || !fleetBuildkitEnabled(fleetName) {
 		return nil
 	}
-	configured, err := buildkit.ConfigureInstanceBuildx(instanceBackend, workspaceDir)
+	configured, err := svcruntime.ConfigureBuildkit(services, instanceBackend, fleetName, instanceName, workspaceDir, svcruntime.BuildkitCreate)
 	if err != nil {
+		if errors.Is(err, svcruntime.ErrNoEndpoint) {
+			return nil
+		}
 		return err
 	}
 	if configured {

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Description: Fleet status mod — every devcontainer instance's shells load the
+# itest: k8s
+# Description: Fleet status mod — every instance's shells load the
 # fleet-status Claude Code mod (CLAUDE_CODE_PLUGIN_DIRS → a plugin of function
 # hooks the fleet binary carries), and the daemon keeps the mod's status file in
 # each instance's control directory: readable inside the instance, naming it,
-# live (with the agent counts) only while a TUI has the runtime polled. Turning
-# the global "Fleet status mod" setting off removes the file (the mod then draws
-# nothing); turning it on brings it back for the running instance.
+# live (with the agent counts) only while a TUI has the runtime polled, and kept
+# fresh there by its heartbeat (the mod hides counts in a file 15s stale).
+# Turning the global "Fleet status mod" setting off removes the file (the mod
+# then draws nothing); turning it on brings it back for the running instance.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -15,7 +17,7 @@ itest_begin
 setup_test
 fleet_up alpha
 inst="${FIXTURE_REPO_NAME}/alpha"
-status_file="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/.control/claude-status.json"
+status_file="claude-status.json"  # in the instance's control dir
 
 # in_instance runs a command from an interactive bash in the instance, the way
 # a tmux session does (it sources ~/.bashrc, hence fleet.rc).
@@ -24,7 +26,8 @@ in_instance() { "${FLEET_BIN}" exec "${inst}" -- bash -ic "$1" 2>/dev/null || tr
 # wait_status <present|absent> waits for the daemon's next passes to follow.
 wait_status() {
   local deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
-  until { [ "$1" = present ] && [ -s "${status_file}" ]; } || { [ "$1" = absent ] && [ ! -e "${status_file}" ]; }; do
+  until { [ "$1" = present ] && itest_control_test "${inst}" -s "${status_file}"; } \
+    || { [ "$1" = absent ] && ! itest_control_test "${inst}" -e "${status_file}"; }; do
     [ "$(date +%s)" -lt "${deadline}" ] || fail "the status file never became $1 (${status_file})"
     sleep 0.5
   done
@@ -58,7 +61,7 @@ assert_contains "${out}" '"name": "fleet-status"' "the mod's manifest was not wr
 
 info "with no TUI the runtime is not polled: the file only names the instance"
 wait_status present
-host=$(cat "${status_file}")
+host=$(itest_control_read "${inst}" "${status_file}")
 printf 'status file: %s\n' "${host}"
 assert_contains "${host}" '"instance":"alpha"' "the not-live status file does not name the instance"
 assert_contains "${host}" '"live":false' "a status file claims live counts with nothing polling the agents"
@@ -68,16 +71,31 @@ tui_spawn
 tui_wait_for "alpha" 15
 tui_wait_for "○ idle" 60
 deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
-until grep -q '"live":true' "${status_file}" 2>/dev/null; do
-  [ "$(date +%s)" -lt "${deadline}" ] || fail "the status file never went live: $(cat "${status_file}" 2>/dev/null)"
+host=""
+until printf '%s' "${host}" | grep -q '"live":true'; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the status file never went live: ${host}"
   sleep 0.5
+  host=$(itest_control_read "${inst}" "${status_file}" 2>/dev/null || true)
 done
-host=$(cat "${status_file}")
 printf 'status file: %s\n' "${host}"
 assert_contains "${host}" "\"fleet\":\"${FIXTURE_REPO_NAME}\"" "the status file does not name the fleet"
 assert_contains "${host}" '"instance":"alpha"' "the status file does not name the instance"
 assert_contains "${host}" '"working":0' "the status file has no working count"
 assert_contains "${host}" '"idle":0' "the status file has no idle count"
+
+info "a minute on the counts still show: the heartbeat keeps the file fresh in the instance"
+sleep 60
+updated_at() { sed -n 's/.*"updated_at":\([0-9]*\).*/\1/p'; }
+first=$(itest_control_read "${inst}" "${status_file}" | updated_at)
+sleep 6
+out=$(in_instance 'echo "NOW=$(date +%s%3N)"; cat /fleet-mounts/control/claude-status.json')
+printf 'a minute on: %s\n' "${out}"
+assert_contains "${out}" '"live":true' "the status file stopped being live"
+second=$(printf '%s\n' "${out}" | updated_at)
+now=$(printf '%s\n' "${out}" | sed -n 's/^NOW=\([0-9]*\).*/\1/p')
+[ -n "${first}" ] && [ -n "${second}" ] && [ "${second}" -gt "${first}" ] \
+  || fail "the status file was not rewritten by its heartbeat (${first} then ${second})"
+[ $(( now - second )) -lt 15000 ] || fail "the status file is $(( now - second ))ms old in the instance, past the mod's 15s"
 
 out=$(in_instance 'cat /fleet-mounts/control/claude-status.json')
 assert_contains "${out}" '"instance":"alpha"' "the instance cannot read its status file: ${out}"
@@ -98,6 +116,6 @@ wait_status absent
 info "turning it back on restores it for the running instance"
 set_status_mod true
 wait_status present
-assert_contains "$(cat "${status_file}")" '"instance":"alpha"' "the restored status file does not name the instance"
+assert_contains "$(itest_control_read "${inst}" "${status_file}")" '"instance":"alpha"' "the restored status file does not name the instance"
 
 pass "fleet status mod: loaded in every instance, fed by the daemon while the setting is on"

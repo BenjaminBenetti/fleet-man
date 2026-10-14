@@ -61,60 +61,63 @@ func TestTriggerWirePlacement(t *testing.T) {
 }
 
 func TestAgentWirePlacement(t *testing.T) {
-	pinArity[fleet.Agent](t, 4)
+	pinArity[fleet.Agent](t, 5)
 
 	pa := AgentsToProto([]fleet.Agent{{
-		Name: "nm", Command: "cmd", SystemPrompt: "sp", Backend: fleet.BackendCoder,
+		Name: "nm", Command: "cmd", SystemPrompt: "sp", Backend: fleet.BackendKubernetes, KubeCluster: "kc",
 	}})[0]
 	if pa.GetName() != "nm" || pa.GetCommand() != "cmd" || pa.GetSystemPrompt() != "sp" ||
-		pa.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODER {
+		pa.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES || pa.GetKubeCluster() != "kc" {
 		t.Fatalf("agent wire placement wrong: %+v", pa)
 	}
 }
 
 func TestInstanceWirePlacement(t *testing.T) {
-	pinArity[fleet.Instance](t, 13)
+	pinArity[fleet.Instance](t, 16)
 
 	created := time.Unix(1720000000, 0).UTC()
 	pi := InstanceToProto(&fleet.Instance{
 		Name: "nm", DisplayName: "dn", ContainerID: "ci", Config: "cf",
 		WorkspaceDir: "wd", CreatedAt: created, Status: fleet.StatusRunning,
 		Error: "er", Backend: fleet.BackendCodespaces, Tag: "tg", Color: "co",
-		Branch: "br", Automated: true,
+		Branch: "br", LastBranch: "lb", Automated: true, KubeCluster: "kc", KubeKey: "kk",
 	})
 	if pi.GetName() != "nm" || pi.GetDisplayName() != "dn" || pi.GetContainerId() != "ci" ||
 		pi.GetConfig() != "cf" || pi.GetWorkspaceDir() != "wd" ||
 		pi.GetStatus() != fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING ||
 		pi.GetError() != "er" || pi.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES ||
 		pi.GetTag() != "tg" || pi.GetColor() != "co" || pi.GetBranch() != "br" ||
-		!pi.GetAutomated() || !pi.GetCreatedAt().AsTime().Equal(created) {
+		pi.GetLastBranch() != "lb" || !pi.GetAutomated() || !pi.GetCreatedAt().AsTime().Equal(created) ||
+		pi.GetKubeCluster() != "kc" || pi.GetKubeKey() != "kk" {
 		t.Fatalf("instance wire placement wrong: %+v", pi)
 	}
 }
 
 func TestFleetSettingsWirePlacement(t *testing.T) {
-	pinArity[fleet.FleetSettings](t, 18)
+	pinArity[fleet.FleetSettings](t, 19)
 	pinArity[fleet.LayoutPreset](t, 3)
 	pinArity[fleet.CoderParameter](t, 6)
 
 	prefer := true
 	ps := FleetSettingsToProto(fleet.FleetSettings{
-		CustomMounts:       []string{"/m1", "/m2"},
-		HomeDir:            "hd",
-		CoderTemplate:      "ct",
-		CoderPreset:        "cp",
-		CoderWorkspaceName: "cw",
-		PreferFleetLaunch:  &prefer,
-		LayoutPresets:      []fleet.LayoutPreset{{Name: "lp", Layout: "ly", PaneCommands: []string{"pc"}}},
-		Agents:             []fleet.Agent{{Name: "ag"}},
-		Triggers:           []fleet.Trigger{{Name: "tr"}},
+		CustomMounts:           []string{"/m1", "/m2"},
+		CustomMountHostFolders: map[string]string{"/m1": "/h1"},
+		HomeDir:                "hd",
+		CoderTemplate:          "ct",
+		CoderPreset:            "cp",
+		CoderWorkspaceName:     "cw",
+		PreferFleetLaunch:      &prefer,
+		LayoutPresets:          []fleet.LayoutPreset{{Name: "lp", Layout: "ly", PaneCommands: []string{"pc"}}},
+		Agents:                 []fleet.Agent{{Name: "ag"}},
+		Triggers:               []fleet.Trigger{{Name: "tr"}},
 		CoderParameters: []fleet.CoderParameter{{
 			Name: "pn", Value: "pv", DefaultValue: "pd", DisplayName: "pl", Description: "pe", Type: "py",
 		}},
 	})
 	if ps.GetHomeDir() != "hd" || ps.GetCoderTemplate() != "ct" || ps.GetCoderPreset() != "cp" ||
 		ps.GetCoderWorkspaceName() != "cw" || !ps.GetPreferFleetLaunch() ||
-		len(ps.GetCustomMounts()) != 2 || ps.GetCustomMounts()[0] != "/m1" {
+		len(ps.GetCustomMounts()) != 2 || ps.GetCustomMounts()[0] != "/m1" ||
+		len(ps.GetCustomMountHostFolders()) != 1 || ps.GetCustomMountHostFolders()["/m1"] != "/h1" {
 		t.Fatalf("settings scalar wire placement wrong: %+v", ps)
 	}
 	if lp := ps.GetLayoutPresets()[0]; lp.GetName() != "lp" || lp.GetLayout() != "ly" || lp.GetPaneCommands()[0] != "pc" {
@@ -156,13 +159,13 @@ func TestFleetSettingsWirePlacement(t *testing.T) {
 }
 
 func TestConfigWirePlacement(t *testing.T) {
-	pinArity[state.Config](t, 11)
+	pinArity[state.Config](t, 12)
 	pinArity[state.GeneralSettings](t, 2)
 	pinArity[state.AgentSettings](t, 1)
 	pinArity[state.DotfilesSettings](t, 3)
 	pinArity[state.CodespacesSettings](t, 3)
 	pinArity[state.BrowserSettings](t, 2)
-	pinArity[state.RemoteMcpSettings](t, 5)
+	pinArity[state.RemoteMcpSettings](t, 6)
 	pinArity[state.MicSettings](t, 3)
 	pinArity[state.OutputSettings](t, 3)
 	pinArity[state.ThemeSettings](t, 1)
@@ -179,6 +182,7 @@ func TestConfigWirePlacement(t *testing.T) {
 		BrowserSettings:    state.BrowserSettings{MultipleBrowsersPerFleet: &multi},
 		RemoteMcpSettings:  state.RemoteMcpSettings{GatewayURL: "gu", FleetMode: "fm"},
 		DefaultBackend:     string(fleet.BackendCoder),
+		DefaultKubeCluster: "dk",
 		MicSettings:        state.MicSettings{Enabled: true, Device: "md", Client: "mc"},
 		OutputSettings:     state.OutputSettings{Enabled: true, Device: "od", Client: "oc"},
 		ThemeSettings:      state.ThemeSettings{Name: "tn"},
@@ -218,8 +222,11 @@ func TestConfigWirePlacement(t *testing.T) {
 	if pc.GetDefaultBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODER {
 		t.Fatalf("default backend wire placement wrong: %v", pc.GetDefaultBackend())
 	}
+	if pc.GetDefaultKubeCluster() != "dk" {
+		t.Fatalf("default kube cluster wire placement wrong: %q", pc.GetDefaultKubeCluster())
+	}
 
-	// RemoteMcp's three bools, one per iteration (same rationale as the
+	// RemoteMcp's four bools, one per iteration (same rationale as the
 	// FleetSettings toggles).
 	rmBools := []struct {
 		name string
@@ -229,6 +236,7 @@ func TestConfigWirePlacement(t *testing.T) {
 		{"Enabled", func(r *state.RemoteMcpSettings) { r.Enabled = true }, (*fleetgrpc.RemoteMcpSettings).GetEnabled},
 		{"FleetEnabled", func(r *state.RemoteMcpSettings) { r.FleetEnabled = true }, (*fleetgrpc.RemoteMcpSettings).GetFleetEnabled},
 		{"WebhookEnabled", func(r *state.RemoteMcpSettings) { r.WebhookEnabled = true }, (*fleetgrpc.RemoteMcpSettings).GetWebhookEnabled},
+		{"ImageRegistryEnabled", func(r *state.RemoteMcpSettings) { r.ImageRegistryEnabled = true }, (*fleetgrpc.RemoteMcpSettings).GetImageRegistryEnabled},
 	}
 	for _, rb := range rmBools {
 		var c state.Config

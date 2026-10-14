@@ -1,0 +1,1269 @@
+{
+  "add-host": {
+    "changes": {
+      "/pod/spec/hostAliases/0/hostnames/0": "db",
+      "/pod/spec/hostAliases/0/hostnames/1": "cache",
+      "/pod/spec/hostAliases/0/ip": "10.0.0.5",
+      "/pod/spec/hostAliases/1/hostnames/0": "v6",
+      "/pod/spec/hostAliases/1/ip": "::1"
+    }
+  },
+  "add-host/host-gateway": {
+    "changes": {
+      "/pod/spec/hostAliases/0/hostnames/0": "host.docker.internal",
+      "/pod/spec/hostAliases/0/ip": "127.0.0.2"
+    }
+  },
+  "add-host/host-gateway-off": {
+    "changes": {
+      "/pod/spec/hostAliases/0/hostnames/0": "host.docker.internal",
+      "/pod/spec/hostAliases/0/ip": "127.0.0.2"
+    }
+  },
+  "add-host/host-gateway-other-name": {
+    "changes": {
+      "/pod/spec/hostAliases/0/hostnames/0": "gw",
+      "/pod/spec/hostAliases/0/hostnames/1": "host.docker.internal",
+      "/pod/spec/hostAliases/0/ip": "127.0.0.2"
+    }
+  },
+  "add-host/host-gateway-own-address": {
+    "changes": {
+      "/pod/spec/hostAliases/0/hostnames/0": "gw",
+      "/pod/spec/hostAliases/0/ip": "127.0.0.2",
+      "/pod/spec/hostAliases/1/hostnames/0": "host.docker.internal",
+      "/pod/spec/hostAliases/1/ip": "10.0.0.9"
+    }
+  },
+  "annotation": {},
+  "attach": {},
+  "blkio-weight": {},
+  "blkio-weight-device": {},
+  "cap-add": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/capabilities/add/13": "NET_ADMIN",
+      "/pod/spec/containers/0/securityContext/capabilities/add/14": "SYS_ADMIN"
+    }
+  },
+  "cap-add/all": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/capabilities/add/13": "ALL"
+    }
+  },
+  "cap-add/sys-ptrace": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/capabilities/add/13": "SYS_PTRACE"
+    }
+  },
+  "cap-add/sys-ptrace-dropped": {},
+  "cap-drop": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/capabilities/add/10": "SETUID",
+      "/pod/spec/containers/0/securityContext/capabilities/add/11": "SYS_CHROOT",
+      "/pod/spec/containers/0/securityContext/capabilities/add/12": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/6": "NET_BIND_SERVICE",
+      "/pod/spec/containers/0/securityContext/capabilities/add/7": "SETFCAP",
+      "/pod/spec/containers/0/securityContext/capabilities/add/8": "SETGID",
+      "/pod/spec/containers/0/securityContext/capabilities/add/9": "SETPCAP",
+      "/pod/spec/containers/0/securityContext/capabilities/drop/0": "NET_RAW",
+      "/pod/spec/containers/0/securityContext/capabilities/drop/1": "MKNOD"
+    }
+  },
+  "cap-drop/added-back": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/capabilities/add/0": "CHOWN",
+      "/pod/spec/containers/0/securityContext/capabilities/add/1": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/10": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/11": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/12": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/2": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/3": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/4": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/5": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/6": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/7": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/8": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/9": null,
+      "/pod/spec/containers/0/securityContext/capabilities/drop/0": "ALL"
+    }
+  },
+  "cgroup-parent": {},
+  "cgroupns": {},
+  "cidfile": {},
+  "cpu-count": {},
+  "cpu-percent": {},
+  "cpu-period": {},
+  "cpu-quota": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/cpu": "1500m",
+      "/seed/spec/containers/0/resources/limits/cpu": "1500m"
+    }
+  },
+  "cpu-quota/unlimited": {},
+  "cpu-quota/with-period": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/cpu": "3",
+      "/seed/spec/containers/0/resources/limits/cpu": "3"
+    }
+  },
+  "cpu-rt-period": {},
+  "cpu-rt-runtime": {},
+  "cpu-shares": {},
+  "cpus": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/cpu": "1500m",
+      "/seed/spec/containers/0/resources/limits/cpu": "1500m"
+    }
+  },
+  "cpus/below-request": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/cpu": "250m",
+      "/pod/spec/containers/0/resources/requests/cpu": "250m",
+      "/seed/spec/containers/0/resources/limits/cpu": "250m",
+      "/seed/spec/containers/0/resources/requests/cpu": "250m"
+    }
+  },
+  "cpuset-cpus": {},
+  "cpuset-mems": {},
+  "detach": {},
+  "detach-keys": {},
+  "device-cgroup-rule/privileged": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/containers/0/securityContext/capabilities/add/0": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/1": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/10": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/11": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/12": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/2": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/3": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/4": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/5": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/6": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/7": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/8": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/9": null,
+      "/pod/spec/containers/0/securityContext/privileged": true,
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "device-read-bps": {},
+  "device-read-iops": {},
+  "device-write-bps": {},
+  "device-write-iops": {},
+  "device/local": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/containers/0/securityContext/capabilities/add/0": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/1": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/10": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/11": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/12": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/2": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/3": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/4": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/5": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/6": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/7": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/8": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/9": null,
+      "/pod/spec/containers/0/securityContext/privileged": true,
+      "/pod/spec/containers/0/volumeMounts/15/mountPath": "/dev/kvm",
+      "/pod/spec/containers/0/volumeMounts/15/name": "dev-f57d2e9a",
+      "/pod/spec/containers/0/volumeMounts/15/subPath": null,
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/workspaces/app",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "ws",
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/pod/spec/volumes/4/hostPath/path": "/dev/kvm",
+      "/pod/spec/volumes/4/hostPath/type": "CharDevice",
+      "/pod/spec/volumes/4/name": "dev-f57d2e9a",
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "disable-content-trust": {},
+  "dns": {
+    "changes": {
+      "/pod/spec/dnsConfig/nameservers/0": "1.1.1.1",
+      "/pod/spec/dnsConfig/nameservers/1": "8.8.8.8",
+      "/seed/spec/dnsConfig/nameservers/0": "1.1.1.1",
+      "/seed/spec/dnsConfig/nameservers/1": "8.8.8.8"
+    }
+  },
+  "dns-option": {
+    "changes": {
+      "/pod/spec/dnsConfig/options/0/name": "ndots",
+      "/pod/spec/dnsConfig/options/0/value": "2",
+      "/pod/spec/dnsConfig/options/1/name": "edns0",
+      "/seed/spec/dnsConfig/options/0/name": "ndots",
+      "/seed/spec/dnsConfig/options/0/value": "2",
+      "/seed/spec/dnsConfig/options/1/name": "edns0"
+    }
+  },
+  "dns-search": {
+    "changes": {
+      "/pod/spec/dnsConfig/searches/0": "corp.example",
+      "/seed/spec/dnsConfig/searches/0": "corp.example"
+    }
+  },
+  "domainname": {},
+  "domainname/sys-admin": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/capabilities/add/13": "SYS_ADMIN"
+    }
+  },
+  "entrypoint": {},
+  "entrypoint/reset": {},
+  "env": {
+    "changes": {
+      "/pod/spec/containers/0/env/0/name": "API_TOKEN",
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/apiVersion": null,
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/fieldPath": null,
+      "/pod/spec/containers/0/env/0/valueFrom/secretKeyRef/key": "API_TOKEN",
+      "/pod/spec/containers/0/env/0/valueFrom/secretKeyRef/name": "fi-fleet-man-web-mrm5ihjk-env-g1",
+      "/pod/spec/containers/0/env/1/name": "PLAIN",
+      "/pod/spec/containers/0/env/1/valueFrom/secretKeyRef/key": "PLAIN",
+      "/pod/spec/containers/0/env/1/valueFrom/secretKeyRef/name": "fi-fleet-man-web-mrm5ihjk-env-g1",
+      "/pod/spec/containers/0/env/2/name": "FLEET_POD_UID",
+      "/pod/spec/containers/0/env/2/valueFrom/fieldRef/apiVersion": "v1",
+      "/pod/spec/containers/0/env/2/valueFrom/fieldRef/fieldPath": "metadata.uid"
+    }
+  },
+  "env-file": {
+    "changes": {
+      "/pod/spec/containers/0/env/0/name": "FROM_FILE",
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/apiVersion": null,
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/fieldPath": null,
+      "/pod/spec/containers/0/env/0/valueFrom/secretKeyRef/key": "FROM_FILE",
+      "/pod/spec/containers/0/env/0/valueFrom/secretKeyRef/name": "fi-fleet-man-web-mrm5ihjk-env-g1",
+      "/pod/spec/containers/0/env/1/name": "FLEET_POD_UID",
+      "/pod/spec/containers/0/env/1/valueFrom/fieldRef/apiVersion": "v1",
+      "/pod/spec/containers/0/env/1/valueFrom/fieldRef/fieldPath": "metadata.uid"
+    }
+  },
+  "env/host-value": {
+    "changes": {
+      "/pod/spec/containers/0/env/0/name": "FROM_HOST",
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/apiVersion": null,
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/fieldPath": null,
+      "/pod/spec/containers/0/env/0/valueFrom/secretKeyRef/key": "FROM_HOST",
+      "/pod/spec/containers/0/env/0/valueFrom/secretKeyRef/name": "fi-fleet-man-web-mrm5ihjk-env-g1",
+      "/pod/spec/containers/0/env/1/name": "FLEET_POD_UID",
+      "/pod/spec/containers/0/env/1/valueFrom/fieldRef/apiVersion": "v1",
+      "/pod/spec/containers/0/env/1/valueFrom/fieldRef/fieldPath": "metadata.uid"
+    }
+  },
+  "env/names": {
+    "changes": {
+      "/pod/spec/containers/0/env/0/name": "my.var-1",
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/apiVersion": null,
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/fieldPath": null,
+      "/pod/spec/containers/0/env/0/valueFrom/secretKeyRef/key": "my.var-1",
+      "/pod/spec/containers/0/env/0/valueFrom/secretKeyRef/name": "fi-fleet-man-web-mrm5ihjk-env-g1",
+      "/pod/spec/containers/0/env/1/name": "with space",
+      "/pod/spec/containers/0/env/1/valueFrom/secretKeyRef/key": "x-b8b8f25a5fc711ca",
+      "/pod/spec/containers/0/env/1/valueFrom/secretKeyRef/name": "fi-fleet-man-web-mrm5ihjk-env-g1",
+      "/pod/spec/containers/0/env/2/name": "x-key",
+      "/pod/spec/containers/0/env/2/valueFrom/secretKeyRef/key": "x-e0d7d51f1fb35b01",
+      "/pod/spec/containers/0/env/2/valueFrom/secretKeyRef/name": "fi-fleet-man-web-mrm5ihjk-env-g1",
+      "/pod/spec/containers/0/env/3/name": "FLEET_POD_UID",
+      "/pod/spec/containers/0/env/3/valueFrom/fieldRef/apiVersion": "v1",
+      "/pod/spec/containers/0/env/3/valueFrom/fieldRef/fieldPath": "metadata.uid"
+    }
+  },
+  "env/unset": {},
+  "expose": {},
+  "expose/publish-all": {},
+  "gpus/all": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/nvidia.com/gpu": "1",
+      "/seed/spec/containers/0/resources/limits/nvidia.com/gpu": "1"
+    }
+  },
+  "gpus/count": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/nvidia.com/gpu": "2",
+      "/seed/spec/containers/0/resources/limits/nvidia.com/gpu": "2"
+    }
+  },
+  "gpus/devices": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/nvidia.com/gpu": "2",
+      "/seed/spec/containers/0/resources/limits/nvidia.com/gpu": "2"
+    }
+  },
+  "group-add": {
+    "changes": {
+      "/pod/spec/securityContext/supplementalGroups/0": 999
+    }
+  },
+  "group-add/name": {
+    "changes": {
+      "/pod/spec/securityContext/supplementalGroups/0": 998
+    }
+  },
+  "health-cmd": {},
+  "health-interval": {},
+  "health-retries": {},
+  "health-start-interval": {},
+  "health-start-period": {},
+  "health-timeout": {},
+  "hostname": {
+    "changes": {
+      "/pod/spec/hostAliases/0/hostnames/0": "devbox",
+      "/pod/spec/hostAliases/0/ip": "127.0.0.1"
+    }
+  },
+  "hostname/host-network": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/containers/0/securityContext/capabilities/add/0": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/1": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/10": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/11": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/12": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/2": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/3": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/4": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/5": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/6": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/7": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/8": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/9": null,
+      "/pod/spec/containers/0/securityContext/privileged": true,
+      "/pod/spec/dnsPolicy": "ClusterFirstWithHostNet",
+      "/pod/spec/hostAliases/0/hostnames/0": "devbox",
+      "/pod/spec/hostAliases/0/ip": "127.0.0.1",
+      "/pod/spec/hostNetwork": true,
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "hostname/privileged": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/containers/0/securityContext/capabilities/add/0": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/1": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/10": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/11": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/12": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/2": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/3": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/4": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/5": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/6": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/7": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/8": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/9": null,
+      "/pod/spec/containers/0/securityContext/privileged": true,
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "init": {},
+  "interactive": {
+    "changes": {
+      "/pod/spec/containers/0/stdin": true
+    }
+  },
+  "io-maxbandwidth": {},
+  "io-maxiops": {},
+  "ipc": {},
+  "ipc/host-local": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/hostIPC": true,
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "ipc/none": {},
+  "isolation": {},
+  "kernel-memory": {},
+  "label": {},
+  "label-file": {},
+  "log-driver": {},
+  "log-opt": {},
+  "log-opt/credentials": {},
+  "memory": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/memory": "4Gi",
+      "/seed/spec/containers/0/resources/limits/memory": "4Gi"
+    }
+  },
+  "memory-reservation": {
+    "changes": {
+      "/pod/spec/containers/0/resources/requests/memory": "3Gi",
+      "/seed/spec/containers/0/resources/requests/memory": "3Gi"
+    }
+  },
+  "memory-swap": {},
+  "memory-swappiness": {},
+  "memory/autopilot": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/cpu": "500m",
+      "/pod/spec/containers/0/resources/limits/memory": "4Gi",
+      "/pod/spec/containers/0/resources/requests/memory": "4Gi",
+      "/seed/spec/containers/0/resources/limits/cpu": "500m",
+      "/seed/spec/containers/0/resources/limits/memory": "4Gi",
+      "/seed/spec/containers/0/resources/requests/memory": "4Gi"
+    }
+  },
+  "memory/autopilot-with-limit": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/cpu": "2",
+      "/pod/spec/containers/0/resources/limits/memory": "6Gi",
+      "/pod/spec/containers/0/resources/requests/cpu": "2",
+      "/pod/spec/containers/0/resources/requests/memory": "6Gi",
+      "/seed/spec/containers/0/resources/limits/cpu": "2",
+      "/seed/spec/containers/0/resources/limits/memory": "6Gi",
+      "/seed/spec/containers/0/resources/requests/cpu": "2",
+      "/seed/spec/containers/0/resources/requests/memory": "6Gi"
+    }
+  },
+  "memory/below-request": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/memory": "1Gi",
+      "/pod/spec/containers/0/resources/requests/memory": "1Gi",
+      "/seed/spec/containers/0/resources/limits/memory": "1Gi",
+      "/seed/spec/containers/0/resources/requests/memory": "1Gi"
+    }
+  },
+  "memory/limitrange": {},
+  "memory/limitrange-high": {},
+  "memory/limitrange-with-limit": {
+    "changes": {
+      "/pod/spec/containers/0/resources/limits/memory": "512Mi",
+      "/pod/spec/containers/0/resources/requests/memory": "512Mi",
+      "/seed/spec/containers/0/resources/limits/memory": "512Mi",
+      "/seed/spec/containers/0/resources/requests/memory": "512Mi"
+    }
+  },
+  "mount/bind-agent": {},
+  "mount/bind-dir-file": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/15/mountPath": "/opt/fleet/run/sync/share",
+      "/pod/spec/containers/0/volumeMounts/15/name": "share",
+      "/pod/spec/containers/0/volumeMounts/15/subPath": null,
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/workspaces/app",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "ws",
+      "/pod/spec/containers/0/volumeMounts/17/mountPath": "/home/vscode/.aws",
+      "/pod/spec/containers/0/volumeMounts/17/name": "share",
+      "/pod/spec/containers/0/volumeMounts/17/subPath": "roots/.hostbind/e59cefee",
+      "/pod/spec/containers/0/volumeMounts/18/mountPath": "/fleet-mounts/hostbind/88857567",
+      "/pod/spec/containers/0/volumeMounts/18/name": "share",
+      "/pod/spec/containers/0/volumeMounts/18/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/18/subPath": "roots/.hostbind/88857567",
+      "/pod/spec/initContainers/0/command/0": "/opt/fleet/bin/fleet",
+      "/pod/spec/initContainers/0/command/1": "pod-layout",
+      "/pod/spec/initContainers/0/command/2": "--spec",
+      "/pod/spec/initContainers/0/command/3": "/opt/fleet/spec/layout.json",
+      "/pod/spec/initContainers/0/command/4": "--tree",
+      "/pod/spec/initContainers/0/command/5": "/fleet-share",
+      "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
+      "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
+      "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
+      "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/1": "DAC_OVERRIDE",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/2": "FOWNER",
+      "/pod/spec/initContainers/0/securityContext/capabilities/drop/0": "ALL",
+      "/pod/spec/initContainers/0/securityContext/runAsGroup": 0,
+      "/pod/spec/initContainers/0/securityContext/runAsUser": 0,
+      "/pod/spec/initContainers/0/terminationMessagePolicy": "File",
+      "/pod/spec/initContainers/0/volumeMounts/0/mountPath": "/opt/fleet",
+      "/pod/spec/initContainers/0/volumeMounts/0/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/0/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/0/subPath": "fleet",
+      "/pod/spec/initContainers/0/volumeMounts/1/mountPath": "/opt/fleet/spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/name": "spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/opt/fleet/run",
+      "/pod/spec/initContainers/0/volumeMounts/2/name": "run",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/fleet-share",
+      "/pod/spec/initContainers/0/volumeMounts/3/name": "share",
+      "/pod/spec/volumes/4/name": "share",
+      "/pod/spec/volumes/4/persistentVolumeClaim/claimName": "fs-fleet-man-2f2i5p5y-share"
+    }
+  },
+  "mount/bind-empty-dir": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/15/mountPath": "/opt/fleet/run/sync/share",
+      "/pod/spec/containers/0/volumeMounts/15/name": "share",
+      "/pod/spec/containers/0/volumeMounts/15/subPath": null,
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/workspaces/app",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "ws",
+      "/pod/spec/containers/0/volumeMounts/17/mountPath": "/empty",
+      "/pod/spec/containers/0/volumeMounts/17/name": "share",
+      "/pod/spec/containers/0/volumeMounts/17/subPath": "roots/.hostbind/8bf2b1bd",
+      "/pod/spec/initContainers/0/command/0": "/opt/fleet/bin/fleet",
+      "/pod/spec/initContainers/0/command/1": "pod-layout",
+      "/pod/spec/initContainers/0/command/2": "--spec",
+      "/pod/spec/initContainers/0/command/3": "/opt/fleet/spec/layout.json",
+      "/pod/spec/initContainers/0/command/4": "--tree",
+      "/pod/spec/initContainers/0/command/5": "/fleet-share",
+      "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
+      "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
+      "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
+      "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/1": "DAC_OVERRIDE",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/2": "FOWNER",
+      "/pod/spec/initContainers/0/securityContext/capabilities/drop/0": "ALL",
+      "/pod/spec/initContainers/0/securityContext/runAsGroup": 0,
+      "/pod/spec/initContainers/0/securityContext/runAsUser": 0,
+      "/pod/spec/initContainers/0/terminationMessagePolicy": "File",
+      "/pod/spec/initContainers/0/volumeMounts/0/mountPath": "/opt/fleet",
+      "/pod/spec/initContainers/0/volumeMounts/0/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/0/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/0/subPath": "fleet",
+      "/pod/spec/initContainers/0/volumeMounts/1/mountPath": "/opt/fleet/spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/name": "spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/opt/fleet/run",
+      "/pod/spec/initContainers/0/volumeMounts/2/name": "run",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/fleet-share",
+      "/pod/spec/initContainers/0/volumeMounts/3/name": "share",
+      "/pod/spec/volumes/4/name": "share",
+      "/pod/spec/volumes/4/persistentVolumeClaim/claimName": "fs-fleet-man-2f2i5p5y-share"
+    }
+  },
+  "mount/bind-socket": {},
+  "mount/bind-socket-dir": {},
+  "mount/bind-workspace-folder": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/sub",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "ws/sub"
+    }
+  },
+  "mount/docker-socket-local": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/env/0/name": "FLEET_DOCKERD_CONFIG",
+      "/pod/spec/containers/0/env/0/value": "/opt/fleet/docker/daemon.json",
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/apiVersion": null,
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/fieldPath": null,
+      "/pod/spec/containers/0/env/1/name": "FLEET_POD_UID",
+      "/pod/spec/containers/0/env/1/valueFrom/fieldRef/apiVersion": "v1",
+      "/pod/spec/containers/0/env/1/valueFrom/fieldRef/fieldPath": "metadata.uid",
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/opt/fleet/docker",
+      "/pod/spec/containers/0/volumeMounts/16/name": "docker",
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/initContainers/0/command/0": "docker-init",
+      "/pod/spec/initContainers/0/command/1": "--",
+      "/pod/spec/initContainers/0/command/2": "/bin/sh",
+      "/pod/spec/initContainers/0/command/3": "-c",
+      "/pod/spec/initContainers/0/command/4": "set -eu\ndir=/opt/fleet/docker\nchmod 0755 \"$dir\" 2\u003e/dev/null || :\nsock=\"$dir/docker.sock\"\ncfg=\"$dir/daemon.json\"\n[ -s \"$cfg\" ] || echo '{}' \u003e \"$cfg\"\nrm -f \"$sock\"\nfind /run /var/run -iname 'docker*.pid' -delete 2\u003e/dev/null || :\nfind /run /var/run -iname 'container*.pid' -delete 2\u003e/dev/null || :\nexport container=docker\nif [ -d /sys/kernel/security ] \u0026\u0026 ! mountpoint -q /sys/kernel/security; then\n\tmount -t securityfs none /sys/kernel/security 2\u003e/dev/null || :\nfi\nmount --make-rshared / 2\u003e/dev/null || :\nparent=\ncg=`sed -n 's/^0:://p' /proc/self/cgroup`\nc=\"/sys/fs/cgroup${cg%/}\"\nif [ -n \"$cg\" ] \u0026\u0026 [ -w \"$c/cgroup.subtree_control\" ]; then\n\tmkdir -p \"$c/init\" \"$c/docker\"\n\ti=0\n\tuntil { xargs -rn1 \u003c \"$c/cgroup.procs\" \u003e \"$c/init/cgroup.procs\" || :; sed -e 's/ / +/g' -e 's/^/+/' \u003c \"$c/cgroup.controllers\" \u003e \"$c/cgroup.subtree_control\"; } 2\u003e/dev/null; do\n\t\ti=`expr \"$i\" + 1`\n\t\t[ \"$i\" -lt 100 ] || break\n\t\tsleep 0.1\n\tdone\n\tif [ \"$i\" -lt 100 ]; then\n\t\tparent=\"--cgroup-parent=${cg%/}/docker\"\n\telse\n\t\techo \"fleet-docker: the engine's containers get no cgroup controllers: processes kept arriving in $c\" \u003e\u00262\n\tfi\nfi\nif ! iptables -nL \u003e/dev/null 2\u003e\u00261 \u0026\u0026 [ -x /usr/local/sbin/.iptables-legacy/iptables ] \u0026\u0026 /usr/local/sbin/.iptables-legacy/iptables -nL \u003e/dev/null 2\u003e\u00261; then\n\tPATH=\"/usr/local/sbin/.iptables-legacy:$PATH\"\n\texport PATH\nfi\niface=`awk '$2 == \"00000000\" \u0026\u0026 $8 == \"00000000\" { print $1; exit }' /proc/net/route 2\u003e/dev/null || :`\nmtu=`cat \"/sys/class/net/${iface:-eth0}/mtu\" 2\u003e/dev/null || :`\ndockerd --host=\"unix://$sock\" --config-file=\"$cfg\" ${mtu:+\"--mtu=$mtu\"} $parent \"$@\" \u0026\npid=$!\ntrap 'kill -TERM \"$pid\" 2\u003e/dev/null || :' TERM INT\nsum=`cksum \u003c \"$cfg\" 2\u003e/dev/null || :`\nwhile kill -0 \"$pid\" 2\u003e/dev/null; do\n\tsleep 2 \u0026\n\twait \"$!\" || :\n\tnow=`cksum \u003c \"$cfg\" 2\u003e/dev/null || :`\n\tif [ \"$now\" != \"$sum\" ]; then\n\t\tsum=\"$now\"\n\t\techo \"fleet-docker: $cfg changed; reloading the engine\" \u003e\u00262\n\t\tkill -HUP \"$pid\" 2\u003e/dev/null || :\n\tfi\ndone\nwait \"$pid\"\n",
+      "/pod/spec/initContainers/0/command/5": "fleet-docker",
+      "/pod/spec/initContainers/0/image": "docker:29.9.0-dind@sha256:0b6d18a4a222e71c88be6034926b4f6cde2fc33c2218643d03ccfddc65995470",
+      "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
+      "/pod/spec/initContainers/0/name": "fleet-docker",
+      "/pod/spec/initContainers/0/resources/limits/memory": "8Gi",
+      "/pod/spec/initContainers/0/resources/requests/cpu": "50m",
+      "/pod/spec/initContainers/0/resources/requests/memory": "128Mi",
+      "/pod/spec/initContainers/0/restartPolicy": "Always",
+      "/pod/spec/initContainers/0/securityContext/privileged": true,
+      "/pod/spec/initContainers/0/securityContext/runAsGroup": 0,
+      "/pod/spec/initContainers/0/securityContext/runAsUser": 0,
+      "/pod/spec/initContainers/0/startupProbe/exec/command/0": "docker",
+      "/pod/spec/initContainers/0/startupProbe/exec/command/1": "--host",
+      "/pod/spec/initContainers/0/startupProbe/exec/command/2": "unix:///opt/fleet/docker/docker.sock",
+      "/pod/spec/initContainers/0/startupProbe/exec/command/3": "version",
+      "/pod/spec/initContainers/0/startupProbe/exec/command/4": "--format",
+      "/pod/spec/initContainers/0/startupProbe/exec/command/5": "{{.Server.Version}}",
+      "/pod/spec/initContainers/0/startupProbe/failureThreshold": 180,
+      "/pod/spec/initContainers/0/startupProbe/periodSeconds": 1,
+      "/pod/spec/initContainers/0/startupProbe/timeoutSeconds": 5,
+      "/pod/spec/initContainers/0/terminationMessagePolicy": "File",
+      "/pod/spec/initContainers/0/volumeMounts/0/mountPath": "/opt/fleet/docker",
+      "/pod/spec/initContainers/0/volumeMounts/0/name": "docker",
+      "/pod/spec/initContainers/0/volumeMounts/1/mountPath": "/var/lib/docker",
+      "/pod/spec/initContainers/0/volumeMounts/1/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/1/subPath": "vol/fleet-docker",
+      "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/workspaces/app",
+      "/pod/spec/initContainers/0/volumeMounts/2/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/2/subPath": "ws",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/home/dev/src/app",
+      "/pod/spec/initContainers/0/volumeMounts/3/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/3/subPath": "ws",
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/pod/spec/volumes/4/emptyDir": {},
+      "/pod/spec/volumes/4/name": "docker",
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "mount/fleet-wins": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/15/mountPath": "/opt/fleet/run/sync/share",
+      "/pod/spec/containers/0/volumeMounts/15/name": "share",
+      "/pod/spec/containers/0/volumeMounts/15/subPath": null,
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/workspaces/app",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "ws",
+      "/pod/spec/containers/0/volumeMounts/17/mountPath": "/home/vscode/.claude",
+      "/pod/spec/containers/0/volumeMounts/17/name": "share",
+      "/pod/spec/containers/0/volumeMounts/17/subPath": "roots/.claude",
+      "/pod/spec/containers/0/volumeMounts/18/mountPath": "/fleet-mounts/files",
+      "/pod/spec/containers/0/volumeMounts/18/name": "share",
+      "/pod/spec/containers/0/volumeMounts/18/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/18/subPath": "roots/files",
+      "/pod/spec/initContainers/0/command/0": "/opt/fleet/bin/fleet",
+      "/pod/spec/initContainers/0/command/1": "pod-layout",
+      "/pod/spec/initContainers/0/command/2": "--spec",
+      "/pod/spec/initContainers/0/command/3": "/opt/fleet/spec/layout.json",
+      "/pod/spec/initContainers/0/command/4": "--tree",
+      "/pod/spec/initContainers/0/command/5": "/fleet-share",
+      "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
+      "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
+      "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
+      "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/1": "DAC_OVERRIDE",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/2": "FOWNER",
+      "/pod/spec/initContainers/0/securityContext/capabilities/drop/0": "ALL",
+      "/pod/spec/initContainers/0/securityContext/runAsGroup": 0,
+      "/pod/spec/initContainers/0/securityContext/runAsUser": 0,
+      "/pod/spec/initContainers/0/terminationMessagePolicy": "File",
+      "/pod/spec/initContainers/0/volumeMounts/0/mountPath": "/opt/fleet",
+      "/pod/spec/initContainers/0/volumeMounts/0/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/0/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/0/subPath": "fleet",
+      "/pod/spec/initContainers/0/volumeMounts/1/mountPath": "/opt/fleet/spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/name": "spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/opt/fleet/run",
+      "/pod/spec/initContainers/0/volumeMounts/2/name": "run",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/fleet-share",
+      "/pod/spec/initContainers/0/volumeMounts/3/name": "share",
+      "/pod/spec/volumes/4/name": "share",
+      "/pod/spec/volumes/4/persistentVolumeClaim/claimName": "fs-fleet-man-2f2i5p5y-share"
+    }
+  },
+  "mount/tmpfs": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/scratch",
+      "/pod/spec/containers/0/volumeMounts/16/name": "tmpfs-ad861404",
+      "/pod/spec/volumes/4/emptyDir/medium": "Memory",
+      "/pod/spec/volumes/4/emptyDir/sizeLimit": "64Mi",
+      "/pod/spec/volumes/4/name": "tmpfs-ad861404"
+    }
+  },
+  "mount/volume-anonymous": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/data",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "vol/anon-bd47413b"
+    }
+  },
+  "mount/volume-devcontainer-id": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/var/lib/docker",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "vol/dind-var-lib-docker-076rltrd10mnag1bqig24m9paodjikn6giv2ebuj1716scroc8lr"
+    }
+  },
+  "mount/volume-named": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/15/mountPath": "/opt/fleet/run/sync/share",
+      "/pod/spec/containers/0/volumeMounts/15/name": "share",
+      "/pod/spec/containers/0/volumeMounts/15/subPath": null,
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/workspaces/app",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "ws",
+      "/pod/spec/containers/0/volumeMounts/17/mountPath": "/cache",
+      "/pod/spec/containers/0/volumeMounts/17/name": "share",
+      "/pod/spec/containers/0/volumeMounts/17/subPath": ".vol/5e1ecee0",
+      "/pod/spec/initContainers/0/command/0": "/opt/fleet/bin/fleet",
+      "/pod/spec/initContainers/0/command/1": "pod-layout",
+      "/pod/spec/initContainers/0/command/2": "--spec",
+      "/pod/spec/initContainers/0/command/3": "/opt/fleet/spec/layout.json",
+      "/pod/spec/initContainers/0/command/4": "--tree",
+      "/pod/spec/initContainers/0/command/5": "/fleet-share",
+      "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
+      "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
+      "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
+      "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/1": "DAC_OVERRIDE",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/2": "FOWNER",
+      "/pod/spec/initContainers/0/securityContext/capabilities/drop/0": "ALL",
+      "/pod/spec/initContainers/0/securityContext/runAsGroup": 0,
+      "/pod/spec/initContainers/0/securityContext/runAsUser": 0,
+      "/pod/spec/initContainers/0/terminationMessagePolicy": "File",
+      "/pod/spec/initContainers/0/volumeMounts/0/mountPath": "/opt/fleet",
+      "/pod/spec/initContainers/0/volumeMounts/0/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/0/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/0/subPath": "fleet",
+      "/pod/spec/initContainers/0/volumeMounts/1/mountPath": "/opt/fleet/spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/name": "spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/opt/fleet/run",
+      "/pod/spec/initContainers/0/volumeMounts/2/name": "run",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/fleet-share",
+      "/pod/spec/initContainers/0/volumeMounts/3/name": "share",
+      "/pod/spec/volumes/4/name": "share",
+      "/pod/spec/volumes/4/persistentVolumeClaim/claimName": "fs-fleet-man-2f2i5p5y-share"
+    }
+  },
+  "mount/volume-nocopy-subpath": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/15/mountPath": "/opt/fleet/run/sync/share",
+      "/pod/spec/containers/0/volumeMounts/15/name": "share",
+      "/pod/spec/containers/0/volumeMounts/15/subPath": null,
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/workspaces/app",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "ws",
+      "/pod/spec/containers/0/volumeMounts/17/mountPath": "/shared",
+      "/pod/spec/containers/0/volumeMounts/17/name": "share",
+      "/pod/spec/containers/0/volumeMounts/17/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/17/subPath": ".vol/a4d26868",
+      "/pod/spec/containers/0/volumeMounts/18/mountPath": "/part",
+      "/pod/spec/containers/0/volumeMounts/18/name": "share",
+      "/pod/spec/containers/0/volumeMounts/18/subPath": ".vol/a4d26868/a/b",
+      "/pod/spec/initContainers/0/command/0": "/opt/fleet/bin/fleet",
+      "/pod/spec/initContainers/0/command/1": "pod-layout",
+      "/pod/spec/initContainers/0/command/2": "--spec",
+      "/pod/spec/initContainers/0/command/3": "/opt/fleet/spec/layout.json",
+      "/pod/spec/initContainers/0/command/4": "--tree",
+      "/pod/spec/initContainers/0/command/5": "/fleet-share",
+      "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
+      "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
+      "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
+      "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/1": "DAC_OVERRIDE",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/2": "FOWNER",
+      "/pod/spec/initContainers/0/securityContext/capabilities/drop/0": "ALL",
+      "/pod/spec/initContainers/0/securityContext/runAsGroup": 0,
+      "/pod/spec/initContainers/0/securityContext/runAsUser": 0,
+      "/pod/spec/initContainers/0/terminationMessagePolicy": "File",
+      "/pod/spec/initContainers/0/volumeMounts/0/mountPath": "/opt/fleet",
+      "/pod/spec/initContainers/0/volumeMounts/0/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/0/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/0/subPath": "fleet",
+      "/pod/spec/initContainers/0/volumeMounts/1/mountPath": "/opt/fleet/spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/name": "spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/opt/fleet/run",
+      "/pod/spec/initContainers/0/volumeMounts/2/name": "run",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/fleet-share",
+      "/pod/spec/initContainers/0/volumeMounts/3/name": "share",
+      "/pod/spec/volumes/4/name": "share",
+      "/pod/spec/volumes/4/persistentVolumeClaim/claimName": "fs-fleet-man-2f2i5p5y-share"
+    }
+  },
+  "name": {},
+  "network": {},
+  "network/host-local": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/dnsPolicy": "ClusterFirstWithHostNet",
+      "/pod/spec/hostNetwork": true,
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "no-healthcheck": {},
+  "oom-kill-disable": {},
+  "oom-kill-disable/false": {},
+  "oom-score-adj": {},
+  "oom-score-adj/negative": {},
+  "pid/host-local": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/hostPID": true,
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "pids-limit": {},
+  "platform": {},
+  "privileged/allowed": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/capabilities/add/0": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/1": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/10": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/11": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/12": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/2": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/3": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/4": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/5": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/6": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/7": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/8": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/9": null,
+      "/pod/spec/containers/0/securityContext/privileged": true
+    }
+  },
+  "privileged/false": {},
+  "privileged/local": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/containers/0/securityContext/capabilities/add/0": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/1": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/10": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/11": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/12": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/2": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/3": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/4": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/5": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/6": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/7": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/8": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/9": null,
+      "/pod/spec/containers/0/securityContext/privileged": true,
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "privileged/sysbox": {
+    "changes": {
+      "/pod/metadata/annotations/io.kubernetes.cri-o.userns-mode": "auto:size=65536",
+      "/pod/spec/runtimeClassName": "sysbox-runc",
+      "/seed/metadata/annotations/io.kubernetes.cri-o.userns-mode": "auto:size=65536",
+      "/seed/spec/runtimeClassName": "sysbox-runc"
+    }
+  },
+  "privileged/sysbox-runtime-class": {
+    "changes": {
+      "/pod/metadata/annotations/io.kubernetes.cri-o.userns-mode": "auto:size=65536",
+      "/pod/spec/runtimeClassName": "sysbox-runc",
+      "/seed/metadata/annotations/io.kubernetes.cri-o.userns-mode": "auto:size=65536",
+      "/seed/spec/runtimeClassName": "sysbox-runc"
+    }
+  },
+  "publish": {},
+  "publish-all": {},
+  "publish/address": {},
+  "publish/ephemeral-range": {},
+  "publish/udp": {},
+  "pull": {},
+  "quiet": {},
+  "read-only": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/readOnlyRootFilesystem": true,
+      "/pod/spec/containers/0/volumeMounts/0/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/1/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/2/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/3/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/4/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/5/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/6/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/7/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/8/readOnly": true
+    }
+  },
+  "restart": {},
+  "restart/no": {},
+  "rm": {},
+  "runtime": {
+    "changes": {
+      "/pod/spec/runtimeClassName": "gvisor",
+      "/seed/spec/runtimeClassName": "gvisor"
+    }
+  },
+  "runtime/cluster-class": {
+    "changes": {
+      "/pod/spec/runtimeClassName": "kata",
+      "/seed/spec/runtimeClassName": "kata"
+    }
+  },
+  "runtime/runc": {},
+  "runtime/unknown-classes": {
+    "changes": {
+      "/pod/spec/runtimeClassName": "kata",
+      "/seed/spec/runtimeClassName": "kata"
+    }
+  },
+  "security-opt": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/allowPrivilegeEscalation": false,
+      "/pod/spec/containers/0/securityContext/appArmorProfile/localhostProfile": "my-profile",
+      "/pod/spec/containers/0/securityContext/appArmorProfile/type": "Localhost",
+      "/pod/spec/containers/0/securityContext/seLinuxOptions/level": "s0:c131,c817",
+      "/pod/spec/containers/0/securityContext/seLinuxOptions/type": "container_t",
+      "/pod/spec/containers/0/securityContext/seLinuxOptions/user": "system_u"
+    }
+  },
+  "security-opt/debug-grants": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/appArmorProfile/type": "Unconfined",
+      "/pod/spec/containers/0/securityContext/seccompProfile/type": "Unconfined"
+    }
+  },
+  "security-opt/debug-grants-dropped": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/capabilities/add/13": "NET_ADMIN"
+    }
+  },
+  "security-opt/defaults": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/appArmorProfile/type": "RuntimeDefault"
+    }
+  },
+  "security-opt/label-disable": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/seLinuxOptions/level": "s0:c131,c817",
+      "/pod/spec/containers/0/securityContext/seLinuxOptions/type": "spc_t"
+    }
+  },
+  "security-opt/label-level": {},
+  "security-opt/systempaths-privileged": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/containers/0/securityContext/capabilities/add/0": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/1": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/10": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/11": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/12": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/2": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/3": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/4": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/5": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/6": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/7": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/8": null,
+      "/pod/spec/containers/0/securityContext/capabilities/add/9": null,
+      "/pod/spec/containers/0/securityContext/privileged": true,
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "shm-size": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/dev/shm",
+      "/pod/spec/containers/0/volumeMounts/16/name": "tmpfs-0850a74c",
+      "/pod/spec/volumes/4/emptyDir/medium": "Memory",
+      "/pod/spec/volumes/4/emptyDir/sizeLimit": "1Gi",
+      "/pod/spec/volumes/4/name": "tmpfs-0850a74c"
+    }
+  },
+  "sig-proxy": {},
+  "stop-signal": {},
+  "stop-signal/image": {},
+  "stop-signal/number": {},
+  "stop-signal/realtime": {},
+  "stop-timeout": {
+    "changes": {
+      "/pod/spec/terminationGracePeriodSeconds": 30
+    }
+  },
+  "stop-timeout/unlimited": {},
+  "storage-opt": {},
+  "sysctl": {
+    "changes": {
+      "/pod/spec/securityContext/sysctls/0/name": "net.ipv4.ip_unprivileged_port_start",
+      "/pod/spec/securityContext/sysctls/0/value": "80",
+      "/pod/spec/securityContext/sysctls/1/name": "net.ipv4.ping_group_range",
+      "/pod/spec/securityContext/sysctls/1/value": "0 2147483647"
+    }
+  },
+  "tmpfs": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/run",
+      "/pod/spec/containers/0/volumeMounts/16/name": "tmpfs-b3d46fe8",
+      "/pod/spec/containers/0/volumeMounts/17/mountPath": "/cache",
+      "/pod/spec/containers/0/volumeMounts/17/name": "tmpfs-4f7cfe6f",
+      "/pod/spec/volumes/4/emptyDir/medium": "Memory",
+      "/pod/spec/volumes/4/emptyDir/sizeLimit": "64Mi",
+      "/pod/spec/volumes/4/name": "tmpfs-b3d46fe8",
+      "/pod/spec/volumes/5/emptyDir/medium": "Memory",
+      "/pod/spec/volumes/5/name": "tmpfs-4f7cfe6f"
+    }
+  },
+  "tty": {
+    "changes": {
+      "/pod/spec/containers/0/tty": true
+    }
+  },
+  "ulimit": {},
+  "ulimit/sys-resource": {
+    "changes": {
+      "/pod/spec/containers/0/securityContext/capabilities/add/13": "SYS_RESOURCE"
+    }
+  },
+  "umask": {},
+  "use-api-socket/local": {
+    "changes": {
+      "/disk/storageClassName": null,
+      "/pod/spec/containers/0/env/0/name": "FLEET_DOCKERD_CONFIG",
+      "/pod/spec/containers/0/env/0/value": "/opt/fleet/docker/daemon.json",
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/apiVersion": null,
+      "/pod/spec/containers/0/env/0/valueFrom/fieldRef/fieldPath": null,
+      "/pod/spec/containers/0/env/1/name": "FLEET_POD_UID",
+      "/pod/spec/containers/0/env/1/valueFrom/fieldRef/apiVersion": "v1",
+      "/pod/spec/containers/0/env/1/valueFrom/fieldRef/fieldPath": "metadata.uid",
+      "/pod/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/pod/spec/containers/0/imagePullPolicy": "Never",
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/opt/fleet/docker",
+      "/pod/spec/containers/0/volumeMounts/16/name": "docker",
+      "/pod/spec/imagePullSecrets/0/name": null,
+      "/pod/spec/initContainers/0/command/0": "docker-init",
+      "/pod/spec/initContainers/0/command/1": "--",
+      "/pod/spec/initContainers/0/command/2": "/bin/sh",
+      "/pod/spec/initContainers/0/command/3": "-c",
+      "/pod/spec/initContainers/0/command/4": "set -eu\ndir=/opt/fleet/docker\nchmod 0755 \"$dir\" 2\u003e/dev/null || :\nsock=\"$dir/docker.sock\"\ncfg=\"$dir/daemon.json\"\n[ -s \"$cfg\" ] || echo '{}' \u003e \"$cfg\"\nrm -f \"$sock\"\nfind /run /var/run -iname 'docker*.pid' -delete 2\u003e/dev/null || :\nfind /run /var/run -iname 'container*.pid' -delete 2\u003e/dev/null || :\nexport container=docker\nif [ -d /sys/kernel/security ] \u0026\u0026 ! mountpoint -q /sys/kernel/security; then\n\tmount -t securityfs none /sys/kernel/security 2\u003e/dev/null || :\nfi\nmount --make-rshared / 2\u003e/dev/null || :\nparent=\ncg=`sed -n 's/^0:://p' /proc/self/cgroup`\nc=\"/sys/fs/cgroup${cg%/}\"\nif [ -n \"$cg\" ] \u0026\u0026 [ -w \"$c/cgroup.subtree_control\" ]; then\n\tmkdir -p \"$c/init\" \"$c/docker\"\n\ti=0\n\tuntil { xargs -rn1 \u003c \"$c/cgroup.procs\" \u003e \"$c/init/cgroup.procs\" || :; sed -e 's/ / +/g' -e 's/^/+/' \u003c \"$c/cgroup.controllers\" \u003e \"$c/cgroup.subtree_control\"; } 2\u003e/dev/null; do\n\t\ti=`expr \"$i\" + 1`\n\t\t[ \"$i\" -lt 100 ] || break\n\t\tsleep 0.1\n\tdone\n\tif [ \"$i\" -lt 100 ]; then\n\t\tparent=\"--cgroup-parent=${cg%/}/docker\"\n\telse\n\t\techo \"fleet-docker: the engine's containers get no cgroup controllers: processes kept arriving in $c\" \u003e\u00262\n\tfi\nfi\nif ! iptables -nL \u003e/dev/null 2\u003e\u00261 \u0026\u0026 [ -x /usr/local/sbin/.iptables-legacy/iptables ] \u0026\u0026 /usr/local/sbin/.iptables-legacy/iptables -nL \u003e/dev/null 2\u003e\u00261; then\n\tPATH=\"/usr/local/sbin/.iptables-legacy:$PATH\"\n\texport PATH\nfi\niface=`awk '$2 == \"00000000\" \u0026\u0026 $8 == \"00000000\" { print $1; exit }' /proc/net/route 2\u003e/dev/null || :`\nmtu=`cat \"/sys/class/net/${iface:-eth0}/mtu\" 2\u003e/dev/null || :`\ndockerd --host=\"unix://$sock\" --config-file=\"$cfg\" ${mtu:+\"--mtu=$mtu\"} $parent \"$@\" \u0026\npid=$!\ntrap 'kill -TERM \"$pid\" 2\u003e/dev/null || :' TERM INT\nsum=`cksum \u003c \"$cfg\" 2\u003e/dev/null || :`\nwhile kill -0 \"$pid\" 2\u003e/dev/null; do\n\tsleep 2 \u0026\n\twait \"$!\" || :\n\tnow=`cksum \u003c \"$cfg\" 2\u003e/dev/null || :`\n\tif [ \"$now\" != \"$sum\" ]; then\n\t\tsum=\"$now\"\n\t\techo \"fleet-docker: $cfg changed; reloading the engine\" \u003e\u00262\n\t\tkill -HUP \"$pid\" 2\u003e/dev/null || :\n\tfi\ndone\nwait \"$pid\"\n",
+      "/pod/spec/initContainers/0/command/5": "fleet-docker",
+      "/pod/spec/initContainers/0/image": "docker:29.9.0-dind@sha256:0b6d18a4a222e71c88be6034926b4f6cde2fc33c2218643d03ccfddc65995470",
+      "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
+      "/pod/spec/initContainers/0/name": "fleet-docker",
+      "/pod/spec/initContainers/0/resources/limits/memory": "8Gi",
+      "/pod/spec/initContainers/0/resources/requests/cpu": "50m",
+      "/pod/spec/initContainers/0/resources/requests/memory": "128Mi",
+      "/pod/spec/initContainers/0/restartPolicy": "Always",
+      "/pod/spec/initContainers/0/securityContext/privileged": true,
+      "/pod/spec/initContainers/0/securityContext/runAsGroup": 0,
+      "/pod/spec/initContainers/0/securityContext/runAsUser": 0,
+      "/pod/spec/initContainers/0/startupProbe/exec/command/0": "docker",
+      "/pod/spec/initContainers/0/startupProbe/exec/command/1": "--host",
+      "/pod/spec/initContainers/0/startupProbe/exec/command/2": "unix:///opt/fleet/docker/docker.sock",
+      "/pod/spec/initContainers/0/startupProbe/exec/command/3": "version",
+      "/pod/spec/initContainers/0/startupProbe/exec/command/4": "--format",
+      "/pod/spec/initContainers/0/startupProbe/exec/command/5": "{{.Server.Version}}",
+      "/pod/spec/initContainers/0/startupProbe/failureThreshold": 180,
+      "/pod/spec/initContainers/0/startupProbe/periodSeconds": 1,
+      "/pod/spec/initContainers/0/startupProbe/timeoutSeconds": 5,
+      "/pod/spec/initContainers/0/terminationMessagePolicy": "File",
+      "/pod/spec/initContainers/0/volumeMounts/0/mountPath": "/opt/fleet/docker",
+      "/pod/spec/initContainers/0/volumeMounts/0/name": "docker",
+      "/pod/spec/initContainers/0/volumeMounts/1/mountPath": "/var/lib/docker",
+      "/pod/spec/initContainers/0/volumeMounts/1/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/1/subPath": "vol/fleet-docker",
+      "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/workspaces/app",
+      "/pod/spec/initContainers/0/volumeMounts/2/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/2/subPath": "ws",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/home/dev/src/app",
+      "/pod/spec/initContainers/0/volumeMounts/3/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/3/subPath": "ws",
+      "/pod/spec/securityContext/seLinuxChangePolicy": null,
+      "/pod/spec/volumes/4/emptyDir": {},
+      "/pod/spec/volumes/4/name": "docker",
+      "/seed/spec/containers/0/image": "fleet.local/0123456789ab/devcontainer:111111111111",
+      "/seed/spec/containers/0/imagePullPolicy": "Never",
+      "/seed/spec/imagePullSecrets/0/name": null,
+      "/seed/spec/securityContext/seLinuxChangePolicy": null
+    }
+  },
+  "user": {},
+  "userns": {},
+  "volume": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/15/mountPath": "/opt/fleet/run/sync/share",
+      "/pod/spec/containers/0/volumeMounts/15/name": "share",
+      "/pod/spec/containers/0/volumeMounts/15/subPath": null,
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/workspaces/app",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "ws",
+      "/pod/spec/containers/0/volumeMounts/17/mountPath": "/home/vscode/.aws",
+      "/pod/spec/containers/0/volumeMounts/17/name": "share",
+      "/pod/spec/containers/0/volumeMounts/17/readOnly": true,
+      "/pod/spec/containers/0/volumeMounts/17/subPath": "roots/.hostbind/e59cefee",
+      "/pod/spec/initContainers/0/command/0": "/opt/fleet/bin/fleet",
+      "/pod/spec/initContainers/0/command/1": "pod-layout",
+      "/pod/spec/initContainers/0/command/2": "--spec",
+      "/pod/spec/initContainers/0/command/3": "/opt/fleet/spec/layout.json",
+      "/pod/spec/initContainers/0/command/4": "--tree",
+      "/pod/spec/initContainers/0/command/5": "/fleet-share",
+      "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
+      "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
+      "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
+      "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/1": "DAC_OVERRIDE",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/2": "FOWNER",
+      "/pod/spec/initContainers/0/securityContext/capabilities/drop/0": "ALL",
+      "/pod/spec/initContainers/0/securityContext/runAsGroup": 0,
+      "/pod/spec/initContainers/0/securityContext/runAsUser": 0,
+      "/pod/spec/initContainers/0/terminationMessagePolicy": "File",
+      "/pod/spec/initContainers/0/volumeMounts/0/mountPath": "/opt/fleet",
+      "/pod/spec/initContainers/0/volumeMounts/0/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/0/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/0/subPath": "fleet",
+      "/pod/spec/initContainers/0/volumeMounts/1/mountPath": "/opt/fleet/spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/name": "spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/opt/fleet/run",
+      "/pod/spec/initContainers/0/volumeMounts/2/name": "run",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/fleet-share",
+      "/pod/spec/initContainers/0/volumeMounts/3/name": "share",
+      "/pod/spec/volumes/4/name": "share",
+      "/pod/spec/volumes/4/persistentVolumeClaim/claimName": "fs-fleet-man-2f2i5p5y-share"
+    }
+  },
+  "volume-driver": {},
+  "volume/anonymous": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/data",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "vol/anon-bd47413b"
+    }
+  },
+  "volume/missing-source": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/15/mountPath": "/opt/fleet/run/sync/share",
+      "/pod/spec/containers/0/volumeMounts/15/name": "share",
+      "/pod/spec/containers/0/volumeMounts/15/subPath": null,
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/workspaces/app",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "ws",
+      "/pod/spec/containers/0/volumeMounts/17/mountPath": "/new",
+      "/pod/spec/containers/0/volumeMounts/17/name": "share",
+      "/pod/spec/containers/0/volumeMounts/17/subPath": "roots/.hostbind/0d72ff2f",
+      "/pod/spec/initContainers/0/command/0": "/opt/fleet/bin/fleet",
+      "/pod/spec/initContainers/0/command/1": "pod-layout",
+      "/pod/spec/initContainers/0/command/2": "--spec",
+      "/pod/spec/initContainers/0/command/3": "/opt/fleet/spec/layout.json",
+      "/pod/spec/initContainers/0/command/4": "--tree",
+      "/pod/spec/initContainers/0/command/5": "/fleet-share",
+      "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
+      "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
+      "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
+      "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/1": "DAC_OVERRIDE",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/2": "FOWNER",
+      "/pod/spec/initContainers/0/securityContext/capabilities/drop/0": "ALL",
+      "/pod/spec/initContainers/0/securityContext/runAsGroup": 0,
+      "/pod/spec/initContainers/0/securityContext/runAsUser": 0,
+      "/pod/spec/initContainers/0/terminationMessagePolicy": "File",
+      "/pod/spec/initContainers/0/volumeMounts/0/mountPath": "/opt/fleet",
+      "/pod/spec/initContainers/0/volumeMounts/0/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/0/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/0/subPath": "fleet",
+      "/pod/spec/initContainers/0/volumeMounts/1/mountPath": "/opt/fleet/spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/name": "spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/opt/fleet/run",
+      "/pod/spec/initContainers/0/volumeMounts/2/name": "run",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/fleet-share",
+      "/pod/spec/initContainers/0/volumeMounts/3/name": "share",
+      "/pod/spec/volumes/4/name": "share",
+      "/pod/spec/volumes/4/persistentVolumeClaim/claimName": "fs-fleet-man-2f2i5p5y-share"
+    }
+  },
+  "volume/named": {
+    "changes": {
+      "/pod/spec/containers/0/volumeMounts/15/mountPath": "/opt/fleet/run/sync/share",
+      "/pod/spec/containers/0/volumeMounts/15/name": "share",
+      "/pod/spec/containers/0/volumeMounts/15/subPath": null,
+      "/pod/spec/containers/0/volumeMounts/16/mountPath": "/workspaces/app",
+      "/pod/spec/containers/0/volumeMounts/16/name": "disk",
+      "/pod/spec/containers/0/volumeMounts/16/subPath": "ws",
+      "/pod/spec/containers/0/volumeMounts/17/mountPath": "/cache",
+      "/pod/spec/containers/0/volumeMounts/17/name": "share",
+      "/pod/spec/containers/0/volumeMounts/17/subPath": ".vol/5e1ecee0",
+      "/pod/spec/initContainers/0/command/0": "/opt/fleet/bin/fleet",
+      "/pod/spec/initContainers/0/command/1": "pod-layout",
+      "/pod/spec/initContainers/0/command/2": "--spec",
+      "/pod/spec/initContainers/0/command/3": "/opt/fleet/spec/layout.json",
+      "/pod/spec/initContainers/0/command/4": "--tree",
+      "/pod/spec/initContainers/0/command/5": "/fleet-share",
+      "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
+      "/pod/spec/initContainers/0/name": "fleet-share",
+      "/pod/spec/initContainers/0/resources/limits/memory": "128Mi",
+      "/pod/spec/initContainers/0/resources/requests/cpu": "10m",
+      "/pod/spec/initContainers/0/resources/requests/memory": "32Mi",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/0": "CHOWN",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/1": "DAC_OVERRIDE",
+      "/pod/spec/initContainers/0/securityContext/capabilities/add/2": "FOWNER",
+      "/pod/spec/initContainers/0/securityContext/capabilities/drop/0": "ALL",
+      "/pod/spec/initContainers/0/securityContext/runAsGroup": 0,
+      "/pod/spec/initContainers/0/securityContext/runAsUser": 0,
+      "/pod/spec/initContainers/0/terminationMessagePolicy": "File",
+      "/pod/spec/initContainers/0/volumeMounts/0/mountPath": "/opt/fleet",
+      "/pod/spec/initContainers/0/volumeMounts/0/name": "disk",
+      "/pod/spec/initContainers/0/volumeMounts/0/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/0/subPath": "fleet",
+      "/pod/spec/initContainers/0/volumeMounts/1/mountPath": "/opt/fleet/spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/name": "spec",
+      "/pod/spec/initContainers/0/volumeMounts/1/readOnly": true,
+      "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/opt/fleet/run",
+      "/pod/spec/initContainers/0/volumeMounts/2/name": "run",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/fleet-share",
+      "/pod/spec/initContainers/0/volumeMounts/3/name": "share",
+      "/pod/spec/volumes/4/name": "share",
+      "/pod/spec/volumes/4/persistentVolumeClaim/claimName": "fs-fleet-man-2f2i5p5y-share"
+    }
+  },
+  "workdir": {}
+}

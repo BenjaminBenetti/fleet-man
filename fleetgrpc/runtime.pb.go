@@ -147,8 +147,8 @@ func (AgentTool) EnumDescriptor() ([]byte, []int) {
 	return file_runtime_proto_rawDescGZIP(), []int{1}
 }
 
-// AgentActivity mirrors internal/agentdetect.State — the three-state activity
-// indicator (the throbber) for a detected agent.
+// AgentActivity mirrors internal/agentdetect.State — the activity indicator
+// (the throbber) for a detected agent.
 type AgentActivity int32
 
 const (
@@ -156,6 +156,11 @@ const (
 	AgentActivity_AGENT_ACTIVITY_NOT_RUNNING AgentActivity = 1 // no agent process detected
 	AgentActivity_AGENT_ACTIVITY_WORKING     AgentActivity = 2 // actively producing output
 	AgentActivity_AGENT_ACTIVITY_WAITING     AgentActivity = 3 // alive but idle / awaiting input
+	// UNKNOWN: the instance's captures have failed several times in a row
+	// (about 15s; the instance or its cluster is unreachable), so neither the
+	// agent's state nor the instance's stats are known. Drawn grey and still;
+	// the next good capture reports the state afresh.
+	AgentActivity_AGENT_ACTIVITY_UNKNOWN AgentActivity = 4
 )
 
 // Enum value maps for AgentActivity.
@@ -165,12 +170,14 @@ var (
 		1: "AGENT_ACTIVITY_NOT_RUNNING",
 		2: "AGENT_ACTIVITY_WORKING",
 		3: "AGENT_ACTIVITY_WAITING",
+		4: "AGENT_ACTIVITY_UNKNOWN",
 	}
 	AgentActivity_value = map[string]int32{
 		"AGENT_ACTIVITY_UNSPECIFIED": 0,
 		"AGENT_ACTIVITY_NOT_RUNNING": 1,
 		"AGENT_ACTIVITY_WORKING":     2,
 		"AGENT_ACTIVITY_WAITING":     3,
+		"AGENT_ACTIVITY_UNKNOWN":     4,
 	}
 )
 
@@ -709,17 +716,27 @@ type InstanceRuntime struct {
 	Sessions []*TmuxSession `protobuf:"bytes,7,rep,name=sessions,proto3" json:"sessions,omitempty"`
 	// Active port-forwards (the ⇄ labels).
 	ForwardedPorts []*ForwardedPort `protobuf:"bytes,8,rep,name=forwarded_ports,json=forwardedPorts,proto3" json:"forwarded_ports,omitempty"`
-	// Actual git branch resolved from the workspace (resolveWorkspaceBranch) —
-	// live because the user may switch branches inside the instance; distinct
-	// from the persisted REQUESTED Instance.branch. Optional: absent when there
-	// is no local workspace (cloud backends) or it hasn't been resolved yet.
+	// Actual git branch read from the workspace through the backend's
+	// WorkspaceReader — live because the user may switch branches inside the
+	// instance; distinct from the persisted REQUESTED Instance.branch. Optional:
+	// absent when no live read was possible (no workspace, a runtime that holds
+	// the only copy is stopped, or not resolved yet) — callers then fall back to
+	// Instance.last_branch, then Instance.branch. Present but "" means the read
+	// worked and HEAD is not on a named branch (detached, or not a git repo).
 	CurrentBranch *string `protobuf:"bytes,9,opt,name=current_branch,json=currentBranch,proto3,oneof" json:"current_branch,omitempty"`
 	// When the server last refreshed this snapshot.
 	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	// Aggregated GitHub PR state — the "auto tag" shown when the instance has no
 	// user-set tag. nil until first probed, or when gh is unavailable / no PR is
 	// open (see PrStatus).
-	PrStatus      *PrStatus `protobuf:"bytes,11,opt,name=pr_status,json=prStatus,proto3" json:"pr_status,omitempty"`
+	PrStatus *PrStatus `protobuf:"bytes,11,opt,name=pr_status,json=prStatus,proto3" json:"pr_status,omitempty"`
+	// The live state of an instance on a Kubernetes cluster (pod, agent
+	// session, restarts the cluster made). nil for every other backend.
+	Kube *KubeInstanceRuntime `protobuf:"bytes,21,opt,name=kube,proto3" json:"kube,omitempty"`
+	// The sync between the instance's fleet share on its cluster and the
+	// daemon host's directories. nil when nothing syncs (every non-cluster
+	// backend).
+	ShareSync     *ShareSyncStatus `protobuf:"bytes,22,opt,name=share_sync,json=shareSync,proto3" json:"share_sync,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -831,11 +848,26 @@ func (x *InstanceRuntime) GetPrStatus() *PrStatus {
 	return nil
 }
 
+func (x *InstanceRuntime) GetKube() *KubeInstanceRuntime {
+	if x != nil {
+		return x.Kube
+	}
+	return nil
+}
+
+func (x *InstanceRuntime) GetShareSync() *ShareSyncStatus {
+	if x != nil {
+		return x.ShareSync
+	}
+	return nil
+}
+
 var File_runtime_proto protoreflect.FileDescriptor
 
 const file_runtime_proto_rawDesc = "" +
 	"\n" +
-	"\rruntime.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"T\n" +
+	"\rruntime.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\n" +
+	"kube.proto\"T\n" +
 	"\x0eContainerStats\x12%\n" +
 	"\x0ecpu_millicores\x18\x01 \x01(\x01R\rcpuMillicores\x12\x1b\n" +
 	"\tmemory_mb\x18\x02 \x01(\x01R\bmemoryMb\"W\n" +
@@ -863,7 +895,7 @@ const file_runtime_proto_rawDesc = "" +
 	"\fchecks_total\x18\x05 \x01(\x05R\vchecksTotal\x128\n" +
 	"\rchecks_signal\x18\x06 \x01(\x0e2\x13.fleetgrpc.PrSignalR\fchecksSignal\x12\"\n" +
 	"\x03prs\x18\a \x03(\v2\x10.fleetgrpc.PrRefR\x03prs\x12!\n" +
-	"\fclosed_count\x18\b \x01(\x05R\vclosedCount\"\xd4\x04\n" +
+	"\fclosed_count\x18\b \x01(\x05R\vclosedCount\"\xc3\x05\n" +
 	"\x0fInstanceRuntime\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12?\n" +
@@ -879,7 +911,10 @@ const file_runtime_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x120\n" +
-	"\tpr_status\x18\v \x01(\v2\x13.fleetgrpc.PrStatusR\bprStatusB\x11\n" +
+	"\tpr_status\x18\v \x01(\v2\x13.fleetgrpc.PrStatusR\bprStatus\x122\n" +
+	"\x04kube\x18\x15 \x01(\v2\x1e.fleetgrpc.KubeInstanceRuntimeR\x04kube\x129\n" +
+	"\n" +
+	"share_sync\x18\x16 \x01(\v2\x1a.fleetgrpc.ShareSyncStatusR\tshareSyncB\x11\n" +
 	"\x0f_current_branchJ\x04\b\f\x10\x15*\xc8\x01\n" +
 	"\x13LiveContainerStatus\x12%\n" +
 	"!LIVE_CONTAINER_STATUS_UNSPECIFIED\x10\x00\x12!\n" +
@@ -894,12 +929,13 @@ const file_runtime_proto_rawDesc = "" +
 	"\x10AGENT_TOOL_CODEX\x10\x03\x12\x15\n" +
 	"\x11AGENT_TOOL_GEMINI\x10\x04\x12\x16\n" +
 	"\x12AGENT_TOOL_COPILOT\x10\x05\x12\x15\n" +
-	"\x11AGENT_TOOL_AUGGIE\x10\x06*\x87\x01\n" +
+	"\x11AGENT_TOOL_AUGGIE\x10\x06*\xa3\x01\n" +
 	"\rAgentActivity\x12\x1e\n" +
 	"\x1aAGENT_ACTIVITY_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aAGENT_ACTIVITY_NOT_RUNNING\x10\x01\x12\x1a\n" +
 	"\x16AGENT_ACTIVITY_WORKING\x10\x02\x12\x1a\n" +
-	"\x16AGENT_ACTIVITY_WAITING\x10\x03*y\n" +
+	"\x16AGENT_ACTIVITY_WAITING\x10\x03\x12\x1a\n" +
+	"\x16AGENT_ACTIVITY_UNKNOWN\x10\x04*y\n" +
 	"\bPrSignal\x12\x19\n" +
 	"\x15PR_SIGNAL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPR_SIGNAL_GREEN\x10\x01\x12\x14\n" +
@@ -939,6 +975,8 @@ var file_runtime_proto_goTypes = []any{
 	(*PrStatus)(nil),              // 9: fleetgrpc.PrStatus
 	(*InstanceRuntime)(nil),       // 10: fleetgrpc.InstanceRuntime
 	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	(*KubeInstanceRuntime)(nil),   // 12: fleetgrpc.KubeInstanceRuntime
+	(*ShareSyncStatus)(nil),       // 13: fleetgrpc.ShareSyncStatus
 }
 var file_runtime_proto_depIdxs = []int32{
 	3,  // 0: fleetgrpc.PrStatus.pr_signal:type_name -> fleetgrpc.PrSignal
@@ -953,11 +991,13 @@ var file_runtime_proto_depIdxs = []int32{
 	7,  // 9: fleetgrpc.InstanceRuntime.forwarded_ports:type_name -> fleetgrpc.ForwardedPort
 	11, // 10: fleetgrpc.InstanceRuntime.updated_at:type_name -> google.protobuf.Timestamp
 	9,  // 11: fleetgrpc.InstanceRuntime.pr_status:type_name -> fleetgrpc.PrStatus
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	12, // 12: fleetgrpc.InstanceRuntime.kube:type_name -> fleetgrpc.KubeInstanceRuntime
+	13, // 13: fleetgrpc.InstanceRuntime.share_sync:type_name -> fleetgrpc.ShareSyncStatus
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_runtime_proto_init() }
@@ -965,6 +1005,7 @@ func file_runtime_proto_init() {
 	if File_runtime_proto != nil {
 		return
 	}
+	file_kube_proto_init()
 	file_runtime_proto_msgTypes[2].OneofWrappers = []any{}
 	file_runtime_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}

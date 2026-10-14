@@ -36,17 +36,19 @@ import (
 // argv). The command the caller runs afterwards is unbounded.
 const execResolveTimeout = 10 * time.Second
 
-// browserPrepareTimeout bounds PrepareBrowser, which may install privoxy +
-// stage the landing-page binary inside the container (apt-get etc.), so it is
-// generous.
+// browserPrepareTimeout bounds PrepareBrowser, which may stage the fleet
+// binary inside the container (or, where it cannot run there, install privoxy
+// with apt-get etc.), so it is generous.
 const browserPrepareTimeout = 3 * time.Minute
 
 // coderFetchTimeout bounds the Coder-API template-params fetch (network).
 const coderFetchTimeout = 30 * time.Second
 
 // resolveExecArgv asks the server for the argv (+ env) to run argv inside the
-// instance. A package var so tests can stub the whole RPC.
-var resolveExecArgv = func(fleetName, instanceName string, argv []string) ([]string, map[string]string, error) {
+// instance; attach says a terminal attaches with it (which clears the
+// instance's "sessions reset" notice). A package var so tests can stub the
+// whole RPC.
+var resolveExecArgv = func(fleetName, instanceName string, argv []string, attach bool) ([]string, map[string]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), execResolveTimeout)
 	defer cancel()
 	conn, err := dialMutation(ctx)
@@ -57,6 +59,7 @@ var resolveExecArgv = func(fleetName, instanceName string, argv []string) ([]str
 		Fleet:    fleetName,
 		Instance: instanceName,
 		Argv:     argv,
+		Attach:   attach,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -67,8 +70,8 @@ var resolveExecArgv = func(fleetName, instanceName string, argv []string) ([]str
 // resolveExecCmd resolves the exec argv for the instance and builds a local
 // *exec.Cmd with the server-supplied env merged over the client's. The caller
 // sets stdio / reads .Args / runs it (Output/CombinedOutput/Run/tea.Exec).
-func resolveExecCmd(fleetName, instanceName string, argv []string) (*exec.Cmd, error) {
-	resolved, env, err := resolveExecArgv(fleetName, instanceName, argv)
+func resolveExecCmd(fleetName, instanceName string, argv []string, attach bool) (*exec.Cmd, error) {
+	resolved, env, err := resolveExecArgv(fleetName, instanceName, argv, attach)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +106,7 @@ var runInstanceCommand = func(fleetName, instanceName string, argv []string) (st
 		out, code, err := execstream.Output(ctx, conn.Service(), fleetName, instanceName, argv)
 		return string(out), code, err
 	}
-	cmd, err := resolveExecCmd(fleetName, instanceName, argv)
+	cmd, err := resolveExecCmd(fleetName, instanceName, argv, false)
 	if err != nil {
 		return "", 0, err
 	}
@@ -135,7 +138,7 @@ var runInstanceCommand = func(fleetName, instanceName string, argv []string) (st
 // package var so tests can stub it.
 var attachExecCmd = func(fleetName, instanceName string, argv []string) (*exec.Cmd, error) {
 	if !fleetclient.IsRemote() {
-		return resolveExecCmd(fleetName, instanceName, argv)
+		return resolveExecCmd(fleetName, instanceName, argv, true)
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -174,22 +177,33 @@ func mergeExecEnv(extra map[string]string) []string {
 
 // forwardDialer returns a TargetDialer that tunnels one connection per call
 // over the server's Forward bidi stream (the port-forward data plane) to
-// remotePort inside the instance. It reuses the shared mutation connection;
-// the bounded ctx covers only the dial — each per-connection stream manages
-// its own lifetime.
-var forwardDialer = func(fleetName, instanceName string, remotePort int) (portforward.TargetDialer, error) {
+// remotePort inside the instance; halfClose asks for connections that keep a
+// true half-close (portforward.TargetOptions). It reuses the shared mutation
+// connection; the bounded ctx covers only the dial — each per-connection
+// stream manages its own lifetime.
+var forwardDialer = func(fleetName, instanceName string, remotePort int, halfClose bool) (portforward.TargetDialer, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), execResolveTimeout)
 	defer cancel()
 	conn, err := dialMutation(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return portforward.NewGRPCTarget(conn.Service(), fleetName, instanceName, remotePort), nil
+	return portforward.NewGRPCTarget(conn.Service(), fleetName, instanceName, remotePort, portforward.TargetOptions{HalfClose: halfClose}), nil
 }
 
 // resolveLogsArgv resolves the host-side container-logs command for the
-// instance; the logs view embeds it in its pager script.
+// instance; the logs view embeds it in its pager script. A remote daemon's
+// argv would run here, on the wrong host (its docker, its saved Kubernetes
+// container.log), so for one this fleet binary's `logs <fleet>/<instance>`
+// reads them through the Logs RPC instead.
 var resolveLogsArgv = func(fleetName, instanceName string) ([]string, error) {
+	if fleetclient.IsRemote() {
+		self, err := os.Executable()
+		if err != nil {
+			self = "fleet"
+		}
+		return []string{self, "logs", fleetName + "/" + instanceName}, nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), execResolveTimeout)
 	defer cancel()
 	conn, err := dialMutation(ctx)

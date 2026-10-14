@@ -8,6 +8,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -54,6 +55,19 @@ type hub struct {
 	// mic hub (mic.go).
 	micSources    *fleetgrpc.MicSources
 	outputTargets *fleetgrpc.OutputTargets
+	// activeJobs is every in-flight job's summary (owned by the loop), pushed
+	// over Watch whenever a job starts, changes step or ends, and cached for a
+	// new subscriber's initial snapshot. Produced by the job manager.
+	activeJobs *fleetgrpc.ActiveJobs
+	// kubeClusters is every Kubernetes connection with its health (owned by
+	// the loop), pushed over Watch whenever a record or its health changes
+	// and cached for a new subscriber's initial snapshot. Produced by the
+	// kube manager (kube_health.go).
+	kubeClusters *fleetgrpc.KubeClusters
+	// automationStatus is the scheduler's view of the automation agents
+	// (owned by the loop), pushed as Watch Event.automation_status and part
+	// of the initial snapshot.
+	automationStatus *fleetgrpc.AutomationStatus
 
 	// runtimeWanted is true while at least one subscriber asked for runtime;
 	// the runtime pollers read it lock-free to gate their expensive work.
@@ -83,21 +97,36 @@ type hub struct {
 	// the hub loop), so guarded by its own mutex. See backendFor / pruneBackends.
 	backendsMu sync.Mutex
 	backends   map[string]backend.Backend
+
+	// branches reads instance branches for the branch poller and
+	// GetState(fresh_branches), sharing one short-lived cache (branches.go).
+	branches *branchResolver
+
+	// stateListeners are told (on the loop; they must not block) of every
+	// state the state poller loads that differs from notified, the last one
+	// they were told of. Set before the loop runs.
+	stateListeners []func(*state.State)
+	notified       *fleetgrpc.State
 }
 
 func newHub() *hub {
-	return &hub{
-		in:            make(chan func(*hub), 64),
-		done:          make(chan struct{}),
-		st:            &fleetgrpc.State{},
-		runtime:       make(map[string]*fleetgrpc.InstanceRuntime),
-		subs:          make(map[*subscriber]struct{}),
-		agent:         newAgentTracker(),
-		runtimeEdge:   make(chan struct{}, 1),
-		remoteMcp:     &fleetgrpc.RemoteMcpStatus{}, // state == UNSPECIFIED (not connected)
-		micSources:    &fleetgrpc.MicSources{},
-		outputTargets: &fleetgrpc.OutputTargets{},
+	h := &hub{
+		in:               make(chan func(*hub), 64),
+		done:             make(chan struct{}),
+		st:               &fleetgrpc.State{},
+		runtime:          make(map[string]*fleetgrpc.InstanceRuntime),
+		subs:             make(map[*subscriber]struct{}),
+		agent:            newAgentTracker(),
+		runtimeEdge:      make(chan struct{}, 1),
+		remoteMcp:        &fleetgrpc.RemoteMcpStatus{}, // state == UNSPECIFIED (not connected)
+		micSources:       &fleetgrpc.MicSources{},
+		outputTargets:    &fleetgrpc.OutputTargets{},
+		activeJobs:       &fleetgrpc.ActiveJobs{},
+		kubeClusters:     &fleetgrpc.KubeClusters{},
+		automationStatus: &fleetgrpc.AutomationStatus{},
 	}
+	h.branches = newBranchResolver(h.readBranch)
+	return h
 }
 
 // run is the actor loop. It owns all hub mutable state; only closures posted to
@@ -276,6 +305,46 @@ func (h *hub) broadcastOutputTargets(targets *fleetgrpc.OutputTargets) {
 	}
 }
 
+// broadcastActiveJobs caches the in-flight jobs and fans them out to every
+// subscriber. Conflatable like the microphone clients: only the current set
+// matters, and an unchanged one is dropped. Runs on the hub loop.
+func (h *hub) broadcastActiveJobs(jobs *fleetgrpc.ActiveJobs) {
+	if jobs == nil || proto.Equal(h.activeJobs, jobs) {
+		return
+	}
+	h.activeJobs = jobs
+	for sub := range h.subs {
+		sub.enqueueActiveJobs(jobs)
+	}
+}
+
+// broadcastKubeClusters caches the Kubernetes connections with their health
+// and fans them out to every subscriber. Conflatable like the in-flight jobs:
+// each push replaces the last one whole, and an unchanged set is dropped.
+// Runs on the hub loop.
+func (h *hub) broadcastKubeClusters(clusters *fleetgrpc.KubeClusters) {
+	if clusters == nil || proto.Equal(h.kubeClusters, clusters) {
+		return
+	}
+	h.kubeClusters = clusters
+	for sub := range h.subs {
+		sub.enqueueKubeClusters(clusters)
+	}
+}
+
+// broadcastAutomationStatus caches the scheduler's view of the automation
+// agents and fans it out to every subscriber, conflated like the Kubernetes
+// connections. Runs on the hub loop.
+func (h *hub) broadcastAutomationStatus(st *fleetgrpc.AutomationStatus) {
+	if st == nil || proto.Equal(h.automationStatus, st) {
+		return
+	}
+	h.automationStatus = st
+	for sub := range h.subs {
+		sub.enqueueAutomationStatus(st)
+	}
+}
+
 // subscriber is one Watch stream's conflating buffer. pendingState keeps the
 // newest State (older ones are dropped — a full snapshot supersedes them);
 // pendingRuntime merges by key so a stats-only update and a live-status-only
@@ -302,6 +371,9 @@ type subscriber struct {
 	// (conflated the same way).
 	pendingMicSources    *fleetgrpc.MicSources
 	pendingOutputTargets *fleetgrpc.OutputTargets
+	pendingActiveJobs    *fleetgrpc.ActiveJobs
+	pendingKubeClusters  *fleetgrpc.KubeClusters
+	pendingAutomation    *fleetgrpc.AutomationStatus
 
 	notify chan struct{}
 }
@@ -388,6 +460,57 @@ func (s *subscriber) takeOutputTargets() *fleetgrpc.OutputTargets {
 	targets := s.pendingOutputTargets
 	s.pendingOutputTargets = nil
 	return targets
+}
+
+func (s *subscriber) enqueueActiveJobs(jobs *fleetgrpc.ActiveJobs) {
+	s.mu.Lock()
+	s.pendingActiveJobs = jobs
+	s.mu.Unlock()
+	s.signal()
+}
+
+// takeActiveJobs takes the pending in-flight job set, if any, out of the
+// buffer for sending.
+func (s *subscriber) takeActiveJobs() *fleetgrpc.ActiveJobs {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	jobs := s.pendingActiveJobs
+	s.pendingActiveJobs = nil
+	return jobs
+}
+
+func (s *subscriber) enqueueKubeClusters(clusters *fleetgrpc.KubeClusters) {
+	s.mu.Lock()
+	s.pendingKubeClusters = clusters
+	s.mu.Unlock()
+	s.signal()
+}
+
+// takeKubeClusters takes the pending Kubernetes connections, if any, out of
+// the buffer for sending.
+func (s *subscriber) takeKubeClusters() *fleetgrpc.KubeClusters {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clusters := s.pendingKubeClusters
+	s.pendingKubeClusters = nil
+	return clusters
+}
+
+func (s *subscriber) enqueueAutomationStatus(st *fleetgrpc.AutomationStatus) {
+	s.mu.Lock()
+	s.pendingAutomation = st
+	s.mu.Unlock()
+	s.signal()
+}
+
+// takeAutomationStatus takes the pending automation status, if any, out of
+// the buffer for sending.
+func (s *subscriber) takeAutomationStatus() *fleetgrpc.AutomationStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.pendingAutomation
+	s.pendingAutomation = nil
+	return st
 }
 
 // drain takes the pending state + runtime + browser-opens + file-copies +

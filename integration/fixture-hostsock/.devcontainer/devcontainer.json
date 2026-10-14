@@ -1,0 +1,13 @@
+{
+  "name": "fleet-man integration host socket fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "mounts": [
+    "source=${localEnv:SSH_AUTH_SOCK},target=/run/itest-host-ssh-agent.sock,type=bind",
+    "source=${localEnv:FLEET_ITEST_GPG_SOCK},target=/run/itest-host-gpg-agent.sock,type=bind",
+    "source=${localEnv:FLEET_ITEST_SOCK_DIR},target=/run/itest-host-sockets,type=bind",
+    "source=${localEnv:FLEET_ITEST_LOG_SOCK},target=/dev/log,type=bind"
+  ],
+  "remoteEnv": {
+    "SSH_AUTH_SOCK": "/run/itest-host-ssh-agent.sock"
+  }
+}

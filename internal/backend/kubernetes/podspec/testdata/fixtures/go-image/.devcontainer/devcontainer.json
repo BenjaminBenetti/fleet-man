@@ -1,0 +1,7 @@
+{
+  // The mcr Go image, whose own devcontainer.metadata asks for the debug
+  // grants (SYS_PTRACE, unconfined seccomp) that baseline pod security
+  // denies: the debug-capabilities golden.
+  "name": "podspec go-image fixture",
+  "image": "mcr.microsoft.com/devcontainers/go:1.24-bookworm"
+}

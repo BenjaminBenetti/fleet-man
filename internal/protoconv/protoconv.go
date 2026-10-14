@@ -140,6 +140,15 @@ func InstanceToProto(i *fleet.Instance) *fleetgrpc.Instance {
 	if i.Branch != "" {
 		pi.Branch = strptr(i.Branch)
 	}
+	if i.LastBranch != "" {
+		pi.LastBranch = strptr(i.LastBranch)
+	}
+	if i.KubeCluster != "" {
+		pi.KubeCluster = strptr(i.KubeCluster)
+	}
+	if i.KubeKey != "" {
+		pi.KubeKey = strptr(i.KubeKey)
+	}
 	pi.Automated = i.Automated
 	// Warnings is proto-only (populated by jobs); it has no legacy field.
 	return pi
@@ -160,7 +169,10 @@ func InstanceFromProto(pi *fleetgrpc.Instance) *fleet.Instance {
 		Tag:          pi.GetTag(),
 		Color:        pi.GetColor(),
 		Branch:       pi.GetBranch(),
+		LastBranch:   pi.GetLastBranch(),
 		Automated:    pi.GetAutomated(),
+		KubeCluster:  pi.GetKubeCluster(),
+		KubeKey:      pi.GetKubeKey(),
 	}
 	if ts := pi.GetCreatedAt(); ts != nil {
 		inst.CreatedAt = ts.AsTime()
@@ -174,19 +186,20 @@ func InstanceFromProto(pi *fleetgrpc.Instance) *fleet.Instance {
 // travel only when set; PreferFleetLaunch preserves its tri-state.
 func FleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 	ps := &fleetgrpc.FleetSettings{
-		ClaudeCodeMount:  s.ClaudeCodeMount,
-		CodexMount:       s.CodexMount,
-		GhMount:          s.GhMount,
-		AuggieMount:      s.AuggieMount,
-		BuildkitServer:   s.BuildkitServer,
-		CustomMounts:     s.CustomMounts,
-		DebCacheServer:   s.DebCacheServer,
-		ImageCacheServer: s.ImageCacheServer,
-		FleetMcp:         s.FleetMCP,
-		LayoutPresets:    LayoutPresetsToProto(s.LayoutPresets),
-		Agents:           AgentsToProto(s.Agents),
-		Triggers:         TriggersToProto(s.Triggers),
-		CoderParameters:  CoderParametersToProto(s.CoderParameters),
+		ClaudeCodeMount:        s.ClaudeCodeMount,
+		CodexMount:             s.CodexMount,
+		GhMount:                s.GhMount,
+		AuggieMount:            s.AuggieMount,
+		BuildkitServer:         s.BuildkitServer,
+		CustomMounts:           s.CustomMounts,
+		CustomMountHostFolders: s.CustomMountHostFolders,
+		DebCacheServer:         s.DebCacheServer,
+		ImageCacheServer:       s.ImageCacheServer,
+		FleetMcp:               s.FleetMCP,
+		LayoutPresets:          LayoutPresetsToProto(s.LayoutPresets),
+		Agents:                 AgentsToProto(s.Agents),
+		Triggers:               TriggersToProto(s.Triggers),
+		CoderParameters:        CoderParametersToProto(s.CoderParameters),
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = strptr(s.HomeDir)
@@ -218,6 +231,9 @@ func FleetSettingsFromProto(ps *fleetgrpc.FleetSettings) fleet.FleetSettings {
 	s.AuggieMount = ps.GetAuggieMount()
 	s.BuildkitServer = ps.GetBuildkitServer()
 	s.CustomMounts = ps.GetCustomMounts()
+	if folders := ps.GetCustomMountHostFolders(); len(folders) > 0 {
+		s.CustomMountHostFolders = folders
+	}
 	s.DebCacheServer = ps.GetDebCacheServer()
 	s.ImageCacheServer = ps.GetImageCacheServer()
 	s.FleetMCP = ps.GetFleetMcp()
@@ -250,6 +266,7 @@ func AgentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {
 			Command:      a.Command,
 			SystemPrompt: a.SystemPrompt,
 			Backend:      BackendToProto(a.Backend),
+			KubeCluster:  a.KubeCluster,
 		})
 	}
 	return out
@@ -267,6 +284,7 @@ func AgentsFromProto(in []*fleetgrpc.Agent) []fleet.Agent {
 			Command:      a.GetCommand(),
 			SystemPrompt: a.GetSystemPrompt(),
 			Backend:      BackendFromProto(a.GetBackend()),
+			KubeCluster:  a.GetKubeCluster(),
 		})
 	}
 	return out
@@ -497,6 +515,8 @@ func BackendToProto(b fleet.BackendType) fleetgrpc.BackendType {
 		return fleetgrpc.BackendType_BACKEND_TYPE_CODER
 	case fleet.BackendCodespaces:
 		return fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES
+	case fleet.BackendKubernetes:
+		return fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES
 	default:
 		return fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED
 	}
@@ -513,6 +533,8 @@ func BackendFromProto(b fleetgrpc.BackendType) fleet.BackendType {
 		return fleet.BackendCoder
 	case fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES:
 		return fleet.BackendCodespaces
+	case fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES:
+		return fleet.BackendKubernetes
 	default:
 		return ""
 	}

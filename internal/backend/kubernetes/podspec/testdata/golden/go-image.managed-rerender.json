@@ -1,0 +1,169 @@
+{
+  "pod": {
+    "image": {
+      "ref": "mcr.microsoft.com/devcontainers/go:1.24-bookworm",
+      "id": "sha256:2fe929afae562b8c50a28052aa6bc772e8045578fcc7b0508bb6da8935da3fb1",
+      "os": "linux",
+      "arch": "amd64"
+    },
+    "pid1": {
+      "format": 1,
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "user": "root",
+      "working_dir": "/go",
+      "init": true,
+      "remote_user": "vscode"
+    },
+    "security": {},
+    "resources": {
+      "requests": {
+        "cpu": "500m",
+        "memory": "2Gi"
+      },
+      "limits": {
+        "memory": "8Gi"
+      }
+    },
+    "diskSize": "50Gi",
+    "mounts": [
+      {
+        "kind": "workspace",
+        "target": "/workspaces/go-image",
+        "source": "/home/dev/src/go-image"
+      }
+    ],
+    "nodeSelector": {
+      "kubernetes.io/arch": "amd64",
+      "kubernetes.io/os": "linux"
+    },
+    "debugGrants": [
+      "--cap-add SYS_PTRACE",
+      "--security-opt seccomp=unconfined"
+    ],
+    "debugDropped": true,
+    "warnings": [
+      "debug capabilities dropped by admission: --cap-add SYS_PTRACE, --security-opt seccomp=unconfined (namespace team-dev denies them); debuggers such as dlv and gdb cannot attach. Set debug_capabilities to require on prod-eu to fail the create instead"
+    ],
+    "options": [
+      {
+        "option": "attach",
+        "outcome": "ignore"
+      },
+      {
+        "option": "cap-add",
+        "outcome": "map"
+      },
+      {
+        "option": "entrypoint",
+        "outcome": "map"
+      },
+      {
+        "option": "init",
+        "outcome": "map"
+      },
+      {
+        "option": "label",
+        "outcome": "map"
+      },
+      {
+        "option": "mount",
+        "outcome": "map"
+      },
+      {
+        "option": "security-opt",
+        "outcome": "map"
+      },
+      {
+        "option": "sig-proxy",
+        "outcome": "ignore"
+      }
+    ]
+  },
+  "specFiles": {
+    "capture.json": {
+      "args": [
+        "--sig-proxy=false",
+        "-a",
+        "STDOUT",
+        "-a",
+        "STDERR",
+        "--mount",
+        "type=bind,source=/home/dev/src/go-image,target=/workspaces/go-image",
+        "-l",
+        "devcontainer.local_folder=/home/dev/src/go-image",
+        "-l",
+        "devcontainer.config_file=/home/dev/src/go-image/.devcontainer/devcontainer.json",
+        "--init",
+        "--cap-add",
+        "SYS_PTRACE",
+        "--security-opt",
+        "seccomp=unconfined",
+        "--entrypoint",
+        "/bin/sh",
+        "-l",
+        "devcontainer.metadata=[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"id\":\"ghcr.io/devcontainers/features/go:1\",\"init\":true,\"capAdd\":[\"SYS_PTRACE\"],\"securityOpt\":[\"seccomp=unconfined\"],\"customizations\":{\"vscode\":{\"extensions\":[\"golang.Go\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes Go and common Go utilities pre-installed and available on the `PATH`, along with the Go language extension for Go development.\"}]}}}},{\"id\":\"ghcr.io/devcontainers/features/node:1\",\"customizations\":{\"vscode\":{\"extensions\":[\"dbaeumer.vscode-eslint\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes `node`, `npm` and `eslint` pre-installed and available on the `PATH` for Node.js and JavaScript development.\"}]}}}},{\"customizations\":{\"vscode\":{\"settings\":{\"go.toolsManagement.checkForUpdates\":\"local\",\"go.useLanguageServer\":true,\"go.gopath\":\"/go\"},\"extensions\":[\"golang.Go\"]}},\"remoteUser\":\"vscode\"}]",
+        "mcr.microsoft.com/devcontainers/go:1.24-bookworm",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "env": [],
+      "format": 1,
+      "labels": {
+        "devcontainer.config_file": "/home/dev/src/go-image/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/go-image",
+        "devcontainer.metadata": "[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"id\":\"ghcr.io/devcontainers/features/go:1\",\"init\":true,\"capAdd\":[\"SYS_PTRACE\"],\"securityOpt\":[\"seccomp=unconfined\"],\"customizations\":{\"vscode\":{\"extensions\":[\"golang.Go\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes Go and common Go utilities pre-installed and available on the `PATH`, along with the Go language extension for Go development.\"}]}}}},{\"id\":\"ghcr.io/devcontainers/features/node:1\",\"customizations\":{\"vscode\":{\"extensions\":[\"dbaeumer.vscode-eslint\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes `node`, `npm` and `eslint` pre-installed and available on the `PATH` for Node.js and JavaScript development.\"}]}}}},{\"customizations\":{\"vscode\":{\"settings\":{\"go.toolsManagement.checkForUpdates\":\"local\",\"go.useLanguageServer\":true,\"go.gopath\":\"/go\"},\"extensions\":[\"golang.Go\"]}},\"remoteUser\":\"vscode\"}]"
+      },
+      "verb": "run"
+    },
+    "exec.json": {
+      "container_user": "root",
+      "remote_user": "vscode",
+      "ssh_auth_sock": "/fleet-mounts/control/ssh-agent.sock",
+      "working_dir": "/go",
+      "workspace_folder": "/workspaces/go-image"
+    },
+    "inspect.json": {
+      "cmd": [
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "containerId": "",
+      "created": "0001-01-01T00:00:00Z",
+      "entrypoint": [
+        "/bin/sh"
+      ],
+      "env": [
+        "PATH=/usr/local/share/nvm/current/bin:/usr/local/go/bin:/go/bin:/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "GOLANG_VERSION=1.24.12",
+        "GOTOOLCHAIN=local",
+        "GOPATH=/go",
+        "GOROOT=/usr/local/go",
+        "NVM_DIR=/usr/local/share/nvm",
+        "NVM_SYMLINK_CURRENT=true"
+      ],
+      "image": "mcr.microsoft.com/devcontainers/go:1.24-bookworm",
+      "imageId": "sha256:2fe929afae562b8c50a28052aa6bc772e8045578fcc7b0508bb6da8935da3fb1",
+      "labels": {
+        "dev.containers.id": "go",
+        "dev.containers.release": "v0.4.24",
+        "dev.containers.source": "https://github.com/devcontainers/images",
+        "dev.containers.timestamp": "Fri, 30 Jan 2026 16:52:46 GMT",
+        "dev.containers.variant": "1.24-bookworm",
+        "devcontainer.config_file": "/home/dev/src/go-image/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/go-image",
+        "devcontainer.metadata": "[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"id\":\"ghcr.io/devcontainers/features/go:1\",\"init\":true,\"capAdd\":[\"SYS_PTRACE\"],\"securityOpt\":[\"seccomp=unconfined\"],\"customizations\":{\"vscode\":{\"extensions\":[\"golang.Go\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes Go and common Go utilities pre-installed and available on the `PATH`, along with the Go language extension for Go development.\"}]}}}},{\"id\":\"ghcr.io/devcontainers/features/node:1\",\"customizations\":{\"vscode\":{\"extensions\":[\"dbaeumer.vscode-eslint\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes `node`, `npm` and `eslint` pre-installed and available on the `PATH` for Node.js and JavaScript development.\"}]}}}},{\"customizations\":{\"vscode\":{\"settings\":{\"go.toolsManagement.checkForUpdates\":\"local\",\"go.useLanguageServer\":true,\"go.gopath\":\"/go\"},\"extensions\":[\"golang.Go\"]}},\"remoteUser\":\"vscode\"}]",
+        "version": "2.0.8"
+      },
+      "startedAt": "0001-01-01T00:00:00Z",
+      "user": "root",
+      "workingDir": "/go"
+    }
+  }
+}

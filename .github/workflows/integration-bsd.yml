@@ -11,15 +11,26 @@ name: Integration Tests (BSD userland shims)
 # The technique is borrowed from the repo's QA bot, which validated the
 # #231 fix on Linux with exactly this kind of `sleep` shim.
 
+# Nightly, not per PR: its ten shards would take a PR past GitHub's 20
+# concurrent jobs beside the devcontainer and Kubernetes suites. A PR whose
+# change touches host shell-outs can still run it (workflow_dispatch).
 on:
-  pull_request:
-    branches: [main]
+  schedule:
+    - cron: "47 4 * * *"
+  workflow_dispatch:
+
+# One run at a time: a newer run waits for the one in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   integration-bsd-shard:
     name: integration-bsd ${{ matrix.range }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The longest shards take ~17 minutes; a retried test (FLEET_ITEST_RETRIES)
+    # can add a few more.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +41,10 @@ jobs:
           - "300-400"
           - "400-500"
           - "500-600"
-          - "600-"
+          - "600-700"
+          - "700-730"
+          - "730-760"
+          - "760-"
     steps:
       - uses: actions/checkout@v5
 
@@ -56,14 +70,18 @@ jobs:
           docker version
           docker info
 
+      # Static (CGO_ENABLED=0), as released: see the Makefile's dist target.
       - name: Build fleet binary
-        run: go build -o /usr/local/bin/fleet ./cmd/fleet
+        run: CGO_ENABLED=0 go build -o /usr/local/bin/fleet ./cmd/fleet
 
       - name: Run integration tests under BSD shims
         env:
           FLEET_BIN: /usr/local/bin/fleet
           FLEET_ITEST_RANGE: ${{ matrix.range }}
           FLEET_ITEST_BSD_SHIMS: "1"
+          # A failed test runs once more (a download or runner blip fails one
+          # attempt); one that passes only then is named flaky in the summary.
+          FLEET_ITEST_RETRIES: "1"
         run: ./integration/run.sh
 
   integration-bsd:

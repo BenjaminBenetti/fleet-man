@@ -14,9 +14,19 @@ import (
 // forward holds even when the server is remote — unlike the old path, which
 // spawned a server-computed argv on the client host.
 
+// TargetOptions tune the connections a target opens.
+type TargetOptions struct {
+	// HalfClose asks the server for connections that pass this side's
+	// half-close on and keep reading after it (ForwardOpen.half_close): on
+	// Kubernetes the cluster's port-forward drops the half-close and ends the
+	// connection a second later, so a peer that answers after the EOF needs
+	// the pod agent's path. Other backends ignore it.
+	HalfClose bool
+}
+
 // NewGRPCTarget returns a TargetDialer that tunnels one connection per call
 // over svc's Forward stream to remotePort inside fleet/instance.
-func NewGRPCTarget(svc fleetgrpc.FleetServiceClient, fleetName, instance string, remotePort int) TargetDialer {
+func NewGRPCTarget(svc fleetgrpc.FleetServiceClient, fleetName, instance string, remotePort int, opts TargetOptions) TargetDialer {
 	return func() (io.ReadWriteCloser, error) {
 		// The stream lives as long as the forwarded connection: no deadline,
 		// torn down by Close (cancel) or by the server ending the stream.
@@ -30,6 +40,7 @@ func NewGRPCTarget(svc fleetgrpc.FleetServiceClient, fleetName, instance string,
 			Fleet:      fleetName,
 			Instance:   instance,
 			RemotePort: int32(remotePort),
+			HalfClose:  opts.HalfClose,
 		}}}
 		if err := stream.Send(open); err != nil {
 			cancel()

@@ -42,6 +42,19 @@ jobs:
       - name: go test
         run: go test ./...
 
+      # The same symlink-swap race fuzz as the Linux unit job, on the portable
+      # walk macOS daemons use (os.Root, no openat2).
+      - name: safefs symlink-swap race fuzz
+        run: go test -run '^$' -fuzz '^FuzzSymlinkSwap$' -fuzztime 60s -fuzzminimizetime 10x ./internal/safefs
+
+      - name: Upload the safefs fuzz failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safefs-fuzz-macos
+          path: internal/safefs/testdata/fuzz
+          if-no-files-found: ignore
+
   integration-macos-no-docker:
     runs-on: macos-latest
     timeout-minutes: 20
@@ -68,4 +81,7 @@ jobs:
           # Hosted mac runners are slower than the Linux jobs; give the TUI
           # polling deadlines the same headroom trick the WSL job uses.
           FLEET_TUI_WAIT_SCALE: "2"
+          # A failed test runs once more (a download or runner blip fails one
+          # attempt); one that passes only then is named flaky in the summary.
+          FLEET_ITEST_RETRIES: "1"
         run: ./integration/run.sh

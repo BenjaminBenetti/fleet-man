@@ -47,6 +47,28 @@ type Options struct {
 	// mode the server merges stderr into stdout. A nil writer discards.
 	Stdout io.Writer
 	Stderr io.Writer
+
+	// Pod, when set, runs the command through the local-only PodExec RPC in
+	// a Kubernetes instance's pod (the daemon-host kube-exec shim's daemon
+	// mode) in place of Exec. Fleet/Instance are then ignored.
+	Pod *PodExecTarget
+}
+
+// PodExecTarget names the pod a PodExec runs in and whom the command runs as,
+// the way the kube-exec shim's argv names them.
+type PodExecTarget struct {
+	Cluster   string
+	Namespace string
+	Pod       string
+	Container string
+	// Class is exec, script, root or explicit (empty: exec); User and Cwd
+	// are honoured by the explicit and root classes.
+	Class     string
+	User, Cwd string
+	// Bulk runs the command on the pod's bulk session (a folder's tar).
+	Bulk bool
+	// Quiet keeps the command out of fleetd's event log (a poll's).
+	Quiet bool
 }
 
 // Run executes opts over svc's Exec stream and blocks until the remote command
@@ -59,7 +81,11 @@ func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, opts Options) (i
 	// blocked until process exit — harmless for the CLI lifetimes this serves.)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	st, err := svc.Exec(ctx)
+	open := svc.Exec
+	if opts.Pod != nil {
+		open = svc.PodExec
+	}
+	st, err := open(ctx)
 	if err != nil {
 		return -1, mapRPCError(err)
 	}
@@ -105,13 +131,7 @@ func run(st stream, opts Options) (int, error) {
 		return st.CloseSend()
 	}
 
-	if err := send(&fleetgrpc.ExecIn{Msg: &fleetgrpc.ExecIn_Start{Start: &fleetgrpc.ExecStart{
-		Fleet:    opts.Fleet,
-		Instance: opts.Instance,
-		Argv:     opts.Argv,
-		Tty:      opts.TTY,
-		Env:      opts.Env,
-	}}}); err != nil {
+	if err := send(startFrame(opts)); err != nil {
 		// gRPC's Send reports a bare io.EOF on a dead stream; the real status
 		// comes from Recv.
 		if _, rerr := st.Recv(); rerr != nil && !errors.Is(rerr, io.EOF) {
@@ -228,6 +248,20 @@ func sendResize(send func(*fleetgrpc.ExecIn) error, f *os.File) {
 		Rows: uint32(rows),
 		Cols: uint32(cols),
 	}}})
+}
+
+// startFrame is the first ExecIn: ExecStart for Exec, PodExecStart for PodExec.
+func startFrame(opts Options) *fleetgrpc.ExecIn {
+	if opts.Pod != nil {
+		p := opts.Pod
+		return &fleetgrpc.ExecIn{Msg: &fleetgrpc.ExecIn_PodStart{PodStart: &fleetgrpc.PodExecStart{
+			ClusterId: p.Cluster, Namespace: p.Namespace, Pod: p.Pod, Container: p.Container,
+			Class: p.Class, User: p.User, Cwd: p.Cwd, Argv: opts.Argv, Env: opts.Env, Tty: opts.TTY, Bulk: p.Bulk, Quiet: p.Quiet,
+		}}}
+	}
+	return &fleetgrpc.ExecIn{Msg: &fleetgrpc.ExecIn_Start{Start: &fleetgrpc.ExecStart{
+		Fleet: opts.Fleet, Instance: opts.Instance, Argv: opts.Argv, Tty: opts.TTY, Env: opts.Env,
+	}}}
 }
 
 // mapRPCError rewrites the version-skew case — an older daemon without the

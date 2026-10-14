@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 )
 
@@ -24,11 +25,34 @@ var (
 	// stopping to finish, and for a busy one to answer.
 	unresponsiveGrace = 5 * time.Second
 	// shutdownGrace is how long a daemon that was asked to shut down gets to
-	// exit before it is killed.
+	// exit before it is killed, when it reports no hard limit of its own
+	// (ShutdownGrace).
 	shutdownGrace = 8 * time.Second
 	// killWait is how long each signal gets to take effect.
 	killWait = 2 * time.Second
 )
+
+const (
+	// hardLimitSlack is how long past the hard limit it reported a daemon
+	// that was asked to shut down gets before it is killed: the limit is
+	// when it exits on its own.
+	hardLimitSlack = 2 * time.Second
+	// maxShutdownGrace caps the wait a daemon's reported limit asks for.
+	maxShutdownGrace = time.Minute
+)
+
+// ShutdownGrace is how long a daemon whose Shutdown answered reply gets to
+// exit before it is killed: the hard limit it reported for its own shutdown
+// plus hardLimitSlack, so a shutdown still flushing is never killed and a
+// wedged one is gone soon after it would have exited by itself; the fixed
+// shutdownGrace when it reported none (an older daemon, or no reply).
+func ShutdownGrace(reply *fleetgrpc.ShutdownReply) time.Duration {
+	limit := time.Duration(reply.GetHardLimitMs()) * time.Millisecond
+	if limit <= 0 {
+		return shutdownGrace
+	}
+	return min(limit+hardLimitSlack, maxShutdownGrace)
+}
 
 // serverLockHeld reports whether a daemon process holds the lifetime lock.
 func serverLockHeld() bool {

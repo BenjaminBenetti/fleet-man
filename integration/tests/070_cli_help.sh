@@ -27,6 +27,12 @@ done
 # The hidden internal command must NOT show in the public help — surfacing
 # it would invite users to call it directly, breaking the TUI contract.
 assert_not_contains "${root_help}" "_create-instance" "internal command should remain hidden"
+# So must the in-pod commands (a pod's PID 1, its Jobs' process and its agent,
+# the in-instance browser proxy and landing page, apt's proxy probe, and the
+# editor's Remote-SSH plumbing: ssh's ProxyCommand and the in-instance ssh server).
+for internal in exec-as pod-init pod-job pod-agent kube-exec browser-proxy landing-page net-probe ssh-proxy ssh-server; do
+  assert_not_contains "${root_help}" "${internal}" "in-pod command ${internal} should remain hidden"
+done
 
 # ===========================================
 # Per-subcommand help. Each must succeed and contain its own short text.

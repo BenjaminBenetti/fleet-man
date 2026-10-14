@@ -35,6 +35,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"time"
 
 	"github.com/hashicorp/yamux"
 )
@@ -59,6 +60,12 @@ type RegisterRequest struct {
 	// RegisterReply.Features; both sides then only use a feature when it appears
 	// in that negotiated set. Absent (old fleetd) means the base MCP-only tunnel.
 	Features []string `json:"features,omitempty"`
+	// Attach, when non-empty, makes this connection an AUXILIARY connection of
+	// an existing session instead of a registration: SessionID names the
+	// session (by its secret) and Attach the role. The only role is
+	// AttachRegistry. An attach never claims, replaces or reclaims the session's
+	// main tunnel, and is not counted against the gateway's session cap.
+	Attach string `json:"attach,omitempty"`
 }
 
 // RegisterReply is the gateway's response. On success Error is empty, SessionID
@@ -80,6 +87,20 @@ type RegisterReply struct {
 	// gateway serves webhooks on its public HTTP listener), so no separate
 	// gateway base URL is needed.
 	PublicWebhookURL string `json:"public_webhook_url,omitempty"`
+	// PublicRegistry is the registry prefix nodes pull this daemon's images
+	// from: the host[:port] of the gateway's --public-url plus "/<rid>", e.g.
+	// "gw.example.com/<rid>" (an image reference is then
+	// "<PublicRegistry>/devcontainer@sha256:<digest>"). rid is the session's
+	// registry id, a 256-bit id separate from the public id in PublicURL. Only
+	// set when the registry feature is negotiated; empty otherwise (incl. from
+	// an old gateway). A pull secret is keyed by the host[:port] part.
+	PublicRegistry string `json:"public_registry,omitempty"`
+	// RegistryOff says why a gateway that knows the registry feature does not
+	// offer it ("no --session-key", "--public-url is not https", "--public-url
+	// has a path prefix"), set only when fleetd requested FeatureRegistry and
+	// did not get it. Empty from an old gateway that predates the feature, so
+	// fleetd can tell "too old" from "configured without it".
+	RegistryOff string `json:"registry_off,omitempty"`
 	// SessionToken is a JWT, signed with the gateway's session key, encoding
 	// this session's ids. fleetd persists it with the session id and presents
 	// both on reconnect, so the session (and its public URL) survives a gateway
@@ -108,6 +129,34 @@ const FeatureGRPC = "grpc"
 // Like FeatureGRPC it forces the tagged-stream wire, so either feature alone is
 // enough to switch the tunnel into demux mode.
 const FeatureWebhook = "webhook"
+
+// FeatureRegistry negotiates serving the daemon's pull-only image registry
+// through the gateway. When it is in the negotiated set, the gateway serves the
+// public /v2/<rid>/... route, mints a PublicRegistry, and accepts one registry
+// attach connection (AttachRegistry) for the session; fleetd demuxes
+// TagRegistry streams to its image server. Like FeatureGRPC and FeatureWebhook
+// it forces the tagged-stream wire. A gateway offers it only when it runs with
+// --session-key (so the registry id survives a gateway restart) and an https
+// --public-url with no path prefix (registry paths start at /v2/ on the host
+// root).
+const FeatureRegistry = "registry"
+
+// AttachRegistry is the RegisterRequest.Attach role of a registry connection:
+// a second, dedicated connection (its own gRPC Register stream and TCP
+// connection) that carries only the session's TagRegistry streams, so image
+// layers never queue behind MCP or remote gRPC traffic on the main tunnel. Both
+// ends run it with the registry yamux config (RegistryClientSession /
+// RegistryServerSession).
+const AttachRegistry = "registry"
+
+// Tagged reports whether a negotiated feature set switches the tunnel into the
+// tagged-stream wire (see tag.go): any of FeatureGRPC, FeatureWebhook or
+// FeatureRegistry. It is the ONE predicate both ends use — the gateway to decide
+// whether to write a tag on every stream it opens, fleetd to decide whether to
+// demux by tag — so the two can never disagree about the wire.
+func Tagged(features []string) bool {
+	return HasFeature(features, FeatureGRPC) || HasFeature(features, FeatureWebhook) || HasFeature(features, FeatureRegistry)
+}
 
 // RegisterMethod is the gRPC full-method fleetd opens (a bidi stream) on the
 // gateway's gRPC port to register and carry the reverse tunnel. The gateway's
@@ -202,4 +251,41 @@ func ClientSession(conn net.Conn, logOutput io.Writer) (*yamux.Session, error) {
 // conn, after the handshake has completed on it.
 func ServerSession(conn net.Conn, logOutput io.Writer) (*yamux.Session, error) {
 	return yamux.Server(conn, sessionConfig(logOutput))
+}
+
+const (
+	// RegistryStreamWindow is the per-stream receive window of a registry
+	// connection (yamux MaxStreamWindowSize; the default is 256 KiB). The gateway
+	// receives the layer bytes, and a 256 KiB window would cap each stream at
+	// about 256 KiB per round trip. The gateway allows at most 8 concurrent
+	// registry streams per session, so it buffers at most 32 MiB per daemon.
+	RegistryStreamWindow = 4 << 20
+	// RegistryKeepAliveTimeout is how long a registry connection waits for a
+	// keepalive ping's answer, or for a write to be accepted, before it declares
+	// the peer dead (yamux ConnectionWriteTimeout; the default is 10s). Layer
+	// uploads can saturate the daemon host's uplink, and a ping queued behind
+	// them must not tear the connection down.
+	RegistryKeepAliveTimeout = 60 * time.Second
+)
+
+// registrySessionConfig is the yamux config of a registry attach connection:
+// the shared config with a RegistryStreamWindow receive window and a
+// RegistryKeepAliveTimeout.
+func registrySessionConfig(logOutput io.Writer) *yamux.Config {
+	cfg := sessionConfig(logOutput)
+	cfg.MaxStreamWindowSize = RegistryStreamWindow
+	cfg.ConnectionWriteTimeout = RegistryKeepAliveTimeout
+	return cfg
+}
+
+// RegistryClientSession wraps fleetd's side of a registry attach connection
+// (AttachRegistry), after its handshake has completed.
+func RegistryClientSession(conn net.Conn, logOutput io.Writer) (*yamux.Session, error) {
+	return yamux.Client(conn, registrySessionConfig(logOutput))
+}
+
+// RegistryServerSession wraps the gateway's side of a registry attach
+// connection, after its handshake has completed.
+func RegistryServerSession(conn net.Conn, logOutput io.Writer) (*yamux.Session, error) {
+	return yamux.Server(conn, registrySessionConfig(logOutput))
 }

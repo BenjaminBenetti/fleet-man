@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/devmeta"
 )
 
 // cloneImageLabel marks the docker image produced by `docker commit`
@@ -24,12 +25,12 @@ const cloneImageLabel = "fleet.clone.image"
 // cloned container, otherwise `devcontainer exec` reports "Cannot find
 // Dev Container" even though the container is running.
 const (
-	devcontainerLocalFolderLabel = "devcontainer.local_folder"
-	devcontainerConfigFileLabel  = "devcontainer.config_file"
+	devcontainerLocalFolderLabel = devmeta.LocalFolderLabel
+	devcontainerConfigFileLabel  = devmeta.ConfigFileLabel
 	// devcontainerMetadataLabel holds the JSON array of merged devcontainer
 	// metadata (image + features + devcontainer.json) the CLI stamps at up
 	// time. Its remoteUser is the user `devcontainer exec` operates as.
-	devcontainerMetadataLabel = "devcontainer.metadata"
+	devcontainerMetadataLabel = devmeta.MetadataLabel
 )
 
 // inspectedContainer holds just the fields Clone needs from
@@ -170,42 +171,7 @@ func remoteUserFromMetadata(containerID string) string {
 	if err != nil || inspected.Config.Labels == nil {
 		return ""
 	}
-	return remoteUserFromMetadataJSON(inspected.Config.Labels[devcontainerMetadataLabel])
-}
-
-// remoteUserFromMetadataJSON extracts the effective remoteUser from a
-// devcontainer.metadata label value — the JSON array of merged metadata entries
-// (base image, then each feature, then the user's devcontainer.json last).
-// Scalars merge by array order with later entries winning, so the effective
-// user is the LAST non-empty remoteUser; absent any remoteUser it falls back to
-// the last non-empty containerUser (what the CLI itself defaults exec to).
-// Returns "" for an empty/unparseable label or one that names neither.
-func remoteUserFromMetadataJSON(raw string) string {
-	if strings.TrimSpace(raw) == "" {
-		return ""
-	}
-	var entries []struct {
-		RemoteUser    string `json:"remoteUser"`
-		ContainerUser string `json:"containerUser"`
-	}
-	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
-		return ""
-	}
-	user := ""
-	for _, e := range entries {
-		if e.RemoteUser != "" {
-			user = e.RemoteUser
-		}
-	}
-	if user != "" {
-		return user
-	}
-	for _, e := range entries {
-		if e.ContainerUser != "" {
-			user = e.ContainerUser
-		}
-	}
-	return user
+	return devmeta.RemoteUser(inspected.Config.Labels[devcontainerMetadataLabel])
 }
 
 // rebaseConfigFileLabel computes the destination's
@@ -313,7 +279,11 @@ func buildCloneRunArgs(imageTag, destWorkspaceDir, workspaceTarget string, inspe
 		args = append(args, "--mount", "type=bind,source="+sock+",target="+containerSSHSocketPath)
 	}
 
-	args = append(args, customMountArgs(mounts)...)
+	mountArgs, err := customMountArgs(mounts)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, mountArgs...)
 	args = append(args, imageTag)
 	return args, nil
 }

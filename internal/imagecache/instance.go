@@ -1,7 +1,12 @@
 package imagecache
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,19 +31,46 @@ type instanceExecer interface {
 
 // probeMarkerPresent / probeMarkerAbsent are the single-token stdout signals the
 // probe script emits so the outcome is unambiguous regardless of locale or
-// extra warnings on stderr.
+// extra warnings on stderr. probeMarkerDenied is a pod engine (below) whose
+// daemon.json the exec user cannot write.
 const (
 	probeMarkerPresent = "PRESENT"
 	probeMarkerAbsent  = "ABSENT"
+	probeMarkerDenied  = "DENIED"
 )
+
+// A docker-outside-of-docker instance on a cluster has its own docker engine:
+// the pod's fleet-docker sidecar (podspec.DockerDir), a private engine that
+// would otherwise pull every image again, so it gets the mirror too (on a
+// docker host such an instance shares the host's engine and is left alone).
+// The dev container sees no dockerd process (the sidecar is another
+// container, with no shared PID namespace); it finds the engine by
+// DockerdConfigEnv, which names the daemon.json the engine reloads by itself
+// whenever it changes, or else by the engine's socket. The folder is root's,
+// as /etc/docker is.
+const (
+	// DockerdConfigEnv names, in the dev container, the pod engine's
+	// daemon.json (podspec.DockerConfigEnv).
+	DockerdConfigEnv = "FLEET_DOCKERD_CONFIG"
+	// PodEngineSocket and PodEngineConfig are the engine's socket and
+	// daemon.json (podspec.DockerSocket, podspec.DockerConfig).
+	PodEngineSocket = "/opt/fleet/docker/docker.sock"
+	PodEngineConfig = "/opt/fleet/docker/daemon.json"
+)
+
+// errPodEngineDenied is a pod engine whose daemon.json the instance's user
+// may not replace and cannot sudo to.
+var errPodEngineDenied = fmt.Errorf("the pod's docker engine reads its daemon.json (%s) from a folder only root may write, and the instance's user has no passwordless sudo: its pulls do not use the mirror", PodEngineConfig)
 
 // ConfigureInstanceDocker points an instance's OWN docker daemon at the fleet's
 // shared image cache by adding registry-mirrors + insecure-registries to
-// /etc/docker/daemon.json and reloading dockerd. It first probes for a LOCAL
-// dockerd (docker-in-docker); if there is none — docker-outside-of-docker or no
-// docker — it returns nil WITHOUT touching the instance (the documented "do
-// nothing, no error" behaviour). The daemon.json merge is itself best-effort and
-// never clobbers an existing file it can't safely merge.
+// /etc/docker/daemon.json and reloading dockerd, or to the pod engine's
+// daemon.json, which that engine reloads itself. It first probes for a LOCAL
+// dockerd (docker-in-docker) or a pod engine; if there is none —
+// docker-outside-of-docker on a docker host, or no docker — it returns nil
+// WITHOUT touching the instance (the documented "do nothing, no error"
+// behaviour). The daemon.json merge is itself best-effort and never clobbers an
+// existing file it can't safely merge.
 //
 // Callers should treat a returned error as non-fatal (warn and continue).
 //
@@ -61,6 +93,10 @@ func tryConfigureOnce(b instanceExecer, workspaceDir, mirrorURL, hostPort string
 	if err != nil {
 		return false, fmt.Errorf("probe dockerd: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
+	if strings.Contains(string(out), probeMarkerDenied) {
+		// An engine is there, and no later probe will find it writable.
+		return true, errPodEngineDenied
+	}
 	if !dockerdPresent(string(out)) {
 		return false, nil
 	}
@@ -68,7 +104,70 @@ func tryConfigureOnce(b instanceExecer, workspaceDir, mirrorURL, hostPort string
 	if err != nil {
 		return true, fmt.Errorf("configure docker registry mirror: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
+	if strings.Contains(string(out), mergeMarkerNoTool) {
+		// No python3 or jq to merge with in the instance (a docker:dind
+		// image has neither), and a daemon.json with keys of its own (on a
+		// cluster pod-init writes the engine's MTU there): fleet merges it.
+		if err := mergeHere(b, workspaceDir, mirrorURL, hostPort); err != nil {
+			return true, fmt.Errorf("configure docker registry mirror: %w", err)
+		}
+	}
 	return true, nil
+}
+
+// mergeMarkerNoTool is what configureScript prints when it has nothing to
+// merge the daemon.json with, leaving the merge to mergeHere.
+const mergeMarkerNoTool = "FLEET_MERGE_NO_TOOL"
+
+// mergeHere merges the mirror into the daemon's daemon.json on fleet's side:
+// it reads the file out of the instance, merges it as the script's python
+// does, and writes it back (by temp file and rename) and reloads the daemon,
+// unless the mirror is in it already.
+func mergeHere(b instanceExecer, workspaceDir, mirrorURL, hostPort string) error {
+	cur, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", readConfigScript()}).Output()
+	if err != nil {
+		return fmt.Errorf("read the daemon's daemon.json: %w", err)
+	}
+	merged, changed, err := mergeMirror(cur, mirrorURL, hostPort)
+	if err != nil || !changed {
+		return err
+	}
+	if out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", writeConfigScript(merged)}).CombinedOutput(); err != nil {
+		return fmt.Errorf("write the daemon's daemon.json: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// mergeMirror is daemon.json data with mirrorURL in its registry-mirrors and
+// hostPort in its insecure-registries, every other key kept; changed is
+// false when both are there already. Data that is not a JSON object is an
+// error: the file is left as it is.
+func mergeMirror(data []byte, mirrorURL, hostPort string) ([]byte, bool, error) {
+	conf := map[string]any{}
+	if len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, &conf); err != nil || conf == nil {
+			return nil, false, errors.New("the daemon's daemon.json is not a JSON object; leaving it untouched")
+		}
+	}
+	changed := false
+	for key, v := range map[string]string{"registry-mirrors": mirrorURL, "insecure-registries": hostPort} {
+		list, _ := conf[key].([]any)
+		if _, isList := conf[key].([]any); conf[key] != nil && !isList {
+			return nil, false, fmt.Errorf("the daemon's daemon.json has a %s that is not a list; leaving it untouched", key)
+		}
+		if !slices.Contains(list, any(v)) {
+			conf[key] = append(list, v)
+			changed = true
+		}
+	}
+	if !changed {
+		return data, false, nil
+	}
+	out, err := json.MarshalIndent(conf, "", "  ")
+	if err != nil {
+		return nil, false, err
+	}
+	return append(out, '\n'), true, nil
 }
 
 // ConfigureInstanceDockerPolling points an instance's dockerd at the fleet's
@@ -126,39 +225,43 @@ func ConfigureInstanceDockerPolling(b instanceExecer, workspaceDir, mirrorURL, h
 	}()
 }
 
-// probeScript reports whether the instance runs its own dockerd (docker-in-docker)
-// that we can reconfigure: a `dockerd` process must be running AND /etc/docker
-// must be reachable (writable, absent-but-creatable, or via passwordless sudo).
-// docker-outside-of-docker (host socket, no local dockerd) and no-docker images
-// yield ABSENT. Always exits 0 and prints exactly one marker.
+// probeScript reports whether the instance has a docker daemon we can
+// reconfigure: a pod engine (FLEET_DOCKERD_CONFIG set, or its socket there)
+// whose folder is writable directly or via passwordless sudo (DENIED when it
+// is not), or its own dockerd (docker-in-docker): a `dockerd` process must be
+// running AND /etc/docker must be reachable (writable, absent-but-creatable,
+// or via passwordless sudo). docker-outside-of-docker on a docker host (the
+// host's socket, no local dockerd) and no-docker images yield ABSENT. Always
+// exits 0 and prints exactly one marker.
 //
 // dockerd is detected by scanning /proc/<pid>/comm rather than `pgrep` so the
 // probe works on minimal images that lack procps (/proc/<pid>/comm is
 // world-readable, so this works as a non-root user too).
 func probeScript() string {
 	return fmt.Sprintf(
-		`d=0; for c in /proc/[0-9]*/comm; do [ -r "$c" ] && IFS= read -r n < "$c" && [ "$n" = dockerd ] && { d=1; break; }; done; if [ "$d" = 1 ] && { [ -w /etc/docker ] || [ ! -e /etc/docker ] || { command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; }; }; then echo %s; else echo %s; fi`,
-		probeMarkerPresent, probeMarkerAbsent,
+		`cfg=${%[4]s:-}; if [ -z "$cfg" ] && [ -S %[5]s ]; then cfg=%[6]s; fi; if [ -n "$cfg" ]; then if [ -w "${cfg%%/*}" ] || { command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; }; then echo %[1]s; else echo %[3]s; fi; exit 0; fi; `+
+			`d=0; for c in /proc/[0-9]*/comm; do [ -r "$c" ] && IFS= read -r n < "$c" && [ "$n" = dockerd ] && { d=1; break; }; done; if [ "$d" = 1 ] && { [ -w /etc/docker ] || [ ! -e /etc/docker ] || { command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; }; }; then echo %[1]s; else echo %[2]s; fi`,
+		probeMarkerPresent, probeMarkerAbsent, probeMarkerDenied, DockerdConfigEnv, PodEngineSocket, PodEngineConfig,
 	)
 }
 
-// configureScript merges the registry mirror into /etc/docker/daemon.json and
-// SIGHUP-reloads dockerd. registry-mirrors and insecure-registries are both
+// configureScript merges the registry mirror into the daemon's daemon.json and
+// has the daemon reload it. registry-mirrors and insecure-registries are both
 // SIGHUP-reloadable, so this does NOT restart the daemon (no running containers
-// are killed). The merge preserves any existing daemon.json keys: python3 is
-// preferred, then jq, then a fresh file only when none exists — it never
-// clobbers a file it cannot safely merge. Runs via sudo when /etc/docker is not
-// directly writable. mirrorURL/hostPort derive from a sanitized container name,
-// so they are shell-safe.
+// are killed). The instance's own dockerd reads /etc/docker/daemon.json and is
+// sent SIGHUP here; a pod engine's file is the one FLEET_DOCKERD_CONFIG names
+// (or the one beside its socket), and the engine, a process this container
+// cannot see, reloads it itself once it changes. The merge preserves any
+// existing daemon.json keys: python3 is preferred, then jq, then a fresh file
+// only when none exists or it holds an empty object — it never clobbers a file
+// it cannot safely merge. Every write is a temp file renamed over the old one,
+// so a reload never reads half a file. Runs via sudo when not root.
+// mirrorURL/hostPort derive from a sanitized name, so they are shell-safe.
 func configureScript(mirrorURL, hostPort string) string {
 	const tmpl = `set -e
 MIRROR='%[1]s'
 INSECURE='%[2]s'
-DAEMON=/etc/docker/daemon.json
-TMP="$DAEMON.fleet.tmp"
-SUDO=
-if [ "$(id -u)" != 0 ]; then SUDO=sudo; fi
-$SUDO mkdir -p /etc/docker
+%[3]s$SUDO mkdir -p "${DAEMON%%/*}"
 if command -v python3 >/dev/null 2>&1; then
   # Merge via python: parse the existing file, refuse to clobber one we can't
   # parse, and write atomically (tmp + os.replace).
@@ -173,10 +276,10 @@ if os.path.exists(path):
         try:
             d = json.loads(text)
         except ValueError:
-            sys.stderr.write("fleet: /etc/docker/daemon.json is not valid JSON; leaving it untouched\n")
+            sys.stderr.write("fleet: %%s is not valid JSON; leaving it untouched\n" %% path)
             sys.exit(1)
         if not isinstance(d, dict):
-            sys.stderr.write("fleet: /etc/docker/daemon.json is not a JSON object; leaving it untouched\n")
+            sys.stderr.write("fleet: %%s is not a JSON object; leaving it untouched\n" %% path)
             sys.exit(1)
 mirrors = d.get("registry-mirrors") or []
 if mirror not in mirrors:
@@ -197,17 +300,43 @@ elif command -v jq >/dev/null 2>&1; then
   if MERGED=$($SUDO jq --arg m "$MIRROR" --arg i "$INSECURE" '."registry-mirrors" = ((."registry-mirrors" // []) + [$m] | unique) | ."insecure-registries" = ((."insecure-registries" // []) + [$i] | unique)' "$DAEMON"); then
     printf '%%s\n' "$MERGED" | $SUDO tee "$TMP" >/dev/null && $SUDO mv "$TMP" "$DAEMON"
   else
-    echo "fleet: jq could not parse /etc/docker/daemon.json; leaving it untouched" >&2
+    echo "fleet: jq could not parse $DAEMON; leaving it untouched" >&2
     exit 1
   fi
-elif [ ! -s "$DAEMON" ]; then
-  printf '{\n  "registry-mirrors": ["%%s"],\n  "insecure-registries": ["%%s"]\n}\n' "$MIRROR" "$INSECURE" | $SUDO tee "$DAEMON" >/dev/null
+elif [ ! -s "$DAEMON" ] || [ "$($SUDO cat "$DAEMON" 2>/dev/null | tr -d ' \t\r\n')" = '{}' ]; then
+  # Nothing to keep: no file, an empty one, or an empty object (what the
+  # pod's engine starts with).
+  printf '{\n  "registry-mirrors": ["%%s"],\n  "insecure-registries": ["%%s"]\n}\n' "$MIRROR" "$INSECURE" | $SUDO tee "$TMP" >/dev/null
+  $SUDO mv "$TMP" "$DAEMON"
 else
+  # Keys to keep and nothing to merge them with: fleet merges it (mergeHere).
+  echo %[4]s
   exit 0
 fi
-# Reload dockerd so it picks up registry-mirrors + insecure-registries (both are
-# SIGHUP-reloadable, so no container-killing restart). Find the pid via /proc so
-# this works without procps/pgrep.
+%[5]s`
+	return fmt.Sprintf(tmpl, mirrorURL, hostPort, daemonPrelude(), mergeMarkerNoTool, reloadScript)
+}
+
+// daemonPrelude finds the daemon.json to configure (DAEMON; RELOADS_ITSELF
+// for the pod's engine, which reloads its own; the instance's dockerd is
+// sent SIGHUP), its temp file and the sudo it takes.
+func daemonPrelude() string {
+	return fmt.Sprintf(`DAEMON=${%[1]s:-}
+if [ -z "$DAEMON" ] && [ -S %[2]s ]; then DAEMON=%[3]s; fi
+RELOADS_ITSELF=
+[ -z "$DAEMON" ] || RELOADS_ITSELF=1
+DAEMON=${DAEMON:-/etc/docker/daemon.json}
+TMP="$DAEMON.fleet.tmp"
+SUDO=
+if [ "$(id -u)" != 0 ]; then SUDO=sudo; fi
+`, DockerdConfigEnv, PodEngineSocket, PodEngineConfig)
+}
+
+// reloadScript has the instance's dockerd reload its daemon.json:
+// registry-mirrors + insecure-registries are both SIGHUP-reloadable, so no
+// container-killing restart. It finds the pid via /proc so it works without
+// procps/pgrep. The pod's engine reloads by itself.
+const reloadScript = `[ -z "$RELOADS_ITSELF" ] || exit 0
 for d in /proc/[0-9]*; do
   if [ -r "$d/comm" ] && IFS= read -r n < "$d/comm" && [ "$n" = dockerd ]; then
     $SUDO kill -HUP "${d##*/}" 2>/dev/null || true
@@ -215,7 +344,22 @@ for d in /proc/[0-9]*; do
   fi
 done
 `
-	return fmt.Sprintf(tmpl, mirrorURL, hostPort)
+
+// readConfigScript prints the daemon's daemon.json (nothing when there is
+// none).
+func readConfigScript() string {
+	return "set -e\n" + daemonPrelude() + `if [ -e "$DAEMON" ]; then $SUDO cat -- "$DAEMON"; fi
+`
+}
+
+// writeConfigScript replaces the daemon's daemon.json with content (base64
+// in the script, so any content is shell-safe), by temp file and rename, and
+// has the daemon reload it.
+func writeConfigScript(content []byte) string {
+	return "set -e\n" + daemonPrelude() + fmt.Sprintf(`$SUDO mkdir -p "${DAEMON%%/*}"
+printf '%%s' '%s' | base64 -d | $SUDO tee "$TMP" >/dev/null
+$SUDO mv -f "$TMP" "$DAEMON"
+`, base64.StdEncoding.EncodeToString(content)) + reloadScript
 }
 
 // dockerdPresent reports whether the probe output indicates a configurable

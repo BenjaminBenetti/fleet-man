@@ -482,3 +482,45 @@ func TestSpawnSession_TUISplitDoesNotDuplicateSession(t *testing.T) {
 		}
 	}
 }
+
+// A session command the backend could not run says why: what it printed on
+// stderr (a Kubernetes instance's shim: kubernetes:unreachable ...), ahead of
+// the exit status that is all an exec's error carries.
+func TestSessionCommandsNameTheExecsReason(t *testing.T) {
+	const reason = "kubernetes:unreachable: instance StatefulSet team/fi-x: dial tcp 10.0.0.1:443: connect: connection refused"
+	for name, c := range map[string]struct {
+		cmd  func() *cobra.Command
+		args []string
+	}{
+		"spawn-session":   {newSpawnSessionCmd, []string{"demo"}},
+		"exec-in-session": {newExecInSessionCmd, []string{"demo", "echo", "hi"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := seedState(t, fleet.StatusRunning)
+			prev := sessionExecCommand
+			t.Cleanup(func() { sessionExecCommand = prev })
+			sessionExecCommand = func(_, _ string, _ []string) (*exec.Cmd, error) {
+				return exec.Command("sh", "-c", `echo "$0" >&2; exit 255`, reason), nil
+			}
+			err := run(t, c.cmd(), append([]string{target}, c.args...)...)
+			if err == nil || !strings.Contains(err.Error(), reason) || !strings.Contains(err.Error(), "exit status 255") {
+				t.Fatalf("error %v, want the shim's reason and its exit status", err)
+			}
+		})
+	}
+}
+
+// A failure that printed nothing keeps the exec's own error, and the
+// captured stderr is bounded.
+func TestRunSessionCommandWithoutStderr(t *testing.T) {
+	if err := runSessionCommand(exec.Command("sh", "-c", "exit 3")); err == nil || err.Error() != "exit status 3" {
+		t.Fatalf("error %v, want the bare exit status", err)
+	}
+	err := runSessionCommand(exec.Command("sh", "-c", `head -c 100000 /dev/zero | tr '\0' x >&2; exit 1`))
+	if err == nil || len(err.Error()) > maxSessionStderr+64 {
+		t.Fatalf("error of %d bytes, want at most the stderr bound", len(err.Error()))
+	}
+	if runSessionCommand(nil) == nil {
+		t.Fatal("a missing command ran")
+	}
+}

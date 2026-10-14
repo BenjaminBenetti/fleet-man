@@ -4,10 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -129,3 +132,41 @@ func (nopCopyStream) SendHeader(metadata.MD) error        { return nil }
 func (nopCopyStream) SetTrailer(metadata.MD)              {}
 func (nopCopyStream) SendMsg(any) error                   { return nil }
 func (nopCopyStream) RecvMsg(any) error                   { return nil }
+
+// A file's tar comes out through the bulk lane where the backend has one (on
+// Kubernetes its bulk session, as a folder's does), else through ExecCommand
+// as before.
+func TestFileOutCommandTakesTheBulkLane(t *testing.T) {
+	inst := &fleet.Instance{Name: "alpha", WorkspaceDir: "/ws/alpha"}
+	argv := []string{"tar", "-chf", "-", "-C", "/tmp", "big.bin"}
+	plain := &laneBackend{}
+	_ = fileOutCommandOf(plain, inst, argv)
+	if plain.lane != "exec" || plain.dir != "/ws/alpha" || strings.Join(plain.argv, " ") != strings.Join(argv, " ") {
+		t.Errorf("a backend without a bulk lane ran %q in %q: %q", plain.lane, plain.dir, plain.argv)
+	}
+	bulk := &bulkLaneBackend{}
+	_ = fileOutCommandOf(bulk, inst, argv)
+	if bulk.lane != "bulk" || bulk.dir != "/ws/alpha" || strings.Join(bulk.argv, " ") != strings.Join(argv, " ") {
+		t.Errorf("a backend with a bulk lane ran %q in %q: %q", bulk.lane, bulk.dir, bulk.argv)
+	}
+}
+
+// laneBackend records which exec a command was built with.
+type laneBackend struct {
+	backend.Backend
+	lane, dir string
+	argv      []string
+}
+
+func (b *laneBackend) ExecCommand(dir string, argv []string) *backend.Cmd {
+	b.lane, b.dir, b.argv = "exec", dir, argv
+	return backend.NewCmd(exec.Command("true"), nil)
+}
+
+// bulkLaneBackend is laneBackend with a bulk lane (backend.FolderExecer).
+type bulkLaneBackend struct{ laneBackend }
+
+func (b *bulkLaneBackend) FolderExecCommand(dir string, argv []string) *backend.Cmd {
+	b.lane, b.dir, b.argv = "bulk", dir, argv
+	return backend.NewCmd(exec.Command("true"), nil)
+}

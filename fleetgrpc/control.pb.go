@@ -197,9 +197,15 @@ func (x *ShutdownRequest) GetReason() string {
 // (snapshotted in the same model-loop turn that flips to draining), so the
 // caller can show progress.
 type ShutdownReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	DrainingJobs  int32                  `protobuf:"varint,2,opt,name=draining_jobs,json=drainingJobs,proto3" json:"draining_jobs,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Accepted     bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	DrainingJobs int32                  `protobuf:"varint,2,opt,name=draining_jobs,json=drainingJobs,proto3" json:"draining_jobs,omitempty"`
+	// hard_limit_ms is how long the daemon's own shutdown may take, cleanup
+	// included, before it exits whatever it was still doing (its hard limit). A
+	// restarting client waits that long plus 2s for the process to go before it
+	// kills it, so a shutdown still flushing is never killed; 0 (an older
+	// daemon) means it reports none, and the client keeps its fixed 8s.
+	HardLimitMs   int64 `protobuf:"varint,3,opt,name=hard_limit_ms,json=hardLimitMs,proto3" json:"hard_limit_ms,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -244,6 +250,13 @@ func (x *ShutdownReply) GetAccepted() bool {
 func (x *ShutdownReply) GetDrainingJobs() int32 {
 	if x != nil {
 		return x.DrainingJobs
+	}
+	return 0
+}
+
+func (x *ShutdownReply) GetHardLimitMs() int64 {
+	if x != nil {
+		return x.HardLimitMs
 	}
 	return 0
 }
@@ -587,15 +600,231 @@ func (*DeleteImageCacheReply) Descriptor() ([]byte, []int) {
 	return file_control_proto_rawDescGZIP(), []int{11}
 }
 
-type GetStateRequest struct {
+type GetCacheUsageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCacheUsageRequest) Reset() {
+	*x = GetCacheUsageRequest{}
+	mi := &file_control_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCacheUsageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCacheUsageRequest) ProtoMessage() {}
+
+func (x *GetCacheUsageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCacheUsageRequest.ProtoReflect.Descriptor instead.
+func (*GetCacheUsageRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GetCacheUsageRequest) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+// GetCacheUsageReply is each of the fleet's cache volumes on the runtimes
+// whose volumes have a fixed size (its clusters; the daemon host's docker
+// caches grow with its disk and are not listed).
+type GetCacheUsageReply struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Caches []*CacheUsage          `protobuf:"bytes,1,rep,name=caches,proto3" json:"caches,omitempty"`
+	// unavailable names each runtime that could not report, with why
+	// ("kubernetes:<id>: not reachable now").
+	Unavailable   []string `protobuf:"bytes,2,rep,name=unavailable,proto3" json:"unavailable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCacheUsageReply) Reset() {
+	*x = GetCacheUsageReply{}
+	mi := &file_control_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCacheUsageReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCacheUsageReply) ProtoMessage() {}
+
+func (x *GetCacheUsageReply) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCacheUsageReply.ProtoReflect.Descriptor instead.
+func (*GetCacheUsageReply) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GetCacheUsageReply) GetCaches() []*CacheUsage {
+	if x != nil {
+		return x.Caches
+	}
+	return nil
+}
+
+func (x *GetCacheUsageReply) GetUnavailable() []string {
+	if x != nil {
+		return x.Unavailable
+	}
+	return nil
+}
+
+// CacheUsage is how full one cache volume is.
+type CacheUsage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// service is the shared service: "buildkit", "debcache" or "imagecache".
+	Service string `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
+	// cluster is the connection the volume is on, location its display name.
+	Cluster       string `protobuf:"bytes,2,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	Location      string `protobuf:"bytes,3,opt,name=location,proto3" json:"location,omitempty"`
+	UsedBytes     int64  `protobuf:"varint,4,opt,name=used_bytes,json=usedBytes,proto3" json:"used_bytes,omitempty"`
+	CapacityBytes int64  `protobuf:"varint,5,opt,name=capacity_bytes,json=capacityBytes,proto3" json:"capacity_bytes,omitempty"`
+	// expandable: the volume grows by half when it is nearly full.
+	Expandable bool `protobuf:"varint,6,opt,name=expandable,proto3" json:"expandable,omitempty"`
+	// state is the service's server: "ready", "starting", or why it is
+	// neither.
+	State string `protobuf:"bytes,7,opt,name=state,proto3" json:"state,omitempty"`
+	// warning is the line the Caching row shows ("93% full; its StorageClass
+	// cannot grow it"); empty when all is well.
+	Warning       string `protobuf:"bytes,8,opt,name=warning,proto3" json:"warning,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CacheUsage) Reset() {
+	*x = CacheUsage{}
+	mi := &file_control_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CacheUsage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CacheUsage) ProtoMessage() {}
+
+func (x *CacheUsage) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CacheUsage.ProtoReflect.Descriptor instead.
+func (*CacheUsage) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *CacheUsage) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+func (x *CacheUsage) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *CacheUsage) GetLocation() string {
+	if x != nil {
+		return x.Location
+	}
+	return ""
+}
+
+func (x *CacheUsage) GetUsedBytes() int64 {
+	if x != nil {
+		return x.UsedBytes
+	}
+	return 0
+}
+
+func (x *CacheUsage) GetCapacityBytes() int64 {
+	if x != nil {
+		return x.CapacityBytes
+	}
+	return 0
+}
+
+func (x *CacheUsage) GetExpandable() bool {
+	if x != nil {
+		return x.Expandable
+	}
+	return false
+}
+
+func (x *CacheUsage) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *CacheUsage) GetWarning() string {
+	if x != nil {
+		return x.Warning
+	}
+	return ""
+}
+
+type GetStateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// fresh_branches asks the server to read every instance's checked-out branch
+	// through its backend's workspace reader (bounded concurrency; reads made
+	// inside an instance are cached ~10s, host checkout reads never are) and
+	// return them as GetStateReply.runtime entries carrying
+	// current_branch. Callers without a Watch subscription (fleet ls, the MCP
+	// fleet_list tool) set it: the runtime pollers only run while a TUI watches.
+	FreshBranches bool `protobuf:"varint,1,opt,name=fresh_branches,json=freshBranches,proto3" json:"fresh_branches,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetStateRequest) Reset() {
 	*x = GetStateRequest{}
-	mi := &file_control_proto_msgTypes[12]
+	mi := &file_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -607,7 +836,7 @@ func (x *GetStateRequest) String() string {
 func (*GetStateRequest) ProtoMessage() {}
 
 func (x *GetStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[12]
+	mi := &file_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -620,13 +849,22 @@ func (x *GetStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStateRequest.ProtoReflect.Descriptor instead.
 func (*GetStateRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{12}
+	return file_control_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetStateRequest) GetFreshBranches() bool {
+	if x != nil {
+		return x.FreshBranches
+	}
+	return false
 }
 
 // GetStateReply is the one-stop snapshot of EVERYTHING the TUI renders:
 //
 //	state   — persisted: what fleets/instances exist + their recorded status
 //	runtime — live: agent running?/stats/sessions/ports/live container status
+//	          (filled only with current_branch, and only when the request set
+//	          fresh_branches; the full live sidecar streams over Watch)
 //	active_jobs — in-flight jobs (for progress + re-attach)
 type GetStateReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -639,7 +877,7 @@ type GetStateReply struct {
 
 func (x *GetStateReply) Reset() {
 	*x = GetStateReply{}
-	mi := &file_control_proto_msgTypes[13]
+	mi := &file_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -651,7 +889,7 @@ func (x *GetStateReply) String() string {
 func (*GetStateReply) ProtoMessage() {}
 
 func (x *GetStateReply) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[13]
+	mi := &file_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -664,7 +902,7 @@ func (x *GetStateReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStateReply.ProtoReflect.Descriptor instead.
 func (*GetStateReply) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{13}
+	return file_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetStateReply) GetState() *State {
@@ -702,7 +940,7 @@ type CreateFleetRequest struct {
 
 func (x *CreateFleetRequest) Reset() {
 	*x = CreateFleetRequest{}
-	mi := &file_control_proto_msgTypes[14]
+	mi := &file_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -714,7 +952,7 @@ func (x *CreateFleetRequest) String() string {
 func (*CreateFleetRequest) ProtoMessage() {}
 
 func (x *CreateFleetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[14]
+	mi := &file_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -727,7 +965,7 @@ func (x *CreateFleetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateFleetRequest.ProtoReflect.Descriptor instead.
 func (*CreateFleetRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{14}
+	return file_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CreateFleetRequest) GetName() string {
@@ -756,7 +994,7 @@ type DestroyFleetRequest struct {
 
 func (x *DestroyFleetRequest) Reset() {
 	*x = DestroyFleetRequest{}
-	mi := &file_control_proto_msgTypes[15]
+	mi := &file_control_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -768,7 +1006,7 @@ func (x *DestroyFleetRequest) String() string {
 func (*DestroyFleetRequest) ProtoMessage() {}
 
 func (x *DestroyFleetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[15]
+	mi := &file_control_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -781,7 +1019,7 @@ func (x *DestroyFleetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestroyFleetRequest.ProtoReflect.Descriptor instead.
 func (*DestroyFleetRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{15}
+	return file_control_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DestroyFleetRequest) GetName() string {
@@ -804,7 +1042,7 @@ type SetFleetSettingsRequest struct {
 
 func (x *SetFleetSettingsRequest) Reset() {
 	*x = SetFleetSettingsRequest{}
-	mi := &file_control_proto_msgTypes[16]
+	mi := &file_control_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -816,7 +1054,7 @@ func (x *SetFleetSettingsRequest) String() string {
 func (*SetFleetSettingsRequest) ProtoMessage() {}
 
 func (x *SetFleetSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[16]
+	mi := &file_control_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -829,7 +1067,7 @@ func (x *SetFleetSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetFleetSettingsRequest.ProtoReflect.Descriptor instead.
 func (*SetFleetSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{16}
+	return file_control_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SetFleetSettingsRequest) GetFleet() string {
@@ -863,7 +1101,7 @@ type SetInstanceMetadataRequest struct {
 
 func (x *SetInstanceMetadataRequest) Reset() {
 	*x = SetInstanceMetadataRequest{}
-	mi := &file_control_proto_msgTypes[17]
+	mi := &file_control_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -875,7 +1113,7 @@ func (x *SetInstanceMetadataRequest) String() string {
 func (*SetInstanceMetadataRequest) ProtoMessage() {}
 
 func (x *SetInstanceMetadataRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[17]
+	mi := &file_control_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -888,7 +1126,7 @@ func (x *SetInstanceMetadataRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetInstanceMetadataRequest.ProtoReflect.Descriptor instead.
 func (*SetInstanceMetadataRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{17}
+	return file_control_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SetInstanceMetadataRequest) GetFleet() string {
@@ -938,7 +1176,7 @@ type SetGroupLayoutRequest struct {
 
 func (x *SetGroupLayoutRequest) Reset() {
 	*x = SetGroupLayoutRequest{}
-	mi := &file_control_proto_msgTypes[18]
+	mi := &file_control_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -950,7 +1188,7 @@ func (x *SetGroupLayoutRequest) String() string {
 func (*SetGroupLayoutRequest) ProtoMessage() {}
 
 func (x *SetGroupLayoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[18]
+	mi := &file_control_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -963,7 +1201,7 @@ func (x *SetGroupLayoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetGroupLayoutRequest.ProtoReflect.Descriptor instead.
 func (*SetGroupLayoutRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{18}
+	return file_control_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SetGroupLayoutRequest) GetLayout() *GroupLayout {
@@ -987,7 +1225,7 @@ type DeleteGroupLayoutRequest struct {
 
 func (x *DeleteGroupLayoutRequest) Reset() {
 	*x = DeleteGroupLayoutRequest{}
-	mi := &file_control_proto_msgTypes[19]
+	mi := &file_control_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -999,7 +1237,7 @@ func (x *DeleteGroupLayoutRequest) String() string {
 func (*DeleteGroupLayoutRequest) ProtoMessage() {}
 
 func (x *DeleteGroupLayoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[19]
+	mi := &file_control_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1012,7 +1250,7 @@ func (x *DeleteGroupLayoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteGroupLayoutRequest.ProtoReflect.Descriptor instead.
 func (*DeleteGroupLayoutRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{19}
+	return file_control_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *DeleteGroupLayoutRequest) GetInstanceName() string {
@@ -1046,7 +1284,7 @@ type SetLastSeenVersionRequest struct {
 
 func (x *SetLastSeenVersionRequest) Reset() {
 	*x = SetLastSeenVersionRequest{}
-	mi := &file_control_proto_msgTypes[20]
+	mi := &file_control_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1058,7 +1296,7 @@ func (x *SetLastSeenVersionRequest) String() string {
 func (*SetLastSeenVersionRequest) ProtoMessage() {}
 
 func (x *SetLastSeenVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[20]
+	mi := &file_control_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1071,7 +1309,7 @@ func (x *SetLastSeenVersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetLastSeenVersionRequest.ProtoReflect.Descriptor instead.
 func (*SetLastSeenVersionRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{20}
+	return file_control_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SetLastSeenVersionRequest) GetVersion() string {
@@ -1082,16 +1320,20 @@ func (x *SetLastSeenVersionRequest) GetVersion() string {
 }
 
 // Generic reply for the synchronous mutations: the post-mutation State.
+// warnings are what the mutation accepted but the caller should know
+// (SetFleetSettings: an automation agent whose firings the login check will
+// refuse).
 type MutationReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	State         *State                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
+	Warnings      []string               `protobuf:"bytes,2,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MutationReply) Reset() {
 	*x = MutationReply{}
-	mi := &file_control_proto_msgTypes[21]
+	mi := &file_control_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1103,7 +1345,7 @@ func (x *MutationReply) String() string {
 func (*MutationReply) ProtoMessage() {}
 
 func (x *MutationReply) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[21]
+	mi := &file_control_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1116,12 +1358,19 @@ func (x *MutationReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MutationReply.ProtoReflect.Descriptor instead.
 func (*MutationReply) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{21}
+	return file_control_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *MutationReply) GetState() *State {
 	if x != nil {
 		return x.State
+	}
+	return nil
+}
+
+func (x *MutationReply) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
 	}
 	return nil
 }
@@ -1143,10 +1392,11 @@ const file_control_proto_rawDesc = "" +
 	"\x0fShutdownRequest\x12\x14\n" +
 	"\x05drain\x18\x01 \x01(\bR\x05drain\x12\x1b\n" +
 	"\x06reason\x18\x02 \x01(\tH\x00R\x06reason\x88\x01\x01B\t\n" +
-	"\a_reason\"P\n" +
+	"\a_reason\"t\n" +
 	"\rShutdownReply\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12#\n" +
-	"\rdraining_jobs\x18\x02 \x01(\x05R\fdrainingJobs\"\x1a\n" +
+	"\rdraining_jobs\x18\x02 \x01(\x05R\fdrainingJobs\x12\"\n" +
+	"\rhard_limit_ms\x18\x03 \x01(\x03R\vhardLimitMs\"\x1a\n" +
 	"\x18FleetTUIConnectedRequest\"\x18\n" +
 	"\x16FleetTUIConnectedReply\"2\n" +
 	"\x1aDeleteBuildkitCacheRequest\x12\x14\n" +
@@ -1157,8 +1407,27 @@ const file_control_proto_rawDesc = "" +
 	"\x13DeleteDebCacheReply\"/\n" +
 	"\x17DeleteImageCacheRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\"\x17\n" +
-	"\x15DeleteImageCacheReply\"\x11\n" +
-	"\x0fGetStateRequest\"\xa5\x01\n" +
+	"\x15DeleteImageCacheReply\",\n" +
+	"\x14GetCacheUsageRequest\x12\x14\n" +
+	"\x05fleet\x18\x01 \x01(\tR\x05fleet\"e\n" +
+	"\x12GetCacheUsageReply\x12-\n" +
+	"\x06caches\x18\x01 \x03(\v2\x15.fleetgrpc.CacheUsageR\x06caches\x12 \n" +
+	"\vunavailable\x18\x02 \x03(\tR\vunavailable\"\xf2\x01\n" +
+	"\n" +
+	"CacheUsage\x12\x18\n" +
+	"\aservice\x18\x01 \x01(\tR\aservice\x12\x18\n" +
+	"\acluster\x18\x02 \x01(\tR\acluster\x12\x1a\n" +
+	"\blocation\x18\x03 \x01(\tR\blocation\x12\x1d\n" +
+	"\n" +
+	"used_bytes\x18\x04 \x01(\x03R\tusedBytes\x12%\n" +
+	"\x0ecapacity_bytes\x18\x05 \x01(\x03R\rcapacityBytes\x12\x1e\n" +
+	"\n" +
+	"expandable\x18\x06 \x01(\bR\n" +
+	"expandable\x12\x14\n" +
+	"\x05state\x18\a \x01(\tR\x05state\x12\x18\n" +
+	"\awarning\x18\b \x01(\tR\awarning\"8\n" +
+	"\x0fGetStateRequest\x12%\n" +
+	"\x0efresh_branches\x18\x01 \x01(\bR\rfreshBranches\"\xa5\x01\n" +
 	"\rGetStateReply\x12&\n" +
 	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05state\x124\n" +
 	"\aruntime\x18\x02 \x03(\v2\x1a.fleetgrpc.InstanceRuntimeR\aruntime\x126\n" +
@@ -1189,9 +1458,10 @@ const file_control_proto_rawDesc = "" +
 	"\n" +
 	"fleet_name\x18\x03 \x01(\tR\tfleetName\"5\n" +
 	"\x19SetLastSeenVersionRequest\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\tR\aversion\"7\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\"S\n" +
 	"\rMutationReply\x12&\n" +
-	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05stateB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05state\x12\x1a\n" +
+	"\bwarnings\x18\x02 \x03(\tR\bwarningsB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_control_proto_rawDescOnce sync.Once
@@ -1205,7 +1475,7 @@ func file_control_proto_rawDescGZIP() []byte {
 	return file_control_proto_rawDescData
 }
 
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_control_proto_goTypes = []any{
 	(*HelloRequest)(nil),               // 0: fleetgrpc.HelloRequest
 	(*HelloReply)(nil),                 // 1: fleetgrpc.HelloReply
@@ -1219,36 +1489,40 @@ var file_control_proto_goTypes = []any{
 	(*DeleteDebCacheReply)(nil),        // 9: fleetgrpc.DeleteDebCacheReply
 	(*DeleteImageCacheRequest)(nil),    // 10: fleetgrpc.DeleteImageCacheRequest
 	(*DeleteImageCacheReply)(nil),      // 11: fleetgrpc.DeleteImageCacheReply
-	(*GetStateRequest)(nil),            // 12: fleetgrpc.GetStateRequest
-	(*GetStateReply)(nil),              // 13: fleetgrpc.GetStateReply
-	(*CreateFleetRequest)(nil),         // 14: fleetgrpc.CreateFleetRequest
-	(*DestroyFleetRequest)(nil),        // 15: fleetgrpc.DestroyFleetRequest
-	(*SetFleetSettingsRequest)(nil),    // 16: fleetgrpc.SetFleetSettingsRequest
-	(*SetInstanceMetadataRequest)(nil), // 17: fleetgrpc.SetInstanceMetadataRequest
-	(*SetGroupLayoutRequest)(nil),      // 18: fleetgrpc.SetGroupLayoutRequest
-	(*DeleteGroupLayoutRequest)(nil),   // 19: fleetgrpc.DeleteGroupLayoutRequest
-	(*SetLastSeenVersionRequest)(nil),  // 20: fleetgrpc.SetLastSeenVersionRequest
-	(*MutationReply)(nil),              // 21: fleetgrpc.MutationReply
-	(*timestamppb.Timestamp)(nil),      // 22: google.protobuf.Timestamp
-	(*State)(nil),                      // 23: fleetgrpc.State
-	(*InstanceRuntime)(nil),            // 24: fleetgrpc.InstanceRuntime
-	(*JobSummary)(nil),                 // 25: fleetgrpc.JobSummary
-	(*FleetSettings)(nil),              // 26: fleetgrpc.FleetSettings
-	(*GroupLayout)(nil),                // 27: fleetgrpc.GroupLayout
+	(*GetCacheUsageRequest)(nil),       // 12: fleetgrpc.GetCacheUsageRequest
+	(*GetCacheUsageReply)(nil),         // 13: fleetgrpc.GetCacheUsageReply
+	(*CacheUsage)(nil),                 // 14: fleetgrpc.CacheUsage
+	(*GetStateRequest)(nil),            // 15: fleetgrpc.GetStateRequest
+	(*GetStateReply)(nil),              // 16: fleetgrpc.GetStateReply
+	(*CreateFleetRequest)(nil),         // 17: fleetgrpc.CreateFleetRequest
+	(*DestroyFleetRequest)(nil),        // 18: fleetgrpc.DestroyFleetRequest
+	(*SetFleetSettingsRequest)(nil),    // 19: fleetgrpc.SetFleetSettingsRequest
+	(*SetInstanceMetadataRequest)(nil), // 20: fleetgrpc.SetInstanceMetadataRequest
+	(*SetGroupLayoutRequest)(nil),      // 21: fleetgrpc.SetGroupLayoutRequest
+	(*DeleteGroupLayoutRequest)(nil),   // 22: fleetgrpc.DeleteGroupLayoutRequest
+	(*SetLastSeenVersionRequest)(nil),  // 23: fleetgrpc.SetLastSeenVersionRequest
+	(*MutationReply)(nil),              // 24: fleetgrpc.MutationReply
+	(*timestamppb.Timestamp)(nil),      // 25: google.protobuf.Timestamp
+	(*State)(nil),                      // 26: fleetgrpc.State
+	(*InstanceRuntime)(nil),            // 27: fleetgrpc.InstanceRuntime
+	(*JobSummary)(nil),                 // 28: fleetgrpc.JobSummary
+	(*FleetSettings)(nil),              // 29: fleetgrpc.FleetSettings
+	(*GroupLayout)(nil),                // 30: fleetgrpc.GroupLayout
 }
 var file_control_proto_depIdxs = []int32{
-	22, // 0: fleetgrpc.HelloReply.started_at:type_name -> google.protobuf.Timestamp
-	23, // 1: fleetgrpc.GetStateReply.state:type_name -> fleetgrpc.State
-	24, // 2: fleetgrpc.GetStateReply.runtime:type_name -> fleetgrpc.InstanceRuntime
-	25, // 3: fleetgrpc.GetStateReply.active_jobs:type_name -> fleetgrpc.JobSummary
-	26, // 4: fleetgrpc.SetFleetSettingsRequest.settings:type_name -> fleetgrpc.FleetSettings
-	27, // 5: fleetgrpc.SetGroupLayoutRequest.layout:type_name -> fleetgrpc.GroupLayout
-	23, // 6: fleetgrpc.MutationReply.state:type_name -> fleetgrpc.State
-	7,  // [7:7] is the sub-list for method output_type
-	7,  // [7:7] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	25, // 0: fleetgrpc.HelloReply.started_at:type_name -> google.protobuf.Timestamp
+	14, // 1: fleetgrpc.GetCacheUsageReply.caches:type_name -> fleetgrpc.CacheUsage
+	26, // 2: fleetgrpc.GetStateReply.state:type_name -> fleetgrpc.State
+	27, // 3: fleetgrpc.GetStateReply.runtime:type_name -> fleetgrpc.InstanceRuntime
+	28, // 4: fleetgrpc.GetStateReply.active_jobs:type_name -> fleetgrpc.JobSummary
+	29, // 5: fleetgrpc.SetFleetSettingsRequest.settings:type_name -> fleetgrpc.FleetSettings
+	30, // 6: fleetgrpc.SetGroupLayoutRequest.layout:type_name -> fleetgrpc.GroupLayout
+	26, // 7: fleetgrpc.MutationReply.state:type_name -> fleetgrpc.State
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -1260,14 +1534,14 @@ func file_control_proto_init() {
 	file_runtime_proto_init()
 	file_jobs_proto_init()
 	file_control_proto_msgTypes[2].OneofWrappers = []any{}
-	file_control_proto_msgTypes[17].OneofWrappers = []any{}
+	file_control_proto_msgTypes[20].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   22,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

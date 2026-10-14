@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Opening a session group does not pull in a sibling group whose ID is a string prefix (dog vs dog-2)
 set -euo pipefail
 

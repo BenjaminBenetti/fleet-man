@@ -2,11 +2,15 @@ package server
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/svcruntimetest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -57,6 +61,9 @@ func TestCreateFleetPersistsAndIsIdempotent(t *testing.T) {
 
 func TestDestroyFleetRejectsNonEmptyAndIsIdempotent(t *testing.T) {
 	isolateFleetDir(t)
+	// The teardown would otherwise remove the host docker's containers and
+	// network for any real fleet named "empty" or "ghost".
+	stubHostServices(t, svcruntimetest.New("docker"))
 	svc := newService()
 	ctx := context.Background()
 
@@ -182,6 +189,71 @@ func TestSetFleetSettingsCustomMounts(t *testing.T) {
 	st, _ := state.Load()
 	if mounts := st.Fleets["alpha"].Settings.CustomMounts; len(mounts) != 2 {
 		t.Fatalf("persisted custom mounts = %v, want the 2 valid entries", mounts)
+	}
+}
+
+// TestSetFleetSettingsCustomMountHostFolders: a custom mount's host folder
+// is normalized and keyed by its mount; a cleared one or one of no mount is
+// dropped; a relative folder, or one overlapping fleet's own ~/.fleet, is
+// refused; one missing on the daemon host is saved with a warning.
+func TestSetFleetSettingsCustomMountHostFolders(t *testing.T) {
+	isolateFleetDir(t)
+	svc := newService()
+	ctx := context.Background()
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	big := t.TempDir()
+	set := func(folders map[string]string) (*fleetgrpc.MutationReply, error) {
+		return svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{Fleet: "alpha", Settings: &fleetgrpc.FleetSettings{
+			CustomMounts: []string{"/opt/data", "/srv"}, CustomMountHostFolders: folders,
+		}})
+	}
+	reply, err := set(map[string]string{"/opt/data/": big + "/", "/srv": "", "/gone": "/x"})
+	if err != nil {
+		t.Fatalf("SetFleetSettings: %v", err)
+	}
+	got := reply.GetState().GetFleets()["alpha"].GetSettings().GetCustomMountHostFolders()
+	if len(got) != 1 || got["/opt/data"] != big {
+		t.Fatalf("host folders = %v, want only /opt/data -> %s", got, big)
+	}
+	if w := reply.GetWarnings(); len(w) != 0 {
+		t.Errorf("an existing folder warned: %v", w)
+	}
+	st, _ := state.Load()
+	if f := st.Fleets["alpha"].Settings.CustomMountHostFolders; f["/opt/data"] != big {
+		t.Fatalf("persisted host folders = %v", f)
+	}
+
+	reply, err = set(map[string]string{"/srv": big + "/missing"})
+	if err != nil {
+		t.Fatalf("SetFleetSettings with a missing folder: %v", err)
+	}
+	if w := reply.GetWarnings(); len(w) != 1 || !strings.Contains(w[0], "does not exist on the daemon host") {
+		t.Errorf("warnings = %v, want the missing folder named", w)
+	}
+
+	home, _ := os.UserHomeDir()
+	for name, folder := range map[string]string{
+		"relative":        "data",
+		"fleet's state":   state.FleetDir(),
+		"inside it":       filepath.Join(state.WorkspacesDir(), "alpha"),
+		"holding it":      home,
+		"the host's root": "/",
+	} {
+		if _, err := set(map[string]string{"/srv": folder}); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("%s (%s): want InvalidArgument, got %v", name, folder, err)
+		}
+	}
+	link := filepath.Join(big, "to-fleet")
+	if err := os.MkdirAll(state.FleetDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(state.FleetDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := set(map[string]string{"/srv": link}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("a link to fleet's state: want InvalidArgument, got %v", err)
 	}
 }
 
@@ -318,6 +390,16 @@ func TestSetInstanceMetadataRejectsDisplayNameWithSpaces(t *testing.T) {
 		Fleet: "alpha", Instance: "i1", DisplayName: ptr(""),
 	}); err != nil {
 		t.Fatalf("clear display name: %v", err)
+	}
+
+	// A label is never a path: what a name may not be (a fleet folder's,
+	// a path) it still may be.
+	for _, label := range []string{"feat/login", "files", ".claude"} {
+		if _, err := svc.SetInstanceMetadata(ctx, &fleetgrpc.SetInstanceMetadataRequest{
+			Fleet: "alpha", Instance: "i1", DisplayName: ptr(label),
+		}); err != nil {
+			t.Fatalf("display name %q: %v", label, err)
+		}
 	}
 }
 

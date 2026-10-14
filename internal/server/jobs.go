@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,19 +14,16 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
 	"github.com/BenjaminBenetti/fleet-man/internal/create"
-	"github.com/BenjaminBenetti/fleet-man/internal/debcache"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleetnet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -40,17 +38,20 @@ import (
 // does NOT own the job: if the client disconnects the goroutine keeps running,
 // and a JobSummary stays on GetState so a watcher can learn the job exists.
 //
-// Progress granularity is intentionally COARSE here (JobStarted -> work ->
-// JobDone): per the proto's terminal-truth note the authoritative terminal state
-// is the StateChanged snapshot, and the job stream is best-effort progress UI.
-// Fine-grained JobStep progress can be threaded through create.Run later.
+// Per the proto's terminal-truth note the authoritative terminal state is the
+// StateChanged snapshot, and the job stream is best-effort progress UI. The
+// provisioning jobs (create, clone, rebuild) fill it in between: their run
+// writes to a provisioningLog (provisioning_log.go), which turns its steps,
+// output and warnings into JobProgress and JobLog events and the instance's
+// creation log. The lifecycle jobs (start, stop, destroy) stay coarse
+// (JobStarted -> work -> JobDone).
 
 // --- work seams (overridable in tests so the engine is exercised without docker) ---
 
 var jobRunCreate = create.RunContext
 
-var jobRunClone = func(fleetName, srcInstance, destInstance string, verbose bool) error {
-	return create.RunClone(fleetName, srcInstance, destInstance, verbose)
+var jobRunClone = func(ctx context.Context, fleetName, srcInstance, destInstance string, verbose bool) error {
+	return create.RunClone(ctx, fleetName, srcInstance, destInstance, verbose)
 }
 
 var jobRunStart = func(fleetName, instanceName string) error {
@@ -63,92 +64,27 @@ var jobRunStop = func(fleetName, instanceName string) error {
 	return err
 }
 
-var jobRunRebuild = func(fleetName, instanceName string) error {
-	return create.RunRebuild(fleetName, instanceName, false)
+var jobRunRebuild = func(ctx context.Context, fleetName, instanceName string) error {
+	return create.RunRebuild(ctx, fleetName, instanceName, false)
 }
 
-// stopBuildkitServer is the buildkit teardown seam (a package var so the destroy
-// paths can be exercised in tests without docker).
-var stopBuildkitServer = buildkit.StopSharedServer
-
-// teardownFleetBuildkit removes a fleet's shared buildkit CONTAINER when the
-// fleet had the feature enabled, so it doesn't orphan or (given its
-// restart=unless-stopped policy) auto-restart after the fleet is gone. It
-// deliberately LEAVES the .buildkit cache directory on disk: a shared build
-// cache is the whole point of the feature, so it should persist across a fleet
-// teardown and warm the next instance created for a fleet of the same name —
-// exactly like the persisted .claude/.codex/.config/gh mount dirs already do.
-// Best-effort: a failure becomes a warning, never an abort. Shared by the
-// destroy job and the DestroyFleet RPC so the container is reclaimed no matter
-// which delete path runs (destroy_fleet=true vs. removing an already-empty fleet).
-func teardownFleetBuildkit(fleetName string, enabled bool) []string {
-	if !enabled {
-		return nil
-	}
-	if err := stopBuildkitServer(fleetName); err != nil {
-		return []string{fmt.Sprintf("stop buildkit server: %v", err)}
-	}
-	return nil
-}
-
-// stopDebCacheServer / stopImageCacheServer / removeFleetNetwork are the deb/
-// image cache + network teardown seams (package vars so the destroy paths can be
-// exercised in tests without docker). Mirror stopBuildkitServer.
-var stopDebCacheServer = debcache.StopSharedServer
-var stopImageCacheServer = imagecache.StopSharedServer
-var removeFleetNetwork = fleetnet.RemoveNetwork
-
-// teardownFleetDebCache removes a fleet's shared deb cache CONTAINER when the
-// fleet had the feature enabled. Like teardownFleetBuildkit it LEAVES the
-// .aptcache directory on disk so the cache warms the next fleet of the same
-// name. Best-effort: a failure becomes a warning, never an abort.
-func teardownFleetDebCache(fleetName string, enabled bool) []string {
-	if !enabled {
-		return nil
-	}
-	if err := stopDebCacheServer(fleetName); err != nil {
-		return []string{fmt.Sprintf("stop deb cache server: %v", err)}
-	}
-	return nil
-}
-
-// teardownFleetImageCache removes a fleet's shared image cache CONTAINER when
-// the fleet had the feature enabled (leaving .imgcache on disk). Best-effort.
-func teardownFleetImageCache(fleetName string, enabled bool) []string {
-	if !enabled {
-		return nil
-	}
-	if err := stopImageCacheServer(fleetName); err != nil {
-		return []string{fmt.Sprintf("stop image cache server: %v", err)}
-	}
-	return nil
-}
-
-// teardownFleetNetwork removes a fleet's shared cache network when the fleet
-// used a network-based cache (deb or image). It must run AFTER the cache
-// containers and instances are gone, since docker refuses to remove a network
-// with active endpoints. Best-effort.
-func teardownFleetNetwork(fleetName string, enabled bool) []string {
-	if !enabled {
-		return nil
-	}
-	if err := removeFleetNetwork(fleetName); err != nil {
-		return []string{fmt.Sprintf("remove fleet network: %v", err)}
-	}
-	return nil
-}
-
-// jobDownInstance tears down one provisioned instance's container. Best-effort:
-// a backend failure is returned so the caller can WARN, but teardown proceeds.
+// jobDownInstance tears down one instance's container. Best-effort: a backend
+// failure is returned so the caller can WARN, but teardown proceeds.
 var jobDownInstance = func(inst *fleet.Instance) error {
+	return downInstance(backendutil.NewForInstance(inst, false), inst)
+}
+
+// downInstance tears inst down through b, its NewForInstance backend. An
+// instance with a ContainerID goes through Down. One without never finished
+// provisioning: a backend that can find what a failed or interrupted create
+// allocated by the instance's key (backend.OrphanDowner) removes that, and for
+// every other backend there is nothing to remove.
+func downInstance(b backend.Backend, inst *fleet.Instance) error {
 	if inst.ContainerID == "" {
+		if od, ok := b.(backend.OrphanDowner); ok {
+			return od.DownByKey()
+		}
 		return nil
-	}
-	var b backend.Backend
-	if inst.Backend == "" {
-		b = backendutil.New(fleet.BackendDevcontainer, false)
-	} else {
-		b = backendutil.NewForInstance(inst, false)
 	}
 	return b.Down(inst.ContainerID)
 }
@@ -161,10 +97,19 @@ var jobDownInstance = func(inst *fleet.Instance) error {
 // holds the durable status/error.
 const finishedJobRetention = 256
 
+// jobLogHistory bounds the JobLog events a job's history keeps for a watcher
+// that attaches late: the most recent ones survive. A create can print many
+// thousands of build lines; the instance's creation log keeps all of them.
+const jobLogHistory = 200
+
 type jobManager struct {
 	seq    int64
 	mu     sync.Mutex
 	active map[string]*job
+	// onChange, when set, is called (outside every lock) whenever the set of
+	// active jobs or one's current step changes: a job started, moved to another
+	// step, or finished. The service pushes the new set to Watch (ActiveJobs).
+	onChange func()
 	// finished retains terminal jobs (bounded by finishedJobRetention) so an
 	// async caller — e.g. the MCP fleet_job_status tool — can still read a job's
 	// outcome after it completes. finishedIDs is the FIFO eviction order.
@@ -178,16 +123,39 @@ func newJobManager() *jobManager {
 
 type job struct {
 	summary *fleetgrpc.JobSummary
+	// target is where a create job's instance goes, echoed on JobStarted. Set
+	// before the job's goroutine starts; nil for other kinds.
+	target *fleetgrpc.DeployTarget
+
+	// ctx is the job's own context (jobcancel.go): derived from the daemon's
+	// background context, so it ends at shutdown, and cancellable on its own —
+	// a destroy cancels the provisioning jobs of its targets. cancel ends it with
+	// a cause; exited closes once runJob has returned.
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	exited chan struct{}
+
+	// onChange is the manager's (see jobManager.onChange), called when this
+	// job's current step changes.
+	onChange func()
 
 	mu      sync.Mutex
 	history []*fleetgrpc.JobEvent
-	subs    map[chan *fleetgrpc.JobEvent]struct{}
-	done    bool
+	// logEvents counts the JobLog events in history (at most jobLogHistory).
+	logEvents int
+	subs      map[chan *fleetgrpc.JobEvent]struct{}
+	done      bool
 }
 
-func (m *jobManager) start(kind fleetgrpc.JobKind, fleetName, instanceName string, startedAt time.Time) *job {
+// start registers a new in-flight job whose context derives from parent (the
+// daemon's background context, s.bgCtx) — see newJobContext.
+func (m *jobManager) start(parent context.Context, kind fleetgrpc.JobKind, fleetName, instanceName string, startedAt time.Time) *job {
 	id := fmt.Sprintf("job-%d-%d", os.Getpid(), atomic.AddInt64(&m.seq, 1))
+	ctx, cancel := newJobContext(parent)
 	j := &job{
+		ctx:    ctx,
+		cancel: cancel,
+		exited: make(chan struct{}),
 		summary: &fleetgrpc.JobSummary{
 			JobId:     id,
 			Kind:      kind,
@@ -195,12 +163,21 @@ func (m *jobManager) start(kind fleetgrpc.JobKind, fleetName, instanceName strin
 			Instance:  instanceName,
 			StartedAt: timestamppb.New(startedAt),
 		},
-		subs: make(map[chan *fleetgrpc.JobEvent]struct{}),
+		subs:     make(map[chan *fleetgrpc.JobEvent]struct{}),
+		onChange: m.onChange,
 	}
 	m.mu.Lock()
 	m.active[id] = j
 	m.mu.Unlock()
+	m.changed()
 	return j
+}
+
+// changed tells onChange (if set) that the active jobs changed.
+func (m *jobManager) changed() {
+	if m.onChange != nil {
+		m.onChange()
+	}
 }
 
 func (m *jobManager) finish(id string) {
@@ -218,6 +195,7 @@ func (m *jobManager) finish(id string) {
 	m.mu.Unlock()
 	if j != nil {
 		j.closeSubs()
+		m.changed()
 	}
 }
 
@@ -232,36 +210,87 @@ func (m *jobManager) get(id string) *job {
 	return m.finished[id]
 }
 
-// summaries snapshots the in-flight jobs for GetState/Watch.
+// summaries snapshots the in-flight jobs for GetState/Watch, oldest first.
+// Each summary is a copy taken under its job's lock, since a running job moves
+// its current step while a caller marshals the snapshot.
 func (m *jobManager) summaries() []*fleetgrpc.JobSummary {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	out := make([]*fleetgrpc.JobSummary, 0, len(m.active))
 	for _, j := range m.active {
-		out = append(out, j.summary)
+		out = append(out, j.snapshot())
 	}
+	m.mu.Unlock()
+	sort.Slice(out, func(a, b int) bool {
+		ta, tb := out[a].GetStartedAt().AsTime(), out[b].GetStartedAt().AsTime()
+		if !ta.Equal(tb) {
+			return ta.Before(tb)
+		}
+		return out[a].GetJobId() < out[b].GetJobId()
+	})
 	return out
+}
+
+// activeJobs is the Watch ActiveJobs set: every in-flight job's summary.
+func (m *jobManager) activeJobs() *fleetgrpc.ActiveJobs {
+	return &fleetgrpc.ActiveJobs{Jobs: m.summaries()}
+}
+
+// snapshot is a copy of the job's summary, current step included.
+func (j *job) snapshot() *fleetgrpc.JobSummary {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return proto.Clone(j.summary).(*fleetgrpc.JobSummary)
+}
+
+// currentStep is the step the job last reported.
+func (j *job) currentStep() fleetgrpc.JobStep {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.summary.GetCurrentStep()
 }
 
 // emit appends an event to the job history and fans it out to live subscribers.
 // The non-blocking send under the lock can't race a closeSubs (also locked), so
-// it never sends on a closed channel; a full buffer drops (coarse jobs — a few
-// events — never fill the 64-slot buffer, and a re-subscribe always replays the
-// full history).
+// it never sends on a closed channel; a full buffer drops (a subscriber that
+// falls behind a burst of log lines misses some, and relay still delivers the
+// JobDone). History keeps every event but JobLog, of which it keeps the
+// jobLogHistory most recent, so a re-subscribe replays the whole progress.
 func (j *job) emit(ev *fleetgrpc.JobEvent) {
 	j.mu.Lock()
-	defer j.mu.Unlock()
 	j.history = append(j.history, ev)
+	if ev.GetLog() != nil {
+		j.logEvents++
+		if j.logEvents > jobLogHistory {
+			j.dropOldestLogLocked()
+		}
+	}
 	if ev.GetDone() != nil {
 		j.done = true
 	}
-	if p := ev.GetProgress(); p != nil {
+	stepChanged := false
+	if p := ev.GetProgress(); p != nil && p.GetStep() != j.summary.GetCurrentStep() {
 		j.summary.CurrentStep = p.GetStep()
+		stepChanged = true
 	}
 	for ch := range j.subs {
 		select {
 		case ch <- ev:
 		default:
+		}
+	}
+	j.mu.Unlock()
+	if stepChanged && j.onChange != nil {
+		j.onChange()
+	}
+}
+
+// dropOldestLogLocked removes the oldest JobLog event from the history.
+func (j *job) dropOldestLogLocked() {
+	for i, ev := range j.history {
+		if ev.GetLog() != nil {
+			j.history = append(j.history[:i], j.history[i+1:]...)
+			j.logEvents--
+			return
 		}
 	}
 }
@@ -319,6 +348,8 @@ func (j *job) outcome() *fleetgrpc.JobDone {
 // finished/failed) so fleet.log carries an operation-level trail for ALL
 // lifecycle jobs — including those whose work has no logging of its own.
 func (s *service) runJob(j *job, work func() (finalInstance *fleetgrpc.Instance, warnings []string, err error)) {
+	defer close(j.exited)
+	defer j.cancel(errJobFinished)
 	start := time.Now()
 	kind := jobKindName(j.summary.Kind)
 	flog.Info("job started", "job", j.summary.JobId, "kind", kind, "fleet", j.summary.Fleet, "instance", j.summary.Instance)
@@ -328,6 +359,7 @@ func (s *service) runJob(j *job, work func() (finalInstance *fleetgrpc.Instance,
 		Fleet:     j.summary.Fleet,
 		Instance:  j.summary.Instance,
 		StartedAt: j.summary.StartedAt,
+		Target:    j.target,
 	}}})
 
 	finalInstance, warnings, err := work()
@@ -387,6 +419,12 @@ func relay(j *job, stream interface {
 			return stream.Context().Err()
 		case ev, ok := <-ch:
 			if !ok {
+				// The job finished. Its JobDone can have been dropped from a
+				// full buffer (a burst of log lines); the stream's contract
+				// ends on one, so send it from the history.
+				if d := j.outcome(); d != nil {
+					return stream.Send(&fleetgrpc.JobEvent{JobId: j.summary.GetJobId(), Event: &fleetgrpc.JobEvent_Done{Done: d}})
+				}
 				return nil
 			}
 			if err := stream.Send(ev); err != nil {
@@ -448,10 +486,12 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	backendType := s.resolveBackend(req.GetBackend())
 	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, instanceName, fleetName)
 
-	var remote string
+	var (
+		remote string
+		target fleet.DeployTarget
+	)
 	err := state.Update(func(st *state.State) error {
 		f, ok := st.Fleets[fleetName]
 		if !ok {
@@ -480,43 +520,81 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		} else {
 			remote = f.Remote
 		}
-		// An UNSPECIFIED backend resolved to the host default (which may be
-		// coder) — for a template fleet, devcontainer is the only backend that
-		// can consume a copied directory, so narrow it the way the TUI's add-
-		// instance dialog does. An explicit coder/codespaces still fails fast.
-		if req.GetBackend() == fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED && fleet.IsTemplateRemote(remote) {
-			backendType = fleet.BackendDevcontainer
+		// Resolved once the remote is known: an UNSPECIFIED target takes the
+		// remembered default, which a template fleet narrows to devcontainer
+		// or a cluster (the targets that can consume a copied directory), as
+		// ListDeployTargets does, so a remembered cluster default is kept. An
+		// explicit coder/codespaces still fails fast.
+		target = s.resolveTarget(req, remote)
+		// Refused before the record exists: a backend a new instance can't
+		// use would otherwise leave a FAILED record behind.
+		if err := fleet.ValidateBackendType(target.Backend); err != nil {
+			return status.Error(codes.InvalidArgument, err.Error())
 		}
-		if err := validateTemplateRemote(remote, req.GetBranch(), backendType, wsDir); err != nil {
+		// A cluster target names a connection that exists and has room
+		// under its quotas.
+		if err := s.kube.createAllowed(st, target); err != nil {
+			return err
+		}
+		if err := validateTemplateRemote(remote, req.GetBranch(), target.Backend, wsDir); err != nil {
 			return err
 		}
 		if _, err := f.GetInstance(instanceName); err == nil {
 			return status.Errorf(codes.AlreadyExists, "instance %s/%s already exists", fleetName, instanceName)
 		}
-		return f.AddInstance(&fleet.Instance{
+		inst := &fleet.Instance{
 			Name:         instanceName,
 			DisplayName:  instanceName,
 			Config:       ".devcontainer/devcontainer.json",
 			WorkspaceDir: wsDir,
 			CreatedAt:    time.Now(),
 			Status:       fleet.StatusCreating,
-			Backend:      backendType,
+			Backend:      target.Backend,
+			KubeCluster:  target.KubeCluster,
 			Branch:       req.GetBranch(),
 			Automated:    automated,
-		})
+		}
+		if target.Backend == fleet.BackendKubernetes {
+			// The key every object of the instance carries, on the record
+			// before the job applies any.
+			if err := assignKubeKey(st, fleetName, inst); err != nil {
+				return status.Error(codes.FailedPrecondition, err.Error())
+			}
+		}
+		return f.AddInstance(inst)
 	})
 	if err != nil {
 		return nil, err
 	}
+	if req.GetRememberDefault() {
+		// The create is accepted either way; a target that couldn't be
+		// remembered only means the next unspecified create gets the old one.
+		if err := s.rememberDefaultTarget(target); err != nil {
+			flog.Warn("remember default deploy target failed", "target", target.String(), "err", err)
+		}
+	}
 	s.pushState()
 
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, fleetName, instanceName, time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, fleetName, instanceName, time.Now())
+	j.target = protoconv.DeployTargetToProto(target)
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		ctx := gitutil.WithHostKeyPrompt(s.bgCtx, s.gitHostKeys.ask)
-		err := jobRunCreate(ctx, fleetName, instanceName, remote, req.GetBranch(), req.GetVerbose(), backendType)
+		plog := openProvisioningLog(j, fleetName, instanceName, "create")
+		ctx := backend.WithJobLog(gitutil.WithHostKeyPrompt(s.provisionHooks(j.ctx, fleetName, instanceName), s.gitHostKeys.ask), plog)
+		err := jobRunCreate(ctx, fleetName, instanceName, remote, req.GetBranch(), req.GetVerbose(), target.Backend)
+		plog.finish(err)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil
+}
+
+// provisionHooks is ctx carrying the server-owned steps a provisioning run
+// of fleetName/instanceName runs (backend.Hooks): the shared-state Ready
+// gate, which a Kubernetes instance passes once the fleet's logins and
+// settings are in its pod, before its devcontainer hooks run.
+func (s *service) provisionHooks(ctx context.Context, fleetName, instanceName string) context.Context {
+	return backend.WithHooks(ctx, backend.Hooks{SharedStateReady: func(ctx context.Context) error {
+		return s.shareSync.ready(ctx, fleetName, instanceName)
+	}})
 }
 
 // remoteKind names a fleet remote's kind for error messages.
@@ -529,8 +607,8 @@ func remoteKind(remote string) string {
 
 // validateTemplateRemote fails a create FAST — before the StatusCreating record
 // exists — when the fleet's remote is a file:// template and the request asks
-// for something a copied directory cannot honor (a branch, a non-devcontainer
-// backend), or when the template directory is missing on THIS host. create.Run
+// for something a copied directory cannot honor (a branch, a Coder or
+// Codespaces backend), or when the template directory is missing on THIS host. create.Run
 // re-checks the same rules; doing it here turns a would-be failed instance
 // record into an immediate RPC error for `fleet up` / the TUI / MCP.
 func validateTemplateRemote(remote, branch string, backendType fleet.BackendType, wsDir string) error {
@@ -575,7 +653,7 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	if req.GetNewDisplayName() != "" {
-		if err := fleet.ValidateInstanceName(req.GetNewDisplayName()); err != nil {
+		if err := fleet.ValidateDisplayName(req.GetNewDisplayName()); err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 	}
@@ -597,6 +675,9 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 		if req.NewDisplayName != nil && req.GetNewDisplayName() != "" {
 			display = req.GetNewDisplayName()
 		}
+		// A clone runs where its source does: the same backend and, on a
+		// cluster, the same connection. Its KubeKey is its own (the cluster
+		// backend assigns it), never the source's.
 		dest := &fleet.Instance{
 			Name:         destName,
 			DisplayName:  display,
@@ -605,6 +686,7 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 			CreatedAt:    time.Now(),
 			Status:       fleet.StatusCloning,
 			Backend:      src.Backend,
+			KubeCluster:  src.KubeCluster,
 			Tag:          src.Tag,
 			Color:        src.Color,
 			Branch:       src.Branch,
@@ -618,6 +700,17 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 		if req.BranchOverride != nil {
 			dest.Branch = req.GetBranchOverride()
 		}
+		if dest.Backend == fleet.BackendKubernetes {
+			// A clone is an instance more on its source's connection, under
+			// its quotas, with a key of its own on the record before the
+			// clone applies anything.
+			if err := s.kube.createAllowed(st, fleet.DeployTarget{Backend: dest.Backend, KubeCluster: dest.KubeCluster}); err != nil {
+				return err
+			}
+			if err := assignKubeKey(st, fleetName, dest); err != nil {
+				return status.Error(codes.FailedPrecondition, err.Error())
+			}
+		}
 		return f.AddInstance(dest)
 	})
 	if err != nil {
@@ -625,9 +718,11 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 	}
 	s.pushState()
 
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_CLONE_INSTANCE, fleetName, destName, time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_CLONE_INSTANCE, fleetName, destName, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		err := jobRunClone(fleetName, srcName, destName, false)
+		plog := openProvisioningLog(j, fleetName, destName, "clone of "+srcName)
+		err := jobRunClone(backend.WithJobLog(s.provisionHooks(j.ctx, fleetName, destName), plog), fleetName, srcName, destName, false)
+		plog.finish(err)
 		return loadInstanceSnapshot(fleetName, destName), nil, err
 	})
 	return j, nil
@@ -646,9 +741,12 @@ func (s *service) startStartInstanceJob(req *fleetgrpc.StartInstanceRequest) (*j
 	if req.GetFleet() == "" || req.GetInstance() == "" {
 		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
 	}
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_START_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_START_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		err := jobRunStart(req.GetFleet(), req.GetInstance())
+		if err == nil {
+			s.kubePods.started(req.GetFleet(), req.GetInstance())
+		}
 		return loadInstanceSnapshot(req.GetFleet(), req.GetInstance()), nil, err
 	})
 	return j, nil
@@ -666,8 +764,11 @@ func (s *service) startStopInstanceJob(req *fleetgrpc.StopInstanceRequest) (*job
 	if req.GetFleet() == "" || req.GetInstance() == "" {
 		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
 	}
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_STOP_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_STOP_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
+		// A cluster instance's last changes to the fleet's shared folders
+		// reach the daemon host before its pod goes.
+		s.shareSync.beforeStop(req.GetFleet(), req.GetInstance())
 		err := jobRunStop(req.GetFleet(), req.GetInstance())
 		return loadInstanceSnapshot(req.GetFleet(), req.GetInstance()), nil, err
 	})
@@ -714,9 +815,9 @@ func (s *service) startRebuildInstanceJob(req *fleetgrpc.RebuildInstanceRequest)
 		if isTransitionalStatus(inst.Status) {
 			return status.Errorf(codes.FailedPrecondition, "instance %s/%s is %s; wait for it to settle before rebuilding", fleetName, instanceName, inst.Status)
 		}
-		// SupportsRebuild is a pure capability check, so construct by type
-		// (no RegisterName / SSH-config file I/O under the state lock).
-		if !backendutil.New(inst.Backend, false).SupportsRebuild() {
+		// SupportsRebuild is a pure capability check, so use the capability-only
+		// handle (no RegisterName / SSH-config file I/O under the state lock).
+		if !backendutil.CapabilitiesFor(inst).SupportsRebuild() {
 			return status.Errorf(codes.FailedPrecondition, "backend %q does not support rebuild", inst.Backend)
 		}
 		inst.Status = fleet.StatusRebuilding
@@ -727,9 +828,11 @@ func (s *service) startRebuildInstanceJob(req *fleetgrpc.RebuildInstanceRequest)
 	}
 	s.pushState()
 
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE, fleetName, instanceName, time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE, fleetName, instanceName, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		err := jobRunRebuild(fleetName, instanceName)
+		plog := openProvisioningLog(j, fleetName, instanceName, "rebuild")
+		err := jobRunRebuild(backend.WithJobLog(s.provisionHooks(j.ctx, fleetName, instanceName), plog), fleetName, instanceName)
+		plog.finish(err)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil
@@ -757,8 +860,11 @@ func isTransitionalStatus(s fleet.InstanceStatus) bool {
 	return false
 }
 
-// startDestroyInstanceJob validates the target, marks it deleting, and starts
-// the teardown job for one instance or (destroy_fleet) the whole fleet.
+// startDestroyInstanceJob validates the target, marks it deleting, cancels any
+// create/clone/rebuild still working on it, and starts the teardown job for
+// one instance or (destroy_fleet) the whole fleet. The teardown first waits (up
+// to destroyCancelWait) for the cancelled jobs to exit, so it never removes a
+// record and workspace out from under a run that is still provisioning them.
 // Best-effort: container/workspace failures become warnings, and the record is
 // removed regardless.
 func (s *service) startDestroyInstanceJob(req *fleetgrpc.DestroyInstanceRequest) (*job, error) {
@@ -802,11 +908,21 @@ func (s *service) startDestroyInstanceJob(req *fleetgrpc.DestroyInstanceRequest)
 		}
 		return nil
 	})
+	// Cancel the targets' in-flight create/clone/rebuild jobs AFTER marking them
+	// deleting: a run commits only under the state lock and only to a record
+	// that is not StatusDeleting, so from here on none of them can record a
+	// container this destroy would miss.
+	scope := target
+	if req.GetDestroyFleet() {
+		scope = ""
+	}
+	cancelled := s.jobs.cancelProvisioning(fleetName, scope, errInstanceDestroyed)
 	s.pushState()
 
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_DESTROY_INSTANCE, fleetName, target, time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_DESTROY_INSTANCE, fleetName, target, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		return nil, s.destroy(fleetName, target, req.GetDestroyFleet()), nil
+		warnings := awaitCancelledJobs(j.ctx, cancelled)
+		return nil, append(warnings, s.destroy(fleetName, target, req.GetDestroyFleet())...), nil
 	})
 	return j, nil
 }
@@ -847,7 +963,13 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 		}
 	}
 
+	// What the instances' pods hold of the fleet's shared folders reaches
+	// the daemon host before they go (a fleet's shares go after, below).
+	flushed := s.shareSync.beforeDestroy(fleetName, instanceName, destroyFleet)
 	for _, t := range targets {
+		// A Kubernetes instance's key is tombstoned first: what of it the
+		// teardown leaves is known garbage (kube_reconcile.go).
+		s.kubeRecovery.destroying(fleetName, t.inst)
 		if err := jobDownInstance(t.inst); err != nil {
 			warnings = append(warnings, fmt.Sprintf("teardown %s/%s container: %v", fleetName, t.name, err))
 		}
@@ -856,25 +978,25 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 				warnings = append(warnings, fmt.Sprintf("remove workspace %s: %v", t.workspaceDir, err))
 			}
 		}
+		removeCreationLog(fleetName, t.name)
 	}
 
 	// Fleet-level teardown: once every instance is down, remove the fleet's
-	// shared cache containers (and the shared network). Single-instance destroys
+	// shared service servers (and the shared network). Single-instance destroys
 	// leave them up — the fleet's other instances may still use them. Cache
-	// directories are intentionally kept on disk (see each teardown helper). The
-	// network is removed LAST, after the cache containers, so docker doesn't
-	// refuse it for active endpoints.
-	//
-	// The deb/image cache + network teardown is UNCONDITIONAL on a full destroy
-	// (not gated on the current setting): toggling a cache off does not stop its
-	// running container, so gating on the live setting would orphan a container
-	// the user disabled before destroying. The teardown helpers are idempotent
-	// (a missing container/network is a no-op), so this is safe even for fleets
-	// that never used a cache.
-	warnings = append(warnings, teardownFleetBuildkit(fleetName, destroyFleet && buildkitEnabled)...)
-	warnings = append(warnings, teardownFleetDebCache(fleetName, destroyFleet)...)
-	warnings = append(warnings, teardownFleetImageCache(fleetName, destroyFleet)...)
-	warnings = append(warnings, teardownFleetNetwork(fleetName, destroyFleet)...)
+	// directories are intentionally kept on disk, and the deb/image caches go
+	// whatever the current setting (see teardownFleetSharedServices).
+	var destroyed []*fleet.Instance
+	for _, t := range targets {
+		destroyed = append(destroyed, t.inst)
+	}
+	if destroyFleet {
+		warnings = append(warnings, teardownFleetSharedServices(fleetName, buildkitEnabled, destroyed)...)
+		// Its shares on the clusters: deleted once flushed, else kept as
+		// orphans (the daemon host keeps the canonical copy, and the
+		// clusters' logins in their login stores).
+		warnings = append(warnings, s.shareSync.retireFleet(fleetName, flushed)...)
+	}
 
 	_ = state.Update(func(st *state.State) error {
 		f, ok := st.Fleets[fleetName]
@@ -888,27 +1010,16 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 		_ = f.RemoveInstance(instanceName)
 		return nil
 	})
+	for _, t := range targets {
+		s.kubeRecovery.destroyed(t.inst)
+	}
+	// A runtime the fleet's last instance there just left lets go of what it
+	// kept for the fleet (a cluster: the fleet's objects but its caches'
+	// volumes). Records first: a runtime asks state.json whether the fleet is
+	// still there.
+	if !destroyFleet {
+		warnings = append(warnings, releaseFleetRuntimes(fleetName, destroyed)...)
+	}
 	s.pushState()
 	return warnings
-}
-
-// resolveBackend turns the request's BackendType into a concrete backend: an
-// explicit value wins; UNSPECIFIED falls back to config.json's DefaultBackend
-// (when valid) and finally devcontainer.
-func (s *service) resolveBackend(b fleetgrpc.BackendType) fleet.BackendType {
-	switch b {
-	case fleetgrpc.BackendType_BACKEND_TYPE_CODER:
-		return fleet.BackendCoder
-	case fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES:
-		return fleet.BackendCodespaces
-	case fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER:
-		return fleet.BackendDevcontainer
-	default:
-		if cfg, err := state.LoadConfig(); err == nil {
-			if bt := fleet.BackendType(cfg.DefaultBackend); fleet.ValidateBackendType(bt) == nil {
-				return bt
-			}
-		}
-		return fleet.BackendDevcontainer
-	}
 }

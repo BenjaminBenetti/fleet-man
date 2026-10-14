@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Tmux pane layout persists across fleet restarts (issue #16)
 set -euo pipefail
 

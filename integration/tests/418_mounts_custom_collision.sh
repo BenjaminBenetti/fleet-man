@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: a custom mount whose container path collides with a managed
 # mount target (Claude) must not crash `fleet up` with a "Duplicate mount
 # point" error. The resolver dedups by container path keeping the custom
@@ -14,7 +15,7 @@ setup_agent_test
 seed_fleet_settings "${FIXTURE_REPO_NAME}" true false /home/node false false '["/home/node/.claude"]'
 
 info "seeding the custom mount's host dir with a winner marker"
-custom_host="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/.mnt/home/node/.claude"
+custom_host=$(itest_share_dir "${FIXTURE_REPO_NAME}" .mnt/home/node/.claude)
 mkdir -p "${custom_host}"
 printf "custom\n" > "${custom_host}/WINNER.txt"
 
@@ -22,6 +23,7 @@ info "fleet up alpha (custom mount collides with managed Claude mount)"
 # fleet_up fails the test if provisioning exits non-zero — this is the
 # regression guard for the "Duplicate mount point" crash.
 fleet_up alpha
+itest_share_sync "${FIXTURE_REPO_NAME}"
 
 info "asserting /home/node/.claude is a directory inside the container"
 "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- test -d /home/node/.claude \

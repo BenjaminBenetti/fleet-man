@@ -15,6 +15,7 @@ func newUpCmd() *cobra.Command {
 	var repoFlag string
 	var backendFlag string
 	var branchFlag string
+	var clusterFlag string
 
 	cmd := &cobra.Command{
 		Use:   "up <name>",
@@ -23,9 +24,22 @@ func newUpCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			backendType, err := fleet.ParseBackendType(backendFlag)
-			if err != nil {
-				return err
+			// No --backend leaves the target to the daemon: its remembered
+			// default (the target last picked in a TUI New instance dialog),
+			// else devcontainer.
+			backend := fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED
+			if backendFlag != "" {
+				backendType, err := fleet.ParseBackendType(backendFlag)
+				if err != nil {
+					return err
+				}
+				backend = protoconv.BackendToProto(backendType)
+			}
+			if clusterFlag != "" {
+				if backendFlag != "" && backend != fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES {
+					return fmt.Errorf("--cluster runs the instance on Kubernetes, not %s", backendFlag)
+				}
+				backend = fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES
 			}
 
 			target, err := fleet.Resolve(name, repoFlag)
@@ -53,12 +67,10 @@ func newUpCmd() *cobra.Command {
 				}
 			}
 
-			fmt.Printf("Creating %s/%s (backend: %s)...\n", target.Fleet, target.Instance, backendType)
-
 			req := &fleetgrpc.CreateInstanceRequest{
 				Fleet:    target.Fleet,
 				Instance: target.Instance,
-				Backend:  protoconv.BackendToProto(backendType),
+				Backend:  backend,
 				Verbose:  true,
 			}
 			if remoteURL != "" {
@@ -67,8 +79,30 @@ func newUpCmd() *cobra.Command {
 			if branchFlag != "" {
 				req.Branch = &branchFlag
 			}
+			out := cmd.OutOrStdout()
 			if err := runInstanceJob(cmd.Context(), true, func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
-				return svc.CreateInstance(ctx, req)
+				if clusterFlag != "" {
+					// The connection is named as the cluster commands name it
+					// (id, name or context), resolved on the daemon's list.
+					reply, err := svc.ListKubeClusters(ctx, &fleetgrpc.ListKubeClustersRequest{})
+					if err != nil {
+						return nil, err
+					}
+					c, err := fleetgrpc.FindKubeCluster(reply.GetClusters(), clusterFlag)
+					if err != nil {
+						return nil, err
+					}
+					req.KubeCluster = c.GetCluster().GetId()
+				}
+				stream, err := svc.CreateInstance(ctx, req)
+				if err != nil {
+					return nil, err
+				}
+				// Announced once the daemon has accepted the create, so the line
+				// names the target it resolved, not one guessed here.
+				return onJobStarted(stream, func(started *fleetgrpc.JobStarted) {
+					fmt.Fprintf(out, "Creating %s/%s (backend: %s)...\n", target.Fleet, target.Instance, startedTargetLabel(started, backendFlag))
+				}), nil
 			}); err != nil {
 				return err
 			}
@@ -77,8 +111,7 @@ func newUpCmd() *cobra.Command {
 				if f := st.GetFleets()[target.Fleet]; f != nil {
 					for _, inst := range f.GetInstances() {
 						if inst.GetName() == target.Instance {
-							cid := inst.GetContainerId()
-							fmt.Printf("Instance %s/%s is running (container: %s)\n", target.Fleet, target.Instance, cid[:min(12, len(cid))])
+							fmt.Printf("Instance %s/%s is running (container: %s)\n", target.Fleet, target.Instance, fleet.ShortContainerID(inst.GetContainerId()))
 						}
 					}
 				}
@@ -88,7 +121,8 @@ func newUpCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&repoFlag, "repo", "", "Git remote URL to clone, or file:///abs/dir to copy a local template (needs <fleet>/<name>)")
-	cmd.Flags().StringVar(&backendFlag, "backend", "devcontainer", "Backend type: devcontainer, coder, or codespaces")
+	cmd.Flags().StringVar(&backendFlag, "backend", "", "Backend: devcontainer, coder, codespaces or kubernetes (default: fleetd's remembered target)")
+	cmd.Flags().StringVar(&clusterFlag, "cluster", "", "Kubernetes connection to run on (id, name or context)")
 	cmd.Flags().StringVar(&branchFlag, "branch", "", "Git branch to check out (defaults to the repository's default branch)")
 	return cmd
 }

@@ -250,6 +250,11 @@ func (c *streamCollector[T]) Context() context.Context { return c.ctx }
 // the gRPC path, where a dropped stream leaves the job running).
 func awaitJob(ctx context.Context, j *job) (final *fleetgrpc.Instance, warnings []string, err error) {
 	hist, ch := j.subscribe()
+	return awaitSubscribed(ctx, j, hist, ch)
+}
+
+// awaitSubscribed is awaitJob from a subscription already taken (j.subscribe).
+func awaitSubscribed(ctx context.Context, j *job, hist []*fleetgrpc.JobEvent, ch chan *fleetgrpc.JobEvent) (final *fleetgrpc.Instance, warnings []string, err error) {
 	for _, ev := range hist {
 		if d := ev.GetDone(); d != nil {
 			return doneOutcome(d)
@@ -267,6 +272,12 @@ func awaitJob(ctx context.Context, j *job) (final *fleetgrpc.Instance, warnings 
 			return nil, nil, ctx.Err()
 		case ev, ok := <-ch:
 			if !ok {
+				// The job finished. Its JobDone can have been dropped from
+				// the full buffer of a burst of log lines (a failed create's
+				// error, one event per line, comes right before it).
+				if d := j.outcome(); d != nil {
+					return doneOutcome(d)
+				}
 				return nil, nil, errors.New("job ended without a result")
 			}
 			if d := ev.GetDone(); d != nil {

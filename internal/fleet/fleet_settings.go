@@ -7,9 +7,10 @@ package fleet
 //
 // Each field declares the user's *intent*; whether the intent is honored
 // at provisioning time depends on the target backend. For mount-related
-// settings, backends that report SupportsCustomMounts()==false silently
-// skip them — the fleet-level toggle stays on for any future instance
-// created on a supporting backend.
+// settings, backends that report SupportsSharedMounts()==false silently
+// skip them, and the shared-service toggles apply only to instances that
+// have a shared-service runtime (svcruntime.ForInstance) — the fleet-level
+// toggle stays on for any future instance created on a supporting backend.
 type FleetSettings struct {
 	// ClaudeCodeMount enables a shared host directory at
 	// ~/.fleet/workspaces/<fleet>/.claude that is bind-mounted into every
@@ -48,9 +49,10 @@ type FleetSettings struct {
 	// cache. Plain bool (default off), matching the *Mount flags: false ==
 	// "never set" == disabled.
 	//
-	// This declares intent only. At provisioning time it is honored solely on
-	// backends that report SupportsCustomMounts()==true (devcontainer); cloud
-	// backends silently skip it. Even on a supporting backend, setup is
+	// This declares intent only. At provisioning time it is honored solely for
+	// instances whose shared services run on the daemon host's docker
+	// (devcontainer; see svcruntime.ForInstance); cloud backends silently skip
+	// it. Even on a supporting backend, setup is
 	// best-effort: if docker or buildx is absent inside an instance the
 	// configuration is skipped without error (the instance stays usable).
 	BuildkitServer bool `json:"buildkitServer,omitempty"`
@@ -64,10 +66,20 @@ type FleetSettings struct {
 	// NormalizeCustomMount) before persisting. When a custom mount's
 	// container path collides with a managed mount (Claude/Codex/Gh) the
 	// custom mount is resolved last and wins (see dirMountSpecsFor). Honored
-	// only on backends that report SupportsCustomMounts()==true
+	// only on backends that report SupportsSharedMounts()==true
 	// (devcontainer); other backends silently skip them. Empty (the default)
 	// means no custom mounts.
 	CustomMounts []string `json:"customMounts,omitempty"`
+
+	// CustomMountHostFolders gives a custom mount (keyed by its CustomMounts
+	// container path) a folder of the user's choosing on the daemon host
+	// instead of ~/.fleet/workspaces/<fleet>/.mnt/<path>: an absolute path
+	// (see NormalizeCustomMountHostFolders), which may be a link to a bigger
+	// disk. Docker binds it as it is, never making it nor changing its mode;
+	// a cluster keeps a copy on the fleet's share in step with it, both
+	// ways. A mount without an entry keeps the .mnt folder. Settable by any
+	// caller that may change the fleet's settings, local or remote.
+	CustomMountHostFolders map[string]string `json:"customMountHostFolders,omitempty"`
 
 	// DebCacheServer enables a shared apt-cacher-ng container for this fleet so
 	// repeated `apt install` across the fleet's instances reuse downloaded
@@ -77,10 +89,13 @@ type FleetSettings struct {
 	// (/etc/apt/apt.conf.d/01fleet-proxy) pointing at the cache. Plain bool
 	// (default off), matching BuildkitServer.
 	//
-	// Intent only: honored on SupportsCustomMounts()==true backends; cloud
-	// backends silently skip it. Best-effort — instances without apt (or where
-	// apt.conf.d is not writable) are skipped without error. Caches only HTTP
-	// apt sources (the default Debian/Ubuntu archives); HTTPS sources go direct.
+	// Intent only: honored where the instance's shared services run
+	// (svcruntime.ForInstance: the daemon host's docker, or a cluster, where
+	// the cache is a Deployment and apt uses it only while it answers, else
+	// goes direct); cloud backends silently skip it. Best-effort — instances
+	// without apt (or where apt.conf.d is not writable) are skipped without
+	// error. Caches only HTTP apt sources (the default Debian/Ubuntu
+	// archives); HTTPS sources go direct.
 	DebCacheServer bool `json:"debCacheServer,omitempty"`
 
 	// ImageCacheServer enables a shared registry pull-through cache (a
@@ -92,9 +107,11 @@ type FleetSettings struct {
 	// /etc/docker/daemon.json, then a SIGHUP reload). Plain bool (default off).
 	//
 	// Intent only and best-effort like the others. It only helps instances that
-	// run their OWN docker daemon (docker-in-docker); docker-outside-of-docker
-	// and no-docker instances are silently skipped. Only docker.io images are
-	// mirrored (that is all docker registry-mirrors ever applies to).
+	// run their OWN docker daemon (docker-in-docker, or on a cluster the
+	// pod's docker-outside-of-docker engine, FLEET_DOCKERD_CONFIG);
+	// docker-outside-of-docker on a docker host and no-docker instances are
+	// silently skipped. Only docker.io images are mirrored (that is all docker
+	// registry-mirrors ever applies to).
 	ImageCacheServer bool `json:"imageCacheServer,omitempty"`
 
 	// FleetMCP provides the fleet MCP server — the full one: every tool,

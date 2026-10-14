@@ -99,6 +99,10 @@ type Agent struct {
 	// same set offered when creating an instance. Empty falls back to
 	// BackendDevcontainer.
 	Backend BackendType `json:"backend,omitempty"`
+
+	// KubeCluster is the cluster connection (KubeCluster.ID) a Kubernetes
+	// agent's instances are created on; empty for every other backend.
+	KubeCluster string `json:"kube_cluster,omitempty"`
 }
 
 // Trigger is an automation trigger: it activates one or more Agents with a
@@ -174,7 +178,31 @@ func NormalizeAgent(a Agent) (Agent, error) {
 	if err := ValidateBackendType(a.Backend); err != nil {
 		return Agent{}, fmt.Errorf("agent %q: %w", a.Name, err)
 	}
+	// The target is stored concretely: a Kubernetes agent names its
+	// connection (a later change of the remembered default never moves an
+	// agent), and no other agent carries one.
+	a.KubeCluster = strings.TrimSpace(a.KubeCluster)
+	switch {
+	case a.Backend != BackendKubernetes:
+		a.KubeCluster = ""
+	case a.KubeCluster == "":
+		return Agent{}, fmt.Errorf("agent %q: a kubernetes agent needs the cluster connection it runs on", a.Name)
+	case strings.ContainsAny(a.KubeCluster, " \t\n/"):
+		return Agent{}, fmt.Errorf("agent %q: %q is not a cluster connection id", a.Name, a.KubeCluster)
+	}
 	return a, nil
+}
+
+// DeployTarget is where the agent's instances are created. An agent from
+// before the Backend field (Backend "") runs on devcontainer.
+func (a Agent) DeployTarget() DeployTarget {
+	if a.Backend == "" {
+		return DeployTarget{Backend: BackendDevcontainer}
+	}
+	if a.Backend != BackendKubernetes {
+		return DeployTarget{Backend: a.Backend}
+	}
+	return DeployTarget{Backend: a.Backend, KubeCluster: a.KubeCluster}
 }
 
 // NormalizeAgents validates every agent and returns the normalized list (input

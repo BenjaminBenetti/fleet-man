@@ -87,7 +87,7 @@ uses this to attach panes through a remote daemon.`,
 
 			// The server resolves the backend exec argv; we run it locally so the
 			// user's terminal is inherited (the TTY carve-out — no direct backend).
-			argv, env, err := resolveExecArgv(cmd.Context(), target.Fleet, target.Instance, shellCmd)
+			argv, env, err := resolveExecArgv(cmd.Context(), target.Fleet, target.Instance, shellCmd, true)
 			if err != nil {
 				return err
 			}
@@ -99,7 +99,7 @@ uses this to attach panes through a remote daemon.`,
 			execCmd.Stdin = os.Stdin
 			execCmd.Stdout = os.Stdout
 			execCmd.Stderr = os.Stderr
-			return execCmd.Run()
+			return rejoinLocalExit(execCmd.Run())
 		},
 	}
 

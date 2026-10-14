@@ -11,6 +11,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
 	"github.com/BenjaminBenetti/fleet-man/internal/platform"
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -54,6 +55,8 @@ func NewRootCmd() *cobra.Command {
 		newExecInSessionCmd(),
 		newReadSessionCmd(),
 		newLandingPageCmd(),
+		newBrowserProxyCmd(),
+		newNetProbeCmd(),
 		newMCPBridgeCmd(),
 		newMCPEnvCmd(),
 		newClaudeModEnvCmd(),
@@ -63,8 +66,19 @@ func NewRootCmd() *cobra.Command {
 		newGatewayCmd(),
 		newAgentCmd(),
 		newTriggerCmd(),
+		newClusterCmd(),
+		newSyncCmd(),
+		newMountCmd(),
 		newMicCmd(),
 		newOutputCmd(),
+		newExecAsCmd(),
+		newPodInitCmd(),
+		newPodJobCmd(),
+		newPodLayoutCmd(),
+		newPodAgentCmd(),
+		newKubeExecCmd(),
+		newSSHProxyCmd(),
+		newSSHServerCmd(),
 	)
 
 	return root
@@ -122,7 +136,10 @@ func relaunchInTmux() error {
 // so terminal-features (tmux 3.2+) must stay last.
 func tmuxSetupArgs(session, self string, vimKeys bool) []string {
 	args := []string{
-		"tmux", "new-session", "-d", "-s", session, self,
+		// tmux hands a lone shell-command to the user's default-shell, so
+		// the binary's path is quoted only when it needs it (spaces): a
+		// non-POSIX default-shell would print a quoted path, not run it.
+		"tmux", "new-session", "-d", "-s", session, shellquote.CommandWord(self),
 		";", "set", "-g", "set-clipboard", "on",
 		";", "set", "-g", "mouse", "on",
 		// The TUI provides all the UI; the outer status bar is dead

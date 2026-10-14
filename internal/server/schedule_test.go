@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -162,6 +164,29 @@ func TestAutomationInstanceName(t *testing.T) {
 	}
 }
 
+// A daemon started again counts its run names from 1 again: the name a
+// record of the fleet holds (the last daemon's interrupted create, still
+// being destroyed) is passed over, not created over ("already exists").
+func TestFreeAutomationInstanceNameSkipsTheFleetsRecords(t *testing.T) {
+	isolateFleetDir(t)
+	orig := atomic.LoadInt64(&automationSeq)
+	t.Cleanup(func() { atomic.StoreInt64(&automationSeq, orig) })
+	now := time.Date(2026, 10, 12, 1, 56, 20, 0, time.UTC)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{{Name: "queuer-015620-1", Status: fleet.StatusDeleting}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	atomic.StoreInt64(&automationSeq, 0)
+	if got := freeAutomationInstanceName("alpha", "queuer", now); got != "queuer-015620-2" {
+		t.Fatalf("a run of a restarted daemon is named %q, want queuer-015620-2 past the record", got)
+	}
+	atomic.StoreInt64(&automationSeq, 0)
+	if got := freeAutomationInstanceName("beta", "queuer", now); got != "queuer-015620-1" {
+		t.Fatalf("a fleet with no records names its run %q", got)
+	}
+}
+
 // stubAutomationSeams overrides the live operation seams for the duration of a
 // test, returning a restore function and recorders.
 type seamRecorder struct {
@@ -183,8 +208,9 @@ func stubAutomationSeams(t *testing.T) *seamRecorder {
 	automationActivity = func(_ *service, _ *watchedAgent, _ *fleet.Instance, now time.Time) (agentdetect.State, bool) {
 		return rec.activity(now)
 	}
-	reapAutomationInstance = func(_ *service, _, instanceName string) {
+	reapAutomationInstance = func(_ *service, _, instanceName string) error {
 		rec.reaped = append(rec.reaped, instanceName)
+		return nil
 	}
 	t.Cleanup(func() {
 		launchAutomationCommand = origLaunch
@@ -270,6 +296,8 @@ func TestSchedulerTickKeepsWatchAfterFiring(t *testing.T) {
 	// serviceWatched, so the just-created instance wasn't visible and the watch
 	// entry was deleted the same tick — the agent never launched.
 	rec := stubAutomationSeams(t)
+	// The firing writes its trigger's event log under ~/.fleet.
+	isolateFleetDir(t)
 
 	st := &state.State{Fleets: map[string]*fleet.Fleet{
 		"alpha": {Name: "alpha", Remote: "file:///x", Settings: fleet.FleetSettings{
@@ -370,6 +398,8 @@ func TestServiceWatchedConcurrentProbesReapAll(t *testing.T) {
 // goroutine: a delivered fire batch resolves the trigger's agents and registers
 // each as a watched instance (the same lifecycle scheduled triggers use).
 func TestFireWebhookBatchSpawns(t *testing.T) {
+	// The firing writes its trigger's event log under ~/.fleet.
+	isolateFleetDir(t)
 	st := &state.State{Fleets: map[string]*fleet.Fleet{
 		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{
 			Agents: []fleet.Agent{
@@ -551,6 +581,42 @@ func TestStartBashProbe(t *testing.T) {
 	}
 }
 
+// Once the scheduler stops taking fires, every batch is either the
+// scheduler's or refused to its sender: closeFires returns the ones handed
+// over (a sender still waiting on a full buffer too), and a later hand-over
+// is refused.
+func TestCloseFiresKeepsEveryBatchHandedOver(t *testing.T) {
+	ctx := context.Background()
+	batch := func(name string) []triggerFire {
+		return []triggerFire{{fleet: "alpha", trigger: fleet.Trigger{Name: name}}}
+	}
+
+	s := &service{triggerFires: make(chan []triggerFire, 2)}
+	for _, name := range []string{"a", "b"} {
+		if !s.handFires(ctx, batch(name), time.Second) {
+			t.Fatalf("batch %s was not taken into the buffer", name)
+		}
+	}
+	if left := s.closeFires(); len(left) != 2 || left[0][0].trigger.Name != "a" || left[1][0].trigger.Name != "b" {
+		t.Fatalf("closeFires = %+v, want batches a and b in order", left)
+	}
+	if s.handFires(ctx, batch("c"), 0) {
+		t.Fatal("a batch was handed over after closeFires")
+	}
+
+	// A sender racing the close, on an unbuffered channel: it is told the
+	// scheduler has its batch exactly when closeFires returns it.
+	for i := range 200 {
+		s := &service{triggerFires: make(chan []triggerFire)}
+		took := make(chan bool, 1)
+		go func() { took <- s.handFires(ctx, batch("racer"), 0) }()
+		left := s.closeFires()
+		if got := <-took; got != (len(left) == 1) {
+			t.Fatalf("round %d: the sender was told %v, closeFires returned %d batches", i, got, len(left))
+		}
+	}
+}
+
 // TestRunBashScript exercises the real exec seam: stdout is captured as the
 // payload IN ISOLATION from stderr, and a non-zero exit reports failure with the
 // stderr tail folded into the error.
@@ -729,5 +795,77 @@ func TestServiceWatchedDropsGoneInstance(t *testing.T) {
 	s.serviceWatched(context.Background(), sched, &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}, now)
 	if _, still := sched.watched["alpha/agent-1"]; still {
 		t.Fatal("vanished instance should be dropped from the watch set")
+	}
+}
+
+// A cluster run still creating past automationCreateTimeout is destroyed and
+// dropped, and its firing's trigger log says why; a run on another backend
+// keeps waiting, as before, and so does a cluster run inside the deadline.
+func TestServiceWatchedDestroysAnOverdueClusterCreate(t *testing.T) {
+	isolateFleetDir(t)
+	rec := stubAutomationSeams(t)
+	s := &service{}
+	t0 := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+	ev := &triggerEvent{kind: fleet.TriggerWebhook, triggerName: "hook", firedAt: t0, webhookName: "gh", body: []byte(`{"a":1}`)}
+	logName := logTriggerEvent("alpha", ev)
+	if logName == "" {
+		t.Fatal("the trigger log was not written")
+	}
+	sched := newScheduler()
+	for _, name := range []string{"k8s-1", "docker-1"} {
+		sched.watched["alpha/"+name] = &watchedAgent{fleet: "alpha", instance: name, agent: "builder", spawnedAt: t0, lastActive: t0, event: ev, eventLog: logName}
+	}
+	st := &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Instances: []*fleet.Instance{
+		{Name: "k8s-1", Status: fleet.StatusCreating, Backend: fleet.BackendKubernetes, KubeCluster: "minikube-abc234"},
+		{Name: "docker-1", Status: fleet.StatusCreating, Backend: fleet.BackendDevcontainer},
+	}}}}
+
+	s.serviceWatched(context.Background(), sched, st, t0.Add(automationCreateTimeout-time.Second))
+	if len(rec.reaped) != 0 || len(sched.watched) != 2 {
+		t.Fatalf("reaped %v inside the deadline", rec.reaped)
+	}
+	s.serviceWatched(context.Background(), sched, st, t0.Add(automationCreateTimeout))
+	if len(rec.reaped) != 1 || rec.reaped[0] != "k8s-1" {
+		t.Fatalf("reaped %v past the deadline, want only the cluster run", rec.reaped)
+	}
+	if _, ok := sched.watched["alpha/k8s-1"]; ok {
+		t.Fatal("the destroyed run is still watched")
+	}
+	if _, ok := sched.watched["alpha/docker-1"]; !ok {
+		t.Fatal("the docker run lost its watch")
+	}
+
+	logs, _, err := readTriggerLogs("alpha", "hook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# outcome: 2026-10-11T09:20:00Z builder: create of k8s-1 did not finish within 20m0s (FLEET_AUTOMATION_CREATE_TIMEOUT); it is being destroyed"
+	if !strings.Contains(logs, want) {
+		t.Fatalf("trigger log lacks the outcome %q:\n%s", want, logs)
+	}
+	// The payload still reads back for a run a restart has yet to launch.
+	body, err := readTriggerEventBody("alpha", ev, logName, len(ev.body))
+	if err != nil || string(body) != `{"a":1}` {
+		t.Fatalf("payload after the outcome = %q, %v", body, err)
+	}
+}
+
+// An outcome goes only to a firing's own log: an adopted run has none, and
+// a log name that is not a plain event log is ignored.
+func TestRecordTriggerOutcomeNeedsTheFiringsLog(t *testing.T) {
+	isolateFleetDir(t)
+	var wrote []string
+	orig := appendTriggerOutcome
+	appendTriggerOutcome = func(_, _, name string, _ time.Time, _, msg string) { wrote = append(wrote, name+": "+msg) }
+	t.Cleanup(func() { appendTriggerOutcome = orig })
+	now := time.Now()
+	recordTriggerOutcome(&watchedAgent{fleet: "alpha", instance: "adopted-1", adopted: true}, now, "x")
+	if len(wrote) != 0 {
+		t.Fatalf("an adopted run wrote %v", wrote)
+	}
+	appendTriggerOutcome = orig
+	orig("alpha", "hook", "../escape.log", now, "a", "x")
+	if _, err := os.Stat(filepath.Join(state.TriggerLogsDir("alpha", "hook"), "..", "escape.log")); err == nil {
+		t.Fatal("an outcome escaped the trigger's log directory")
 	}
 }

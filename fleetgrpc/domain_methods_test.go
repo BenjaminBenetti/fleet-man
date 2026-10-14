@@ -24,14 +24,21 @@ func TestInstanceStatusDisplay(t *testing.T) {
 
 func TestBackendTypeDisplay(t *testing.T) {
 	cases := map[BackendType]string{
-		BackendType_BACKEND_TYPE_UNSPECIFIED: "",
+		BackendType_BACKEND_TYPE_UNSPECIFIED:  "",
 		BackendType_BACKEND_TYPE_DEVCONTAINER: "devcontainer",
 		BackendType_BACKEND_TYPE_CODER:        "coder",
 		BackendType_BACKEND_TYPE_CODESPACES:   "codespaces",
+		BackendType_BACKEND_TYPE_KUBERNETES:   "kubernetes",
 	}
 	for backend, want := range cases {
 		if got := backend.Display(); got != want {
 			t.Errorf("BackendType(%v).Display() = %q, want %q", backend, got, want)
+		}
+	}
+	// Every backend the contract declares has a case above.
+	for num := range BackendType_name {
+		if _, ok := cases[BackendType(num)]; !ok {
+			t.Errorf("BackendType %v has no Display case", BackendType(num))
 		}
 	}
 }

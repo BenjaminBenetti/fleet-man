@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI edit instance — rename via display_name through the edit dialog, verify persistence
 set -euo pipefail
 

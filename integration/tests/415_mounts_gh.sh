@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: gh CLI mount appears in the container at the expected path
-# and persists a host-written file across the bind boundary.
+# and persists a host-written file across the bind boundary (on a cluster the
+# host's gh login stays on the host: logins are per location, while its other
+# files sync).
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -10,7 +13,7 @@ setup_agent_test
 seed_fleet_settings "${FIXTURE_REPO_NAME}" false false /home/node true
 
 info "seeding host-side gh config dir with a stand-in hosts.yml"
-host_gh_dir="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/.config/gh"
+host_gh_dir=$(itest_share_dir "${FIXTURE_REPO_NAME}" .config/gh)
 mkdir -p "${host_gh_dir}"
 cat > "${host_gh_dir}/hosts.yml" <<'EOF'
 github.com:
@@ -18,6 +21,7 @@ github.com:
     oauth_token: ghp_dummy_integration_token
     git_protocol: https
 EOF
+printf "prompt: disabled\n" > "${host_gh_dir}/config.yml"
 
 info "fleet up alpha (gh mount enabled)"
 fleet_up alpha
@@ -30,14 +34,27 @@ info "asserting /home/node/.config/gh is a real bind mount"
 mountinfo=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /proc/self/mountinfo)
 assert_contains "${mountinfo}" " /home/node/.config/gh " "gh dir is not a mount point"
 
-info "asserting host-seeded hosts.yml is visible inside the container"
-container_hosts=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /home/node/.config/gh/hosts.yml)
-assert_contains "${container_hosts}" "ghp_dummy_integration_token" \
-  "host-seeded hosts.yml did not appear inside the container"
+itest_share_sync "${FIXTURE_REPO_NAME}"
+info "asserting host-seeded config.yml is visible inside the container"
+container_config=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /home/node/.config/gh/config.yml)
+assert_contains "${container_config}" "prompt: disabled" \
+  "host-seeded config.yml did not appear inside the container"
+if itest_backend_is kubernetes; then
+  info "asserting the host's gh login stays on the host (logins are per location)"
+  if "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- test -e /home/node/.config/gh/hosts.yml 2>/dev/null; then
+    fail "the daemon host's gh login reached the cluster instance"
+  fi
+else
+  info "asserting host-seeded hosts.yml is visible inside the container"
+  container_hosts=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /home/node/.config/gh/hosts.yml)
+  assert_contains "${container_hosts}" "ghp_dummy_integration_token" \
+    "host-seeded hosts.yml did not appear inside the container"
+fi
 
 info "asserting a container-side write propagates back to the host"
 "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- \
   sh -c 'printf "editor: nano\n" > /home/node/.config/gh/config.yml'
+itest_share_sync "${FIXTURE_REPO_NAME}"
 assert_file_exists "${host_gh_dir}/config.yml"
 host_config=$(cat "${host_gh_dir}/config.yml")
 assert_contains "${host_config}" "editor: nano" \

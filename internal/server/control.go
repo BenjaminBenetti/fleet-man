@@ -21,6 +21,8 @@ import (
 // This moves the listeners off the thin client: the server owns ~/.fleet and
 // all socket files, and the remote-TUI goal needs the URL resolved server-side
 // with the client only launching the browser (see watch.proto BrowserOpen).
+// A Kubernetes pod's control socket is its agent's, which relays each
+// connection to handlerFor's handler (podagent_hub.go).
 
 // controlSyncInterval is how often the registry reconciles its listener set
 // against the running instances. The control socket only matters for running
@@ -109,6 +111,9 @@ func (r *controlRegistry) syncOnce() {
 
 // syncRunning starts a listener for every running instance lacking one and
 // closes listeners for instances that are gone or no longer running. Idempotent.
+// An instance whose backend carries the control channel itself gets no host
+// listener: its connections reach the daemon over that channel and are served
+// by handlerFor's handler.
 func (r *controlRegistry) syncRunning(st *state.State) {
 	if st == nil {
 		return
@@ -116,7 +121,7 @@ func (r *controlRegistry) syncRunning(st *state.State) {
 	want := make(map[string]struct{})
 	for fleetName, f := range st.Fleets {
 		for _, inst := range f.Instances {
-			if inst.Status == fleet.StatusRunning {
+			if inst.Status == fleet.StatusRunning && !instanceHasControlChannel(inst) {
 				want[fleetName+"/"+inst.Name] = struct{}{}
 			}
 		}
@@ -141,36 +146,45 @@ func (r *controlRegistry) syncRunning(st *state.State) {
 			continue
 		}
 		socketPath := state.ControlSocketPath(fleetName, instanceName)
-		// Capture key parts for the handler closure. The handler runs inside
-		// control.Server.serveConn (whose goroutine Close waits on), so it MUST
-		// NOT block — onOpen / the hub broadcast are non-blocking.
-		fName, iName := fleetName, instanceName
-		srv, err := control.Listen(socketPath, func(env control.Envelope) {
-			switch env.Type {
-			case control.TypeOpenBrowser:
-				var payload control.OpenBrowserPayload
-				if json.Unmarshal(env.Payload, &payload) != nil || payload.URL == "" {
-					return
-				}
-				if r.onOpen != nil {
-					flog.Info("browser open requested", "fleet", fName, "instance", iName, "url", payload.URL)
-					r.onOpen(fName, iName, payload.URL)
-				}
-			case control.TypeCopyFile:
-				var payload control.CopyFilePayload
-				if json.Unmarshal(env.Payload, &payload) != nil || payload.Src == "" {
-					return
-				}
-				if r.onCopy != nil {
-					flog.Info("file copy requested", "fleet", fName, "instance", iName, "from", payload.Src, "to", payload.Dst, "open", payload.Open)
-					r.onCopy(fName, iName, payload.Src, payload.Dst, payload.Open)
-				}
-			}
-		})
+		srv, err := control.Listen(socketPath, r.handlerFor(fleetName, instanceName))
 		if err != nil {
 			continue
 		}
 		r.servers[key] = srv
+	}
+}
+
+// handlerFor returns the handler for envelopes from the instance
+// fleetName/instanceName, whichever way they reach the daemon: a connection to
+// its host control socket, or one relayed over the control channel its backend
+// carries (control.ServeConn). Each envelope is tagged with that instance; the
+// sender never names it.
+//
+// The handler runs inside the connection's serving goroutine (for a host socket,
+// control.Server's, which Close waits on), so it MUST NOT block — onOpen /
+// onCopy and the hub broadcast behind them are non-blocking.
+func (r *controlRegistry) handlerFor(fleetName, instanceName string) func(control.Envelope) {
+	return func(env control.Envelope) {
+		switch env.Type {
+		case control.TypeOpenBrowser:
+			var payload control.OpenBrowserPayload
+			if json.Unmarshal(env.Payload, &payload) != nil || payload.URL == "" {
+				return
+			}
+			if r.onOpen != nil {
+				flog.Info("browser open requested", "fleet", fleetName, "instance", instanceName, "url", payload.URL)
+				r.onOpen(fleetName, instanceName, payload.URL)
+			}
+		case control.TypeCopyFile:
+			var payload control.CopyFilePayload
+			if json.Unmarshal(env.Payload, &payload) != nil || payload.Src == "" {
+				return
+			}
+			if r.onCopy != nil {
+				flog.Info("file copy requested", "fleet", fleetName, "instance", instanceName, "from", payload.Src, "to", payload.Dst, "open", payload.Open)
+				r.onCopy(fleetName, instanceName, payload.Src, payload.Dst, payload.Open)
+			}
+		}
 	}
 }
 

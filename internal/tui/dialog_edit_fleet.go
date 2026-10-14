@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/inspector"
 	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
@@ -321,16 +323,22 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.editFleet.detecting = false
 	fleetPage.dlg.fieldActive = false
 	fleetPage.editFleet.cachingExpanded = false
+	fleetPage.editFleet.cacheUsage = nil
 	fleetPage.editFleet.cacheButtonFocused = false
 	fleetPage.editFleet.deleteCacheConfirm = false
 	fleetPage.editFleet.deleting = false
 	fleetPage.editFleet.customMountsExpanded = false
 	fleetPage.editFleet.customMounts = slices.Clone(f.Settings.CustomMounts)
+	fleetPage.editFleet.customMountHosts = maps.Clone(f.Settings.CustomMountHostFolders)
 	fleetPage.editFleet.addingMount = false
 	fleetPage.editFleet.customMountErr = ""
 	fleetPage.editFleet.mountRemoveConfirm = false
 	fleetPage.customMountInput.SetValue("")
 	fleetPage.customMountInput.Blur()
+	fleetPage.editFleet.editingMountHost = false
+	fleetPage.editFleet.mountHostErr = ""
+	fleetPage.mountHostInput.SetValue("")
+	fleetPage.mountHostInput.Blur()
 	fleetPage.editFleet.layoutsExpanded = false
 	fleetPage.editFleet.layoutPresets = slices.Clone(f.Settings.LayoutPresets)
 	fleetPage.editFleet.presetRemoveFocused = false
@@ -405,6 +413,24 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			return cmd
 		}
 		return nil
+	}
+
+	// A custom mount's host-folder text-editing sub-mode.
+	if fleetPage.editFleet.editingMountHost {
+		switch keyMsg.String() {
+		case "enter":
+			return fleetPage.commitMountHost(m)
+		case "esc":
+			fleetPage.cancelMountHost()
+			return nil
+		case "ctrl+c":
+			fleetPage.closeEditFleet(m)
+			return nil
+		}
+		fleetPage.editFleet.mountHostErr = ""
+		var cmd tea.Cmd
+		fleetPage.mountHostInput, cmd = fleetPage.mountHostInput.Update(msg)
+		return cmd
 	}
 
 	// Add-custom-mount text-editing sub-mode.
@@ -518,6 +544,7 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case editFleetRowCaching:
+		was := fleetPage.editFleet.cachingExpanded
 		switch keyMsg.String() {
 		case " ", "enter":
 			fleetPage.editFleet.cachingExpanded = !fleetPage.editFleet.cachingExpanded
@@ -525,6 +552,11 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.editFleet.cachingExpanded = true
 		case "left", "h":
 			fleetPage.editFleet.cachingExpanded = false
+		}
+		if fleetPage.editFleet.cachingExpanded && !was {
+			// How full the caches are, where they run on volumes of a
+			// fixed size (the fleet's clusters).
+			return fetchCacheUsageCmd(fleetPage.dlg.fleet)
 		}
 		return nil
 	case editFleetRowCoder:
@@ -717,7 +749,8 @@ func deleteCacheCmd(k cacheKind, fleetName string) tea.Cmd {
 	}
 }
 
-// handleDeleteCacheDone clears the in-flight flag and surfaces the outcome.
+// handleDeleteCacheDone clears the in-flight flag and surfaces the outcome,
+// then refreshes the caches' usage of the dialog's fleet.
 func (fleetPage *fleetPage) handleDeleteCacheDone(m *model, msg deleteCacheDoneMsg) tea.Cmd {
 	if fleetPage.dlg.fleet == msg.fleet && fleetPage.editFleet.deletingKind == msg.kind {
 		fleetPage.editFleet.deleting = false
@@ -727,7 +760,88 @@ func (fleetPage *fleetPage) handleDeleteCacheDone(m *model, msg deleteCacheDoneM
 	} else {
 		m.message = cacheClearedMessage(msg.kind)
 	}
+	if fleetPage.mode == viewEditFleet && fleetPage.dlg.fleet == msg.fleet && fleetPage.editFleet.cachingExpanded {
+		return fetchCacheUsageCmd(msg.fleet)
+	}
 	return nil
+}
+
+// cacheUsageMsg is a cache usage report for a fleet.
+type cacheUsageMsg struct {
+	fleet string
+	reply *fleetgrpc.GetCacheUsageReply
+	err   error
+}
+
+// fetchCacheUsageCmd asks for the fleet's cache usage off the UI loop.
+func fetchCacheUsageCmd(fleetName string) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := getCacheUsageRemote(fleetName)
+		return cacheUsageMsg{fleet: fleetName, reply: reply, err: err}
+	}
+}
+
+// handleCacheUsage keeps the report of the dialog's fleet for its Caching
+// rows (a report of another fleet, or a failed one, is dropped: the rows then
+// show no usage).
+func (fleetPage *fleetPage) handleCacheUsage(msg cacheUsageMsg) tea.Cmd {
+	if fleetPage.dlg.fleet != msg.fleet {
+		return nil
+	}
+	fleetPage.editFleet.cacheUsage = nil
+	if msg.err == nil && msg.reply != nil {
+		fleetPage.editFleet.cacheUsage = msg.reply.GetCaches()
+	}
+	return nil
+}
+
+// cacheUsageLines are the lines under cache k's row: each volume of it on a
+// cluster, how full it is, its server's state when not ready, and its warning.
+func (fleetPage *fleetPage) cacheUsageLines(k cacheKind) []string {
+	var lines []string
+	for _, u := range fleetPage.editFleet.cacheUsage {
+		if u.GetService() != cacheServiceName(k) {
+			continue
+		}
+		line := "☸ " + u.GetLocation() + " " + formatCacheBytes(u.GetUsedBytes())
+		if c := u.GetCapacityBytes(); c > 0 {
+			line += " of " + formatCacheBytes(c) + fmt.Sprintf(" (%d%%)", u.GetUsedBytes()*100/c)
+		}
+		if st := u.GetState(); st != "" && st != "ready" {
+			line += " · " + st
+		}
+		lines = append(lines, "      "+dimStyle.Render(line))
+		if w := u.GetWarning(); w != "" {
+			lines = append(lines, "      "+warnTextStyle.Render("⚠ "+w))
+		}
+	}
+	return lines
+}
+
+// cacheServiceName is cache k's shared service, as usage reports name it.
+func cacheServiceName(k cacheKind) string {
+	switch k {
+	case cacheDeb:
+		return "debcache"
+	case cacheImage:
+		return "imagecache"
+	default:
+		return "buildkit"
+	}
+}
+
+// formatCacheBytes writes n bytes in binary units ("1.2 GiB").
+func formatCacheBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // cacheClearedMessage is the success banner for a cache wipe.
@@ -847,7 +961,71 @@ func (fleetPage *fleetPage) updateCustomMountRow(m *model, keyMsg tea.KeyMsg) te
 		}
 		fleetPage.editFleet.mountRemoveConfirm = false // second press: do it
 		return fleetPage.removeCustomMount(m, idx)
+	case "f":
+		fleetPage.editFleet.mountRemoveConfirm = false
+		fleetPage.beginMountHost(idx)
+		return fleetPage.mountHostInput.Cursor.BlinkCmd()
 	}
+	return nil
+}
+
+// beginMountHost opens the idx-th custom mount's host-folder input, holding
+// its current folder.
+func (fleetPage *fleetPage) beginMountHost(idx int) {
+	fleetPage.editFleet.editingMountHost = true
+	fleetPage.editFleet.mountHostErr = ""
+	fleetPage.mountHostInput.SetValue(fleetPage.editFleet.customMountHosts[fleetPage.editFleet.customMounts[idx]])
+	fleetPage.mountHostInput.CursorEnd()
+	fleetPage.mountHostInput.Focus()
+}
+
+// cancelMountHost leaves the host-folder sub-mode, discarding the input.
+func (fleetPage *fleetPage) cancelMountHost() {
+	fleetPage.editFleet.editingMountHost = false
+	fleetPage.editFleet.mountHostErr = ""
+	fleetPage.mountHostInput.SetValue("")
+	fleetPage.mountHostInput.Blur()
+}
+
+// commitMountHost gives the focused custom mount the typed host folder (an
+// empty one: back to its .mnt folder) and persists (instant-save). A folder
+// that is not absolute keeps the input open with the error; one the daemon
+// refuses (fleet's own state) is reverted, the daemon's reason shown. The
+// folder is the daemon host's, which only the daemon can look at: a missing
+// one fails the next create there, naming it.
+func (fleetPage *fleetPage) commitMountHost(m *model) tea.Cmd {
+	idx := fleetPage.dlg.row - editFleetRowCustomMountBase
+	if idx < 0 || idx >= len(fleetPage.editFleet.customMounts) {
+		fleetPage.cancelMountHost()
+		return nil
+	}
+	path := fleetPage.editFleet.customMounts[idx]
+	folder := strings.TrimSpace(fleetPage.mountHostInput.Value())
+	if folder != "" {
+		norm, err := fleet.NormalizeCustomMountHostFolder(folder)
+		if err != nil {
+			fleetPage.editFleet.mountHostErr = err.Error()
+			return nil
+		}
+		folder = norm
+	}
+	prev := fleetPage.editFleet.customMountHosts
+	next := maps.Clone(prev)
+	if folder == "" {
+		delete(next, path)
+	} else {
+		if next == nil {
+			next = map[string]string{}
+		}
+		next[path] = folder
+	}
+	fleetPage.editFleet.customMountHosts = next
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.editFleet.customMountHosts = prev
+		fleetPage.editFleet.mountHostErr = fmt.Sprintf("not saved: %v", err)
+		return nil
+	}
+	fleetPage.cancelMountHost()
 	return nil
 }
 
@@ -1032,10 +1210,12 @@ func (fleetPage *fleetPage) removeCustomMount(m *model, idx int) tea.Cmd {
 	if idx < 0 || idx >= len(fleetPage.editFleet.customMounts) {
 		return nil
 	}
-	prev := fleetPage.editFleet.customMounts
+	prev, prevHosts := fleetPage.editFleet.customMounts, fleetPage.editFleet.customMountHosts
 	fleetPage.editFleet.customMounts = slices.Delete(slices.Clone(prev), idx, idx+1)
+	fleetPage.editFleet.customMountHosts = maps.Clone(prevHosts)
+	delete(fleetPage.editFleet.customMountHosts, prev[idx])
 	if err := fleetPage.persistFleetSettings(m); err != nil {
-		fleetPage.editFleet.customMounts = prev
+		fleetPage.editFleet.customMounts, fleetPage.editFleet.customMountHosts = prev, prevHosts
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
@@ -1359,7 +1539,7 @@ func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFe
 	if idx := fleetPage.dlg.row - editFleetRowCoderParamBase; isCoderParamChildRow(fleetPage.dlg.row) && idx >= len(newParams) {
 		fleetPage.dlg.row = editFleetRowCoderPreset
 	}
-	m.message = fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(msg.presets))
+	m.message = fleetPage.savedMessage(fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(msg.presets)))
 	return nil
 }
 
@@ -1419,6 +1599,10 @@ func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
 	f.Settings.FleetMCP = fleetPage.editFleet.fleetMCP
 	f.Settings.BuildkitServer = fleetPage.editFleet.buildkitServer
 	f.Settings.CustomMounts = fleetPage.editFleet.customMounts
+	f.Settings.CustomMountHostFolders = nil
+	if len(fleetPage.editFleet.customMountHosts) > 0 {
+		f.Settings.CustomMountHostFolders = fleetPage.editFleet.customMountHosts
+	}
 	f.Settings.LayoutPresets = fleetPage.editFleet.layoutPresets
 	f.Settings.DebCacheServer = fleetPage.editFleet.debCache
 	f.Settings.ImageCacheServer = fleetPage.editFleet.imageCache
@@ -1432,11 +1616,45 @@ func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
 	f.Settings.CoderPreset = fleetPage.editFleet.coderPreset
 	f.Settings.CoderParameters = fleetPage.editFleet.coderParams
 
-	if err := setFleetSettingsRemote(fleetPage.dlg.fleet, f.Settings); err != nil {
+	warnings, err := setFleetSettingsRemote(fleetPage.dlg.fleet, f.Settings)
+	if err != nil {
 		f.Settings = prev
 		return err
 	}
+	fleetPage.noteSaveWarnings(m, warnings)
 	return nil
+}
+
+// noteSaveWarnings keeps what the daemon warned about the settings it just
+// saved (saveWarnings) and shows it on the message line: the warning is the
+// daemon's word, and a remote user has no other way to see it.
+func (fleetPage *fleetPage) noteSaveWarnings(m *model, warnings []string) {
+	fleetPage.saveWarnings = warnings
+	if len(warnings) > 0 {
+		m.message = saveWarningLine(warnings)
+	}
+}
+
+// savedMessage is msg, the message a successful save shows, followed by
+// what the daemon warned about it.
+func (fleetPage *fleetPage) savedMessage(msg string) string {
+	return withWarningLine(msg, fleetPage.saveWarnings)
+}
+
+// withWarningLine is msg followed by the daemon's warnings about what it
+// reports ("" msg: the warnings alone).
+func withWarningLine(msg string, warnings []string) string {
+	if len(warnings) == 0 {
+		return msg
+	}
+	if msg == "" {
+		return saveWarningLine(warnings)
+	}
+	return msg + " · " + saveWarningLine(warnings)
+}
+
+func saveWarningLine(warnings []string) string {
+	return "⚠ " + strings.Join(warnings, " · ⚠ ")
 }
 
 // commitHomedir persists the current home-dir input value (instant-save),
@@ -1506,11 +1724,12 @@ type editFleetState struct {
 	// interaction model (toggle + [Delete cache] button + inline confirm +
 	// in-flight spinner); the per-row sub-state below applies to whichever
 	// cache row currently has the dialog cursor.
-	cachingExpanded    bool      // ▼ Caching expanded, revealing the cache rows
-	cacheButtonFocused bool      // horizontal sub-cursor: on the [Delete cache] button vs the toggle
-	deleteCacheConfirm bool      // inline confirm armed (first Enter on the button)
-	deleting           bool      // a cache-wipe RPC is in flight
-	deletingKind       cacheKind // which cache the in-flight wipe targets (valid only while deleting)
+	cachingExpanded    bool                    // ▼ Caching expanded, revealing the cache rows
+	cacheUsage         []*fleetgrpc.CacheUsage // the fleet's cluster cache volumes, fetched when Caching expands
+	cacheButtonFocused bool                    // horizontal sub-cursor: on the [Delete cache] button vs the toggle
+	deleteCacheConfirm bool                    // inline confirm armed (first Enter on the button)
+	deleting           bool                    // a cache-wipe RPC is in flight
+	deletingKind       cacheKind               // which cache the in-flight wipe targets (valid only while deleting)
 
 	// Custom mounts section.
 	customMountsExpanded bool     // ▼ Custom mounts expanded, revealing per-mount rows + the add row
@@ -1518,6 +1737,11 @@ type editFleetState struct {
 	addingMount          bool     // true while the "+ Add mount" text input is active
 	customMountErr       string   // inline validation error shown under the add-mount input
 	mountRemoveConfirm   bool     // inline "[remove?]" confirm armed on the focused custom-mount row (mirrors the Caching [Delete cache] flow)
+	// customMountHosts is the working copy of each custom mount's host
+	// folder (FleetSettings.CustomMountHostFolders; instant-save).
+	customMountHosts map[string]string
+	editingMountHost bool   // true while the focused mount's host-folder input is active
+	mountHostErr     string // inline validation error under the host-folder input
 
 	// Layouts section.
 	layoutsExpanded     bool                 // ▼ Layouts expanded, revealing per-preset rows + the add row
@@ -1615,6 +1839,9 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 				arrow = "▼ "
 			}
 			d.WriteString(marker(row) + dialogLabel.Render(fmt.Sprintf("%sCustom mounts (%d)", arrow, len(fleetPage.editFleet.customMounts))))
+			for _, reason := range m.fleetSyncPaused(fleetPage.dlg.fleet) {
+				d.WriteString("\n      " + warnTextStyle.Render("sync paused: "+reason))
+			}
 		case editFleetRowCaching:
 			arrow := "▶ "
 			if fleetPage.editFleet.cachingExpanded {
@@ -1683,7 +1910,7 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 		d.WriteString("\n")
 	}
 
-	if footer := fleetPage.customMountFooter(); footer != "" {
+	if footer := fleetPage.customMountFooter(syncedWithSuffix(m.fleetSyncClusters(fleetPage.dlg.fleet))); footer != "" {
 		d.WriteString("\n  " + footer + "\n")
 	}
 	if footer := fleetPage.coderFooter(); footer != "" {
@@ -1706,7 +1933,15 @@ func (fleetPage *fleetPage) renderCustomMountRow(row int, marker func(int) strin
 		}
 		return marker(row) + "  " + dialogLabel.Render("+ Add mount")
 	}
-	return marker(row) + "  " + fleetPage.editFleet.customMounts[idx] + "   " + fleetPage.renderRemoveMountButton(row)
+	path := fleetPage.editFleet.customMounts[idx]
+	if fleetPage.editFleet.editingMountHost && fleetPage.dlg.row == row {
+		return marker(row) + "  " + path + "  " + dialogLabel.Render("Host folder: ") + fleetPage.mountHostInput.View()
+	}
+	line := marker(row) + "  " + path
+	if host := fleetPage.editFleet.customMountHosts[path]; host != "" {
+		line += dimStyle.Render(" → " + host)
+	}
+	return line + "   " + fleetPage.renderRemoveMountButton(row)
 }
 
 // renderLayoutPresetRow renders one dynamic layout-preset child row: an
@@ -1817,14 +2052,26 @@ func (fleetPage *fleetPage) coderFooter() string {
 
 // customMountFooter returns a context line shown beneath the dialog rows while
 // the cursor is on a custom-mount row: the resolved host path for an existing
-// mount or the in-progress add, plus a hint or inline validation error.
-func (fleetPage *fleetPage) customMountFooter() string {
+// mount or the in-progress add (with synced, the " (synced with <cluster>)"
+// of a fleet on clusters, whose host folder is then a synced copy), plus a
+// hint or inline validation error.
+func (fleetPage *fleetPage) customMountFooter(synced string) string {
 	if !isCustomMountChildRow(fleetPage.dlg.row) {
 		return ""
 	}
 	idx := fleetPage.dlg.row - editFleetRowCustomMountBase
 	if idx < len(fleetPage.editFleet.customMounts) {
-		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, fleetPage.editFleet.customMounts[idx]))
+		path := fleetPage.editFleet.customMounts[idx]
+		if fleetPage.editFleet.editingMountHost {
+			if fleetPage.editFleet.mountHostErr != "" {
+				return errorStyle.Render("✗ " + fleetPage.editFleet.mountHostErr)
+			}
+			return dimStyle.Render("a folder on the daemon host, bound as it is; empty: the .mnt folder")
+		}
+		if host := fleetPage.editFleet.customMountHosts[path]; host != "" {
+			return dimStyle.Render("host: " + host + synced)
+		}
+		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, path) + synced)
 	}
 	// The add row.
 	if !fleetPage.editFleet.addingMount {
@@ -1834,7 +2081,7 @@ func (fleetPage *fleetPage) customMountFooter() string {
 		return errorStyle.Render("✗ " + fleetPage.editFleet.customMountErr)
 	}
 	if v := strings.TrimSpace(fleetPage.customMountInput.Value()); v != "" {
-		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, v))
+		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, v) + synced)
 	}
 	return dimStyle.Render("enter an absolute container path, e.g. /opt/data")
 }
@@ -1850,6 +2097,14 @@ func (fleetPage *fleetPage) renderCacheRow(m *model, k cacheKind, label string) 
 	line := "  " + box + " " + dialogLabel.Render(label)
 	if fleetPage.cacheEnabled(k) {
 		line += "   " + fleetPage.renderDeleteCacheButton(m, k)
+		for _, l := range fleetPage.cacheUsageLines(k) {
+			line += "\n" + l
+		}
+		if k == cacheBuildkit {
+			for _, l := range fleetPage.buildkitClusterLines(m) {
+				line += "\n" + l
+			}
+		}
 	}
 	return line
 }
@@ -1883,6 +2138,9 @@ func (fleetPage *fleetPage) editFleetHint() string {
 	if fleetPage.editFleet.addingMount {
 		return "[enter] Add mount  [esc] Cancel"
 	}
+	if fleetPage.editFleet.editingMountHost {
+		return "[enter] Save  [esc] Cancel"
+	}
 	if isCustomMountChildRow(fleetPage.dlg.row) {
 		if fleetPage.dlg.row == fleetPage.customMountAddRow() {
 			return "[enter] Add mount  [j/k] Select  [q/esc] Save & Close"
@@ -1890,7 +2148,7 @@ func (fleetPage *fleetPage) editFleetHint() string {
 		if fleetPage.editFleet.mountRemoveConfirm {
 			return "[enter] Confirm remove  [esc] Cancel"
 		}
-		return "[enter/d] Remove  [j/k] Select  [q/esc] Save & Close"
+		return "[f] Host folder  [enter/d] Remove  [j/k] Select  [q/esc] Save & Close"
 	}
 	if isCoderParamChildRow(fleetPage.dlg.row) {
 		return "[enter] Edit  [j/k] Select  [q/esc] Save & Close"

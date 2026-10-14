@@ -76,3 +76,63 @@ func TestRuntimeEdgeForgetsAgentHistory(t *testing.T) {
 		t.Fatalf("detectors kept across the polling edge: %v", h.agent.detectors)
 	}
 }
+
+// TestAgentTrackerReportsUnknownAfterFailedCaptures: failed captures keep the
+// last state for a while (no flicker on a transient failure), until
+// unknownAfter of them in a row report StateUnknown; the next good capture
+// seeds a fresh detector, and the count starts over.
+func TestAgentTrackerReportsUnknownAfterFailedCaptures(t *testing.T) {
+	good := map[string]backend.AllSessions{"c": {OK: true, Sessions: map[string]backend.ScreenCapture{
+		"codex": {OK: true, Content: "› working"},
+	}}}
+	failed := map[string]backend.AllSessions{"c": {OK: false}}
+	probes := map[string]string{"c": string(state.AgentToolCodex)}
+	tr := newAgentTracker()
+	t0 := time.Unix(3_000, 0)
+	tr.Update(good, probes, []string{"c"}, t0)
+	tr.states["c"] = agentdetect.StateWorking // as a later diff would find it
+	for i := 1; i < unknownAfter; i++ {
+		tr.Update(failed, nil, []string{"c"}, t0.Add(time.Duration(i)*3*time.Second))
+		if got := tr.State("c"); got != agentdetect.StateWorking {
+			t.Fatalf("after %d failed captures the state is %v, want the last one (working)", i, got)
+		}
+	}
+	tr.Update(failed, nil, []string{"c"}, t0.Add(15*time.Second))
+	if got := tr.State("c"); got != agentdetect.StateUnknown {
+		t.Fatalf("after %d failed captures the state is %v, want unknown", unknownAfter, got)
+	}
+	if _, kept := tr.detectors["c"]; kept {
+		t.Fatal("an unknown container kept its detector; the next good capture must seed a fresh one")
+	}
+	if got := tr.Tool("c"); got != state.AgentToolCodex {
+		t.Fatalf("the tool was forgotten (%q)", got)
+	}
+	tr.Update(failed, nil, []string{"c"}, t0.Add(18*time.Second))
+	if got := tr.State("c"); got != agentdetect.StateUnknown {
+		t.Fatalf("a further failed capture reads %v, want still unknown", got)
+	}
+
+	tr.Update(good, probes, []string{"c"}, t0.Add(21*time.Second))
+	if got := tr.State("c"); got != agentdetect.StateWaiting {
+		t.Fatalf("the good capture after unknown reads %v, want waiting (a fresh seed)", got)
+	}
+	tr.Update(failed, nil, []string{"c"}, t0.Add(24*time.Second))
+	if got := tr.State("c"); got != agentdetect.StateWaiting {
+		t.Fatalf("one failed capture after recovering reads %v; the count did not start over", got)
+	}
+}
+
+// TestAgentTrackerForgetsFailuresAcrossAGap: failed captures before a polling
+// gap do not count toward unknown after it.
+func TestAgentTrackerForgetsFailuresAcrossAGap(t *testing.T) {
+	failed := map[string]backend.AllSessions{"c": {OK: false}}
+	tr := newAgentTracker()
+	for i := 0; i < unknownAfter-1; i++ {
+		tr.Update(failed, nil, []string{"c"}, time.Unix(int64(4_000+i), 0))
+	}
+	tr.forgetHistory()
+	tr.Update(failed, nil, []string{"c"}, time.Unix(5_000, 0))
+	if got := tr.State("c"); got == agentdetect.StateUnknown {
+		t.Fatal("failed captures from before the gap made the first one after it unknown")
+	}
+}

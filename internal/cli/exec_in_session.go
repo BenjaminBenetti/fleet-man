@@ -50,7 +50,7 @@ Examples:
 				return fmt.Errorf("failed to execute command in session %q: %w", sessionName, err)
 			}
 
-			if err := execCmd.Run(); err != nil {
+			if err := runSessionCommand(execCmd); err != nil {
 				return fmt.Errorf("failed to execute command in session %q: %w", sessionName, err)
 			}
 

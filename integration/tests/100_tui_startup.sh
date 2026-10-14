@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI launches, renders the logo, fleet name, and running instance.
 set -euo pipefail
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Claude + Codex install + mount work together in a single instance.
 set -euo pipefail
 

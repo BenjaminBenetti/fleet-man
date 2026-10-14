@@ -103,6 +103,10 @@ type model struct {
 	spinner      spinner.Model
 	agentSpinner spinner.Model   // pulse throbber rendered next to running agents' instance names
 	creating     map[string]bool // "fleet/instance" keys currently being created
+	// jobSteps is the step each in-flight provisioning job is on, by rtKey,
+	// from the daemon's pushed ActiveJobs (job_steps.go). nil until the first
+	// push, and against a daemon that predates it.
+	jobSteps map[string]fleet.JobStep
 
 	daemonRestarting bool // true while the settings "Restart daemon" action is in flight
 
@@ -130,6 +134,27 @@ type model struct {
 	agentStatus agentfwd.Status
 
 	toolStatus []deps.ToolStatus // cached tool install statuses for settings page
+
+	// daemonTools is the daemon host's build tools, for the fleetd rows of
+	// Settings -> Tool Status. Fetched each time the page opens; nil until the
+	// answer arrives (and after an armada switch).
+	daemonTools *daemonToolStatus
+
+	// Kubernetes connections (kube.go): the daemon's connections with their
+	// health, pushed over Watch (nil until the first push, and after an armada
+	// switch); the streamed tests and daemon-side logins in flight (or last
+	// finished), by run key and connection id; the login plugin each
+	// connection's context names, for Tool Status; and the daemon host's name.
+	kubeClusters *fleetgrpc.KubeClusters
+	kubeRuns     map[string]*kubeTestRun
+	kubeLogins   map[string]*kubeLoginRun
+	kubePlugins  map[string]kubePlugin
+	kubeHost     string
+
+	// automationStatus is the daemon's pushed automation status
+	// (automation_login.go), by "fleet\x00agent"; nil until the first push
+	// and after an armada switch.
+	automationStatus map[string]*fleetgrpc.AutomationAgentStatus
 
 	// Port forwarding
 	portForwards *portforward.Manager // manages active port forward processes
@@ -717,7 +742,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
 		// Mouse wheel scrolls the settings viewport directly.
 		if mouseMsg.Button == tea.MouseButtonWheelUp || mouseMsg.Button == tea.MouseButtonWheelDown {
-			if page, ok := m.currentPage.(*settingsPage); ok && !page.editing {
+			if page, ok := m.currentPage.(*settingsPage); ok && !page.editing && page.kubeDialog == nil {
 				const wheelStep = 3
 				if mouseMsg.Button == tea.MouseButtonWheelUp {
 					page.scrollOffset -= wheelStep
@@ -790,7 +815,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// The add-flow consumes typed input through the shared text
 				// input (like editing); a click must not jump the cursor and
 				// synthesize Enter into the middle of that state machine.
-				if !page.editing && !page.showKeybindings && page.armadaAddStage == armadaAddNone {
+				if !page.editing && !page.showKeybindings && page.armadaAddStage == armadaAddNone && page.kubeDialog == nil {
 					items := page.visibleItems(&m)
 					for i, id := range items {
 						y, ok := page.itemRowYs[id]
@@ -809,6 +834,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								page.armadaDeleteFocused = false
 								page.armadaDeleteConfirm = false
 								page.armadaAgentFocused = false
+								page.resetKubeRowFocus()
 							}
 							page.cursor = i
 							hit = true
@@ -891,14 +917,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fleetPage.buildRows(&m)
 			}
 		}
+		// A Log in action waiting for the instance it created opens its
+		// login once that runs.
+		var loginCmd tea.Cmd
+		if m.fleetPage != nil {
+			loginCmd = m.fleetPage.checkPendingLogin(&m)
+		}
 		// The new daemon is answering: if a switch's synchronous config reload
 		// failed (slow endpoint), refetch config now so it isn't stuck on the
 		// placeholder default. Fires once per switch.
 		if m.armadaConfigPending {
 			m.armadaConfigPending = false
-			return m, tea.Batch(spinCmd, reloadConfigCmd(m.watchGen))
+			return m, tea.Batch(spinCmd, loginCmd, reloadConfigCmd(m.watchGen))
 		}
-		return m, spinCmd
+		return m, tea.Batch(spinCmd, loginCmd)
 
 	case runtimeChangedMsg:
 		if msg.gen != m.watchGen {
@@ -973,12 +1005,48 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.remoteMcpStatus = msg.status
 		return m, spinCmd
 
+	case daemonToolsMsg:
+		m.handleDaemonToolsMsg(msg)
+		return m, spinCmd
+
+	case kubeClustersMsg:
+		return m, tea.Batch(spinCmd, m.handleKubeClustersMsg(msg))
+
+	case automationStatusMsg:
+		m.handleAutomationStatusMsg(msg)
+		return m, spinCmd
+
+	case loginSessionMsg:
+		return m, tea.Batch(spinCmd, m.handleLoginSessionMsg(msg))
+
+	case kubeTestMsg:
+		return m, tea.Batch(spinCmd, m.handleKubeTestMsg(msg))
+
+	case kubeLoginMsg:
+		return m, tea.Batch(spinCmd, m.handleKubeLoginMsg(msg))
+
+	case kubeSavedMsg:
+		return m, tea.Batch(spinCmd, m.handleKubeSavedMsg(msg))
+
+	case kubeRemovedMsg:
+		return m, tea.Batch(spinCmd, m.handleKubeRemovedMsg(msg))
+
+	case kubePluginsMsg:
+		m.handleKubePluginsMsg(msg)
+		return m, spinCmd
+
 	case micSourcesMsg:
 		if msg.gen != m.watchGen {
 			return m, spinCmd
 		}
 		m.micSources = msg.sources
 		m.adoptMicSettings(msg.sources.GetSettings())
+		return m, spinCmd
+
+	case activeJobsMsg:
+		if msg.gen == m.watchGen {
+			m.jobSteps = jobStepsFrom(msg.jobs)
+		}
 		return m, spinCmd
 
 	case outputTargetsMsg:
@@ -1200,6 +1268,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		extraCmds = append(extraCmds, layoutTickCmd())
 
 	case operationDoneMsg:
+		if msg.instance == "" && m.fleetPage != nil {
+			// A fleet's removal ended, on whichever page: what the daemon
+			// still lists shows again (removingFleets).
+			delete(m.fleetPage.removingFleets, msg.fleet)
+		}
 		m.reload()
 		if msg.err != nil {
 			m.message = fmt.Sprintf("Error: %v", msg.err)
@@ -1214,7 +1287,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// "creating" marker, refresh, and surface the error.
 		key := msg.fleet + "/" + msg.instance
 		delete(m.creating, key)
+		// A Log in action waiting for this instance waits no more.
+		if m.fleetPage.pendingLoginFor(msg.fleet, msg.instance) != nil {
+			m.fleetPage.pendingLogin = nil
+		}
 		m.reload()
+		// A Kubernetes create refused with a code (no room under the
+		// connection's quotas) gets the recovery dialog, unless another
+		// dialog opened meanwhile.
+		if msg.cluster != "" && m.fleetPage != nil && m.fleetPage.mode == viewNormal &&
+			m.fleetPage.openKubeRecoveryForRefusal(msg.fleet, msg.cluster, msg.err) {
+			m.message = ""
+			break
+		}
 		m.message = fmt.Sprintf("Failed to create %s: %v", key, msg.err)
 
 	case splitPaneMsg:
@@ -1335,7 +1420,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								m.message = fmt.Sprintf("Instance %s is running — %s (press L for details)", key, firstLine)
 							} else {
 								m.message = fmt.Sprintf("Instance %s is running (container: %s)",
-									key, instance.ContainerID[:min(12, len(instance.ContainerID))])
+									key, fleet.ShortContainerID(instance.ContainerID))
 							}
 						case fleet.StatusFailed:
 							delete(m.creating, key)
@@ -1354,6 +1439,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								fleetPage.mode = viewCodespacesLimit
 								fleetPage.dlg.fleet = fleetName
 								fleetPage.dlg.inst = instName
+								m.message = ""
+							} else if fleetPage.mode == viewNormal && fleetPage.openKubeRecovery(fleetName, instance) {
 								m.message = ""
 							} else {
 								m.message = fmt.Sprintf("Failed to create %s: %s", key, instance.Error)

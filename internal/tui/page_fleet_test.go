@@ -123,40 +123,68 @@ func TestUpdateNormalStopShortcutSkipsCreatingInstance(t *testing.T) {
 	}
 }
 
+// TestViewFleetListShowsBranchItemForInstance checks the row's branch comes
+// from the server: the live read pushed as InstanceRuntime.current_branch wins;
+// without one (a stopped instance whose workspace can't be read, or no push
+// yet) the row shows the last branch the server saw, then the requested one.
+// The TUI never reads a checkout itself.
 func TestViewFleetListShowsBranchItemForInstance(t *testing.T) {
-	inst := &fleet.Instance{
-		Name:         "agent-1",
-		Status:       fleet.StatusRunning,
-		WorkspaceDir: "/workspace/alpha/agent-1",
+	str := func(s string) *string { return &s }
+	tests := []struct {
+		name       string
+		rt         *fleetgrpc.InstanceRuntime
+		lastBranch string
+		branch     string
+		want       string
+		wantAbsent []string
+	}{
+		{name: "live read", rt: &fleetgrpc.InstanceRuntime{CurrentBranch: str("feature/status-line")},
+			lastBranch: "old", branch: "requested", want: "feature/status-line", wantAbsent: []string{"old", "requested"}},
+		{name: "no live read shows the last branch seen", rt: &fleetgrpc.InstanceRuntime{},
+			lastBranch: "feature/last-seen", branch: "requested", want: "feature/last-seen", wantAbsent: []string{"requested"}},
+		{name: "no runtime yet, never seen: the requested branch", branch: "feature/requested", want: "feature/requested"},
+		{name: "a detached live read stays blank", rt: &fleetgrpc.InstanceRuntime{CurrentBranch: str("")},
+			lastBranch: "feature/last-seen", wantAbsent: []string{"feature/last-seen"}},
 	}
-	fp := newFleetPage()
-	fp.rows = []row{
-		{kind: rowFleetHeader, fleetName: "alpha"},
-		{kind: rowInstance, fleetName: "alpha", instance: inst},
-		{kind: rowSettings},
-	}
-	m := &model{
-		st: &state.State{
-			Fleets: map[string]*fleet.Fleet{
-				"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst}},
-			},
-		},
-		sessionStore: NewSessionStore(),
-		fleetPage:    fp,
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst := &fleet.Instance{
+				Name:         "agent-1",
+				Status:       fleet.StatusStopped,
+				WorkspaceDir: "/workspace/alpha/agent-1",
+				LastBranch:   tt.lastBranch,
+				Branch:       tt.branch,
+			}
+			fp := newFleetPage()
+			fp.rows = []row{
+				{kind: rowFleetHeader, fleetName: "alpha"},
+				{kind: rowInstance, fleetName: "alpha", instance: inst},
+				{kind: rowSettings},
+			}
+			m := &model{
+				st: &state.State{
+					Fleets: map[string]*fleet.Fleet{
+						"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst}},
+					},
+				},
+				sessionStore: NewSessionStore(),
+				fleetPage:    fp,
+				runtime:      map[string]*fleetgrpc.InstanceRuntime{},
+			}
+			if tt.rt != nil {
+				m.runtime[rtKey("alpha", "agent-1")] = tt.rt
+			}
 
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(workspaceDir string) string {
-		if workspaceDir == "/workspace/alpha/agent-1" {
-			return "feature/status-line"
-		}
-		return ""
-	}
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
-
-	view := fp.viewFleetList(m)
-	if !strings.Contains(view, "feature/status-line") {
-		t.Fatalf("view missing branch item:\n%s", view)
+			view := fp.viewFleetList(m)
+			if tt.want != "" && !strings.Contains(view, tt.want+" ⬡") {
+				t.Fatalf("view missing branch item %q:\n%s", tt.want, view)
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(view, absent) {
+					t.Fatalf("view unexpectedly shows %q:\n%s", absent, view)
+				}
+			}
+		})
 	}
 }
 
@@ -434,10 +462,6 @@ func TestViewFleetListOmitsBranchItemWhenBranchIsUnavailable(t *testing.T) {
 		fleetPage:    fp,
 	}
 
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
-
 	view := fp.viewFleetList(m)
 	if strings.Contains(view, "feature/status-line") {
 		t.Fatalf("view unexpectedly contains branch item:\n%s", view)
@@ -477,10 +501,6 @@ func TestViewFleetListShowsAgentWorkingIndicator(t *testing.T) {
 		sessionStore: NewSessionStore(),
 		fleetPage:    fp,
 	}
-
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
 
 	view := fp.viewFleetList(m)
 	if !strings.Contains(view, "\u25b6") || !strings.Contains(view, "Claude Code") {
@@ -522,10 +542,6 @@ func TestViewFleetListShowsAgentWaitingIndicator(t *testing.T) {
 		fleetPage:    fp,
 	}
 
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
-
 	view := fp.viewFleetList(m)
 	if !strings.Contains(view, "\u23f8") || !strings.Contains(view, "Claude Code") {
 		t.Fatalf("view missing waiting indicator:\n%s", view)
@@ -557,10 +573,6 @@ func TestViewFleetListShowsAgentOffIndicator(t *testing.T) {
 		sessionStore: NewSessionStore(),
 		fleetPage:    fp,
 	}
-
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
 
 	view := fp.viewFleetList(m)
 	if !strings.Contains(view, "idle") {
@@ -596,10 +608,6 @@ func TestViewFleetListNoAgentIndicatorForStoppedInstance(t *testing.T) {
 		sessionStore: NewSessionStore(),
 		fleetPage:    fp,
 	}
-
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
 
 	view := fp.viewFleetList(m)
 	if strings.Contains(view, "Claude Code") || strings.Contains(view, "idle") {
@@ -671,10 +679,6 @@ func TestEditInstanceRenamesViaDisplayName(t *testing.T) {
 	if inst.DisplayName != "auth-fix" {
 		t.Fatalf("DisplayName = %q, want %q", inst.DisplayName, "auth-fix")
 	}
-
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
 
 	view := fp.viewFleetList(m)
 	if !strings.Contains(view, "auth-fix") {
@@ -752,7 +756,7 @@ func TestEditInstanceRejectsNameWithSpaces(t *testing.T) {
 func stubFleetSettingsSave(t *testing.T) {
 	t.Helper()
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { return nil }
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) ([]string, error) { return nil, nil }
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 }
 
@@ -1548,11 +1552,11 @@ func TestEditFleetPFLSetFlagRevertedOnSaveFailure(t *testing.T) {
 
 	failNext := false
 	orig := setFleetSettingsRemote
-	setFleetSettingsRemote = func(string, fleet.FleetSettings) error {
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) ([]string, error) {
 		if failNext {
-			return errors.New("simulated save failure")
+			return nil, errors.New("simulated save failure")
 		}
-		return nil
+		return nil, nil
 	}
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
 
@@ -1758,7 +1762,7 @@ func TestAddInstanceDialogVimKeysRespectActiveField(t *testing.T) {
 	fp := newFleetPage()
 	fp.mode = viewAddInstance
 	fp.dlg.fleet = "alpha"
-	fp.addInst.backend = fleet.BackendDevcontainer
+	fp.addInst.target = fleet.DeployTarget{Backend: fleet.BackendDevcontainer}
 	fp.addInst.color = instanceColorWhite
 	fp.dlg.row = addInstanceRowName
 	fp.dlg.fieldActive = true
@@ -2426,5 +2430,93 @@ func TestDeleteCacheCmdDispatchesByKind(t *testing.T) {
 		if *c.got != "alpha" {
 			t.Fatalf("kind %d: matching RPC not called (got %q)", c.kind, *c.got)
 		}
+	}
+}
+
+// TestEditFleetMountHostFolder: [f] on a custom mount opens its host-folder
+// input; Enter saves the folder (cleaned) to the fleet's settings and the
+// row and footer show it; a relative one keeps the input open with the
+// error; an empty one goes back to the .mnt folder; removing the mount drops
+// its folder; a save the daemon refuses is reverted, its reason shown.
+func TestEditFleetMountHostFolder(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var saved fleet.FleetSettings
+	fail := error(nil)
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(_ string, s fleet.FleetSettings) ([]string, error) {
+		if fail != nil {
+			return nil, fail
+		}
+		saved = s
+		return nil, nil
+	}
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+
+	f := &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{CustomMounts: []string{"/opt/data", "/srv"}}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp, width: 120, height: 50}
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToCustomMountRow(t, fp, m, 0)
+	if hint := fp.editFleetHint(); !strings.Contains(hint, "[f] Host folder") {
+		t.Errorf("hint %q does not offer the host folder", hint)
+	}
+	typeIn := func(s string) {
+		for _, r := range s {
+			fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if !fp.editFleet.editingMountHost {
+		t.Fatal("[f] did not open the host-folder input")
+	}
+	typeIn("data")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !fp.editFleet.editingMountHost || !strings.Contains(fp.customMountFooter(""), "absolute") {
+		t.Fatalf("a relative folder: editing %v, footer %q", fp.editFleet.editingMountHost, fp.customMountFooter(""))
+	}
+	fp.mountHostInput.SetValue("/data/big/")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if fp.editFleet.editingMountHost || saved.CustomMountHostFolders["/opt/data"] != "/data/big" {
+		t.Fatalf("saved %+v (editing %v)", saved.CustomMountHostFolders, fp.editFleet.editingMountHost)
+	}
+	if footer := fp.customMountFooter(""); !strings.Contains(footer, "host: /data/big") {
+		t.Errorf("footer %q does not name the host folder", footer)
+	}
+	if view := fp.renderEditFleet(m); !strings.Contains(view, "→ /data/big") {
+		t.Errorf("the row does not show its host folder:\n%s", view)
+	}
+
+	// The daemon refuses one (fleet's own state): reverted, reason shown.
+	fail = errors.New("invalid custom mount: overlaps fleet's own state")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	fp.mountHostInput.SetValue("/home/u/.fleet")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if fp.editFleet.customMountHosts["/opt/data"] != "/data/big" || !strings.Contains(fp.customMountFooter(""), "fleet's own state") {
+		t.Errorf("a refused save: hosts %v, footer %q", fp.editFleet.customMountHosts, fp.customMountFooter(""))
+	}
+	fail = nil
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if fp.editFleet.editingMountHost || fp.mode != viewEditFleet {
+		t.Fatal("esc should leave the input, not the dialog")
+	}
+
+	// Empty: back to the .mnt folder.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	fp.mountHostInput.SetValue("")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(saved.CustomMountHostFolders) != 0 || !strings.Contains(fp.customMountFooter(""), ".mnt") {
+		t.Errorf("cleared: saved %v, footer %q", saved.CustomMountHostFolders, fp.customMountFooter(""))
+	}
+
+	// Removing a mount takes its folder with it.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	fp.mountHostInput.SetValue("/data/big")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(saved.CustomMounts) != 1 || len(saved.CustomMountHostFolders) != 0 {
+		t.Errorf("after remove: %+v", saved)
 	}
 }

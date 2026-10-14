@@ -1,0 +1,259 @@
+name: Integration Tests (Kubernetes)
+
+# The integration suite on the kubernetes backend (FLEET_ITEST_BACKEND=
+# kubernetes: the tests marked `# itest: k8s`), the backend conformance suite
+# against a cluster, and the cluster-gated Go tests, each on a minikube
+# started in the runner. The merge gate's required check is the aggregate
+# `integration-k8s` job below: green only when every shard, the conformance
+# suite and every live group passed, and every shard holds parity (no
+# devcontainer-only exemption, no unported test: FLEET_ITEST_REQUIRE_K8S_PARITY).
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  # One build of the source for every job: the daemon only serves its pods a
+  # pod build of the same source (the same commit), so the full and pod builds
+  # travel together, with the static tmux bundle for images without tmux.
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The gha cache backend needs the runtime token and cache URLs, which
+      # only JavaScript actions see: export them to the `docker buildx` that
+      # make runs. The scope is build-checks.yml's, so the bundle is cached.
+      - name: Expose the Actions cache to buildx
+        uses: actions/github-script@v7
+        with:
+          script: |
+            for (const key of ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_CACHE_URL',
+                               'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2']) {
+              if (process.env[key]) core.exportVariable(key, process.env[key])
+            }
+
+      - name: Build fleet, the pod build and the tmux bundle
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 go build -o dist/fleet ./cmd/fleet
+          make fleet-pod POD_ARCHES=amd64 POD_BIN_DIR=dist
+          make pod-tmux POD_ARCHES=amd64 POD_BIN_DIR=dist \
+            TMUX_BUILD_FLAGS="--cache-from type=gha,scope=pod-tmux-amd64 --cache-to type=gha,mode=max,scope=pod-tmux-amd64,ignore-error=true"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleet-k8s-bin
+          path: |
+            dist/fleet
+            dist/fleet-pod-linux-amd64
+            dist/fleet-tmux-linux-amd64.tar.gz
+          if-no-files-found: error
+
+  # The suite sharded by test-number range, as integration.yml does; on
+  # kubernetes run.sh keeps only the k8s-marked tests of each range.
+  integration-k8s-shard:
+    name: integration k8s ${{ matrix.range }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        # Balanced by the k8s-marked tests' run times: the TUI ranges hold
+        # many short creates, the 8xx tests a few long ones, 391/393 wait
+        # out automation idle timeouts and 420-440 run the agent installers.
+        range:
+          - "0-100"
+          - "100-200"
+          - "200-300"
+          - "300-400"
+          - "400-500"
+          - "500-700"
+          - "700-735"
+          - "735-802"
+          - "802-820"
+          - "820-"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/k8s-runner
+        with:
+          minikube-flags: --memory=8g --cpus=3
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install the devcontainer CLI and tmux
+        run: |
+          npm install -g @devcontainers/cli
+          sudo apt-get update
+          sudo apt-get install -y tmux
+
+      - name: Run integration tests on minikube
+        env:
+          FLEET_BIN: ${{ runner.temp }}/fleet-k8s-bin/fleet
+          FLEET_POD_BINARY_AMD64: ${{ runner.temp }}/fleet-k8s-bin/fleet-pod-linux-amd64
+          FLEET_POD_TMUX_AMD64: ${{ runner.temp }}/fleet-k8s-bin/fleet-tmux-linux-amd64.tar.gz
+          FLEET_ITEST_BACKEND: kubernetes
+          FLEET_ITEST_CLUSTER: minikube
+          FLEET_ITEST_RANGE: ${{ matrix.range }}
+          # The parity gate: a test in the range that is devcontainer-only or
+          # not ported fails the shard before any test runs.
+          FLEET_ITEST_REQUIRE_K8S_PARITY: "1"
+          # Each failed test's fleet.log and cluster state, before its
+          # teardown: the failure artifact below.
+          FLEET_ITEST_ARTIFACTS: ${{ runner.temp }}/k8s-dump/tests
+          # A failed test runs once more (a download or runner blip fails one
+          # attempt); one that passes only then is named flaky in the summary.
+          FLEET_ITEST_RETRIES: "1"
+        run: ./integration/run.sh
+
+      - name: Dump the cluster
+        if: failure()
+        run: ./.github/actions/k8s-runner/dump.sh "${{ runner.temp }}/k8s-dump"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: k8s-dump-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/k8s-dump
+
+  # The backend conformance suite (internal/backend/backendtest) against the
+  # kubernetes backend on minikube, beside the shards.
+  conformance-k8s:
+    name: conformance kubernetes
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: ./.github/actions/k8s-runner
+        with:
+          minikube-flags: --memory=8g --cpus=3
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install the devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Run the conformance suite
+        env:
+          FLEET_CONFORMANCE: kubernetes:minikube
+          FLEET_POD_TMUX_AMD64: ${{ runner.temp }}/fleet-k8s-bin/fleet-tmux-linux-amd64.tar.gz
+        run: go test -count=1 -timeout 55m -v ./internal/backend/conformance
+
+      - name: Dump the cluster
+        if: failure()
+        run: ./.github/actions/k8s-runner/dump.sh "${{ runner.temp }}/k8s-dump"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: k8s-dump-conformance
+          path: ${{ runner.temp }}/k8s-dump
+
+  # The Go tests that need a real cluster, skipped by the unit workflow: each
+  # group's env var turns its tests on. The images group needs a containerd
+  # node (node load through `minikube image load`, certs.d trust for the
+  # gateway's test CA).
+  live-k8s:
+    name: live ${{ matrix.group }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: backend
+            runtime: docker
+            # TestLiveSeedCache clones from a seed cache: a snapshot class.
+            addons: --addons=volumesnapshots,csi-hostpath-driver
+            run: |
+              go test -count=1 -timeout 55m -v -run 'Live' ./internal/backend/kubernetes ./internal/backend/kubernetes/podspec
+          - group: daemon
+            runtime: docker
+            run: |
+              go test -count=1 -timeout 40m -v -run 'Live' ./internal/server ./internal/server/sshtunnel ./internal/kubeexec ./internal/k8s/owner
+              FLEET_EXECAS_KUBE_CONTEXT=minikube go test -count=1 -timeout 15m -v -run TestKubeExecAs ./internal/execas
+              FLEET_PODSEED_KUBE_CONTEXT=minikube go test -count=1 -timeout 15m -v -run TestKube ./internal/podseed
+              FLEET_PODAGENT_KUBE_CONTEXT=minikube go test -count=1 -timeout 15m -v -run TestKubePodAgent ./internal/podagent
+          - group: images
+            runtime: containerd
+            run: |
+              FLEET_KUBEIMAGE_MINIKUBE=minikube go test -count=1 -timeout 15m -v -run TestMinikube ./internal/backend/kubernetes/kubeimage
+              FLEET_IMAGESERVE_MINIKUBE=minikube go test -count=1 -timeout 15m -v -run Minikube ./internal/k8s/imageserve
+              FLEET_GATEWAY_MINIKUBE=minikube go test -count=1 -timeout 15m -v -run Minikube ./internal/gateway
+              FLEET_KUBE_GATEWAY_MINIKUBE=minikube go test -count=1 -timeout 15m -v -run Minikube ./internal/server
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: ./.github/actions/k8s-runner
+        with:
+          minikube-flags: --memory=8g --cpus=3 --container-runtime=${{ matrix.runtime }} ${{ matrix.addons }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install the devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Run the ${{ matrix.group }} tests
+        env:
+          FLEET_KUBE_TEST_CONTEXT: minikube
+          FLEET_POD_TMUX_AMD64: ${{ runner.temp }}/fleet-k8s-bin/fleet-tmux-linux-amd64.tar.gz
+          FLEET_TEST_TMUX_BUNDLE: ${{ runner.temp }}/fleet-k8s-bin/fleet-tmux-linux-amd64.tar.gz
+        run: ${{ matrix.run }}
+
+      - name: Dump the cluster
+        if: failure()
+        run: ./.github/actions/k8s-runner/dump.sh "${{ runner.temp }}/k8s-dump"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: k8s-dump-live-${{ matrix.group }}
+          path: ${{ runner.temp }}/k8s-dump
+
+  # Single aggregate check, the one branch protection requires (as
+  # integration.yml's "integration"): green only when every job above passed,
+  # independent of how many shards and groups the matrices expand to.
+  integration-k8s:
+    name: integration-k8s
+    runs-on: ubuntu-latest
+    needs: [integration-k8s-shard, conformance-k8s, live-k8s]
+    if: ${{ always() }}
+    steps:
+      - name: Verify every kubernetes job passed
+        run: |
+          shards="${{ needs.integration-k8s-shard.result }}"
+          conformance="${{ needs.conformance-k8s.result }}"
+          live="${{ needs.live-k8s.result }}"
+          echo "shards=${shards} conformance=${conformance} live=${live}"
+          if [ "${shards}" != success ] || [ "${conformance}" != success ] || [ "${live}" != success ]; then
+            echo "::error::a kubernetes job failed (shards=${shards}, conformance=${conformance}, live=${live})"
+            exit 1
+          fi

@@ -10,7 +10,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/protobuf/proto"
@@ -18,9 +17,10 @@ import (
 )
 
 // Poll cadences mirror the TUI's original pollers (live_status.go ~60s,
-// stats/activity ~3s, sessions ~1s). All are GATED on a runtime subscriber
-// existing (h.runtimeWanted), so with no TUI connected the server stays quiet —
-// `fleet ls` (GetState) never opens Watch, so nothing here runs.
+// stats/activity ~3s, sessions ~1s; branches ~3s, in branches.go). All are
+// GATED on a runtime subscriber existing (h.runtimeWanted), so with no TUI
+// connected the server stays quiet — `fleet ls` (GetState) never opens Watch,
+// so nothing here runs (it reads branches on demand instead).
 const (
 	liveStatusInterval    = time.Minute
 	statsActivityInterval = 3 * time.Second
@@ -81,13 +81,14 @@ func (h *hub) pruneBackends(activeKeys []string) {
 	}
 }
 
-// startRuntimePollers launches the three live-runtime pollers. Each populates
-// only its own InstanceRuntime fields and broadcasts changed entries.
+// startRuntimePollers launches the live-runtime pollers. Each populates only
+// its own InstanceRuntime fields and broadcasts changed entries.
 func startRuntimePollers(ctx context.Context, h *hub) {
 	go liveStatusPoller(ctx, h)
 	go statsActivityPoller(ctx, h)
 	go sessionsPoller(ctx, h)
 	go prStatusPoller(ctx, h)
+	go branchPoller(ctx, h)
 }
 
 // runtimeUpdate is one instance's field mutation, applied on the hub loop.
@@ -223,8 +224,8 @@ func liveStatusPass(h *hub) {
 	}
 }
 
-// statsActivityPoller fills CPU/mem stats, agent tool/activity, and the resolved
-// git branch for running instances every ~3s.
+// statsActivityPoller fills CPU/mem stats and agent tool/activity for running
+// instances every ~3s.
 func statsActivityPoller(ctx context.Context, h *hub) {
 	ticker := time.NewTicker(statsActivityInterval)
 	defer ticker.Stop()
@@ -270,7 +271,6 @@ func statsActivityPass(h *hub) {
 	statsByID := make(map[string]*backend.ContainerStats, len(items))
 	captures := make(map[string]backend.AllSessions, len(items))
 	probes := make(map[string]string, len(items))
-	branchByKey := make(map[string]string, len(items))
 	expectedIDs := make([]string, 0, len(items))
 
 	// Fetch container stats, grouped by backend type. Each container keeps its
@@ -320,18 +320,30 @@ func statsActivityPass(h *hub) {
 		}
 	}
 
-	activeKeys := make([]string, 0, len(items))
-	for _, it := range items {
+	// Capture and tool probe per instance, on the bounded worker pool: each
+	// worker fills only its own slot, merged into the maps below.
+	type probed struct {
+		capture backend.AllSessions
+		tool    string
+		toolOK  bool
+	}
+	probedAt := make([]probed, len(items))
+	forEachBounded(len(items), pollerWorkers, func(i int) {
+		it := items[i]
 		b := h.backendFor(it.inst)
-		captures[it.containerID] = b.CaptureAllSessions(it.containerID)
-		if tool, ok := b.AgentToolProbe(it.containerID); ok {
-			probes[it.containerID] = tool
+		p := &probedAt[i]
+		p.capture = b.CaptureAllSessions(it.containerID)
+		p.tool, p.toolOK = b.AgentToolProbe(it.containerID)
+	})
+	activeKeys := make([]string, 0, len(items))
+	for i, it := range items {
+		p := probedAt[i]
+		captures[it.containerID] = p.capture
+		if p.toolOK {
+			probes[it.containerID] = p.tool
 		}
 		expectedIDs = append(expectedIDs, it.containerID)
 		activeKeys = append(activeKeys, backendCacheKey(it.inst))
-		if it.workspaceDir != "" {
-			branchByKey[runtimeKey(it.fleetName, it.instance)] = gitutil.BranchName(it.workspaceDir)
-		}
 	}
 	// Bound the backend cache to the instances running this pass (stops/rebuilds
 	// drop out). The stats pass owns this since it already enumerates every
@@ -373,19 +385,19 @@ func statsActivityPass(h *hub) {
 		ups := make([]runtimeUpdate, 0, len(items))
 		for _, it := range items {
 			cid := it.containerID
-			key := runtimeKey(it.fleetName, it.instance)
-			activity := agentActivityToProto(h.agent.State(cid))
+			agentState := h.agent.State(cid)
+			activity := agentActivityToProto(agentState)
 			tool := agentToolToProto(h.agent.Tool(cid))
 			stats := statsToProto(statsByID[cid])
-			branch := branchByKey[key]
+			if agentState == agentdetect.StateUnknown {
+				// Nothing about an instance that keeps failing its captures
+				// is current: its row shows no numbers rather than old ones.
+				stats = nil
+			}
 			ups = append(ups, runtimeUpdate{it.fleetName, it.instance, func(r *fleetgrpc.InstanceRuntime) {
 				r.AgentActivity = activity
 				r.AgentTool = tool
 				r.Stats = stats
-				if branch != "" {
-					b := branch
-					r.CurrentBranch = &b
-				}
 			}})
 		}
 		h.applyRuntime(ups)
@@ -417,6 +429,7 @@ func sessionsPass(h *hub) {
 	}
 	type result struct {
 		fleetName, instance string
+		inst                *fleet.Instance
 		sessions            []*fleetgrpc.TmuxSession
 	}
 	var results []result
@@ -425,18 +438,21 @@ func sessionsPass(h *hub) {
 			if inst.ContainerID == "" || inst.Status != fleet.StatusRunning {
 				continue
 			}
-			// ListSessions execs directly against the container ID (no
-			// devcontainer Node cold start) and returns "" on failure — which,
-			// like a tmux server that isn't running, parses to an empty list and
-			// clears any stale sessions.
-			b := h.backendFor(inst)
-			sessions := parseTmuxSessionsProto(b.ListSessions(inst.ContainerID))
-			results = append(results, result{fleetName, inst.Name, sessions})
+			results = append(results, result{fleetName: fleetName, instance: inst.Name, inst: inst})
 		}
 	}
 	if len(results) == 0 {
 		return
 	}
+	// ListSessions execs directly against the container ID (no devcontainer
+	// Node cold start) and returns "" on failure — which, like a tmux server
+	// that isn't running, parses to an empty list and clears any stale
+	// sessions. Instances are listed on the bounded worker pool, each worker
+	// writing only its own result.
+	forEachBounded(len(results), pollerWorkers, func(i int) {
+		r := &results[i]
+		r.sessions = parseTmuxSessionsProto(h.backendFor(r.inst).ListSessions(r.inst.ContainerID))
+	})
 	h.post(func(h *hub) {
 		ups := make([]runtimeUpdate, 0, len(results))
 		for _, r := range results {

@@ -19,51 +19,71 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	FleetService_Hello_FullMethodName                  = "/fleetgrpc.FleetService/Hello"
-	FleetService_Shutdown_FullMethodName               = "/fleetgrpc.FleetService/Shutdown"
-	FleetService_FleetTUIConnected_FullMethodName      = "/fleetgrpc.FleetService/FleetTUIConnected"
-	FleetService_GetState_FullMethodName               = "/fleetgrpc.FleetService/GetState"
-	FleetService_Watch_FullMethodName                  = "/fleetgrpc.FleetService/Watch"
-	FleetService_CreateInstance_FullMethodName         = "/fleetgrpc.FleetService/CreateInstance"
-	FleetService_DestroyInstance_FullMethodName        = "/fleetgrpc.FleetService/DestroyInstance"
-	FleetService_StartInstance_FullMethodName          = "/fleetgrpc.FleetService/StartInstance"
-	FleetService_StopInstance_FullMethodName           = "/fleetgrpc.FleetService/StopInstance"
-	FleetService_CloneInstance_FullMethodName          = "/fleetgrpc.FleetService/CloneInstance"
-	FleetService_RebuildInstance_FullMethodName        = "/fleetgrpc.FleetService/RebuildInstance"
-	FleetService_CreateFleet_FullMethodName            = "/fleetgrpc.FleetService/CreateFleet"
-	FleetService_DestroyFleet_FullMethodName           = "/fleetgrpc.FleetService/DestroyFleet"
-	FleetService_SetFleetSettings_FullMethodName       = "/fleetgrpc.FleetService/SetFleetSettings"
-	FleetService_DeleteBuildkitCache_FullMethodName    = "/fleetgrpc.FleetService/DeleteBuildkitCache"
-	FleetService_DeleteDebCache_FullMethodName         = "/fleetgrpc.FleetService/DeleteDebCache"
-	FleetService_DeleteImageCache_FullMethodName       = "/fleetgrpc.FleetService/DeleteImageCache"
-	FleetService_SetInstanceMetadata_FullMethodName    = "/fleetgrpc.FleetService/SetInstanceMetadata"
-	FleetService_SetGroupLayout_FullMethodName         = "/fleetgrpc.FleetService/SetGroupLayout"
-	FleetService_DeleteGroupLayout_FullMethodName      = "/fleetgrpc.FleetService/DeleteGroupLayout"
-	FleetService_SetLastSeenVersion_FullMethodName     = "/fleetgrpc.FleetService/SetLastSeenVersion"
-	FleetService_GetConfig_FullMethodName              = "/fleetgrpc.FleetService/GetConfig"
-	FleetService_SetConfig_FullMethodName              = "/fleetgrpc.FleetService/SetConfig"
-	FleetService_GetArmada_FullMethodName              = "/fleetgrpc.FleetService/GetArmada"
-	FleetService_SetArmada_FullMethodName              = "/fleetgrpc.FleetService/SetArmada"
-	FleetService_ResolveArmadaRemote_FullMethodName    = "/fleetgrpc.FleetService/ResolveArmadaRemote"
-	FleetService_TrustSSHHostKey_FullMethodName        = "/fleetgrpc.FleetService/TrustSSHHostKey"
-	FleetService_GitHostKeys_FullMethodName            = "/fleetgrpc.FleetService/GitHostKeys"
-	FleetService_Exec_FullMethodName                   = "/fleetgrpc.FleetService/Exec"
-	FleetService_ResolveExecCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveExecCommand"
-	FleetService_ResolveLogsCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveLogsCommand"
-	FleetService_Logs_FullMethodName                   = "/fleetgrpc.FleetService/Logs"
-	FleetService_TriggerLogs_FullMethodName            = "/fleetgrpc.FleetService/TriggerLogs"
-	FleetService_Forward_FullMethodName                = "/fleetgrpc.FleetService/Forward"
-	FleetService_Mic_FullMethodName                    = "/fleetgrpc.FleetService/Mic"
-	FleetService_ListMicSources_FullMethodName         = "/fleetgrpc.FleetService/ListMicSources"
-	FleetService_Output_FullMethodName                 = "/fleetgrpc.FleetService/Output"
-	FleetService_ListOutputTargets_FullMethodName      = "/fleetgrpc.FleetService/ListOutputTargets"
-	FleetService_SSHAgent_FullMethodName               = "/fleetgrpc.FleetService/SSHAgent"
-	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
-	FleetService_CopyInto_FullMethodName               = "/fleetgrpc.FleetService/CopyInto"
-	FleetService_InspectRepo_FullMethodName            = "/fleetgrpc.FleetService/InspectRepo"
-	FleetService_GetCoderTemplateParams_FullMethodName = "/fleetgrpc.FleetService/GetCoderTemplateParams"
-	FleetService_GetBrowserConfig_FullMethodName       = "/fleetgrpc.FleetService/GetBrowserConfig"
-	FleetService_PrepareBrowser_FullMethodName         = "/fleetgrpc.FleetService/PrepareBrowser"
+	FleetService_Hello_FullMethodName                   = "/fleetgrpc.FleetService/Hello"
+	FleetService_Shutdown_FullMethodName                = "/fleetgrpc.FleetService/Shutdown"
+	FleetService_FleetTUIConnected_FullMethodName       = "/fleetgrpc.FleetService/FleetTUIConnected"
+	FleetService_GetState_FullMethodName                = "/fleetgrpc.FleetService/GetState"
+	FleetService_Watch_FullMethodName                   = "/fleetgrpc.FleetService/Watch"
+	FleetService_CreateInstance_FullMethodName          = "/fleetgrpc.FleetService/CreateInstance"
+	FleetService_DestroyInstance_FullMethodName         = "/fleetgrpc.FleetService/DestroyInstance"
+	FleetService_StartInstance_FullMethodName           = "/fleetgrpc.FleetService/StartInstance"
+	FleetService_StopInstance_FullMethodName            = "/fleetgrpc.FleetService/StopInstance"
+	FleetService_CloneInstance_FullMethodName           = "/fleetgrpc.FleetService/CloneInstance"
+	FleetService_RebuildInstance_FullMethodName         = "/fleetgrpc.FleetService/RebuildInstance"
+	FleetService_CreateFleet_FullMethodName             = "/fleetgrpc.FleetService/CreateFleet"
+	FleetService_DestroyFleet_FullMethodName            = "/fleetgrpc.FleetService/DestroyFleet"
+	FleetService_SetFleetSettings_FullMethodName        = "/fleetgrpc.FleetService/SetFleetSettings"
+	FleetService_DeleteBuildkitCache_FullMethodName     = "/fleetgrpc.FleetService/DeleteBuildkitCache"
+	FleetService_DeleteDebCache_FullMethodName          = "/fleetgrpc.FleetService/DeleteDebCache"
+	FleetService_DeleteImageCache_FullMethodName        = "/fleetgrpc.FleetService/DeleteImageCache"
+	FleetService_GetCacheUsage_FullMethodName           = "/fleetgrpc.FleetService/GetCacheUsage"
+	FleetService_SetInstanceMetadata_FullMethodName     = "/fleetgrpc.FleetService/SetInstanceMetadata"
+	FleetService_SetGroupLayout_FullMethodName          = "/fleetgrpc.FleetService/SetGroupLayout"
+	FleetService_DeleteGroupLayout_FullMethodName       = "/fleetgrpc.FleetService/DeleteGroupLayout"
+	FleetService_SetLastSeenVersion_FullMethodName      = "/fleetgrpc.FleetService/SetLastSeenVersion"
+	FleetService_GetConfig_FullMethodName               = "/fleetgrpc.FleetService/GetConfig"
+	FleetService_SetConfig_FullMethodName               = "/fleetgrpc.FleetService/SetConfig"
+	FleetService_GetArmada_FullMethodName               = "/fleetgrpc.FleetService/GetArmada"
+	FleetService_SetArmada_FullMethodName               = "/fleetgrpc.FleetService/SetArmada"
+	FleetService_ResolveArmadaRemote_FullMethodName     = "/fleetgrpc.FleetService/ResolveArmadaRemote"
+	FleetService_TrustSSHHostKey_FullMethodName         = "/fleetgrpc.FleetService/TrustSSHHostKey"
+	FleetService_SaveEditorEndpoint_FullMethodName      = "/fleetgrpc.FleetService/SaveEditorEndpoint"
+	FleetService_ResolveEditorEndpoint_FullMethodName   = "/fleetgrpc.FleetService/ResolveEditorEndpoint"
+	FleetService_GitHostKeys_FullMethodName             = "/fleetgrpc.FleetService/GitHostKeys"
+	FleetService_Exec_FullMethodName                    = "/fleetgrpc.FleetService/Exec"
+	FleetService_ResolveExecCommand_FullMethodName      = "/fleetgrpc.FleetService/ResolveExecCommand"
+	FleetService_ResolveLogsCommand_FullMethodName      = "/fleetgrpc.FleetService/ResolveLogsCommand"
+	FleetService_ResolveEditorLaunch_FullMethodName     = "/fleetgrpc.FleetService/ResolveEditorLaunch"
+	FleetService_Logs_FullMethodName                    = "/fleetgrpc.FleetService/Logs"
+	FleetService_IssueKubeExecCredential_FullMethodName = "/fleetgrpc.FleetService/IssueKubeExecCredential"
+	FleetService_PodExec_FullMethodName                 = "/fleetgrpc.FleetService/PodExec"
+	FleetService_TriggerLogs_FullMethodName             = "/fleetgrpc.FleetService/TriggerLogs"
+	FleetService_GetAutomationStatus_FullMethodName     = "/fleetgrpc.FleetService/GetAutomationStatus"
+	FleetService_Forward_FullMethodName                 = "/fleetgrpc.FleetService/Forward"
+	FleetService_Mic_FullMethodName                     = "/fleetgrpc.FleetService/Mic"
+	FleetService_ListMicSources_FullMethodName          = "/fleetgrpc.FleetService/ListMicSources"
+	FleetService_Output_FullMethodName                  = "/fleetgrpc.FleetService/Output"
+	FleetService_ListOutputTargets_FullMethodName       = "/fleetgrpc.FleetService/ListOutputTargets"
+	FleetService_SSHAgent_FullMethodName                = "/fleetgrpc.FleetService/SSHAgent"
+	FleetService_CopyFile_FullMethodName                = "/fleetgrpc.FleetService/CopyFile"
+	FleetService_CopyInto_FullMethodName                = "/fleetgrpc.FleetService/CopyInto"
+	FleetService_ListDeployTargets_FullMethodName       = "/fleetgrpc.FleetService/ListDeployTargets"
+	FleetService_ListKubeContexts_FullMethodName        = "/fleetgrpc.FleetService/ListKubeContexts"
+	FleetService_ListKubeClusters_FullMethodName        = "/fleetgrpc.FleetService/ListKubeClusters"
+	FleetService_AddKubeCluster_FullMethodName          = "/fleetgrpc.FleetService/AddKubeCluster"
+	FleetService_UpdateKubeCluster_FullMethodName       = "/fleetgrpc.FleetService/UpdateKubeCluster"
+	FleetService_RemoveKubeCluster_FullMethodName       = "/fleetgrpc.FleetService/RemoveKubeCluster"
+	FleetService_TestKubeCluster_FullMethodName         = "/fleetgrpc.FleetService/TestKubeCluster"
+	FleetService_PruneKubeCluster_FullMethodName        = "/fleetgrpc.FleetService/PruneKubeCluster"
+	FleetService_LoginKubeCluster_FullMethodName        = "/fleetgrpc.FleetService/LoginKubeCluster"
+	FleetService_CreateKubeNamespace_FullMethodName     = "/fleetgrpc.FleetService/CreateKubeNamespace"
+	FleetService_GetShareSync_FullMethodName            = "/fleetgrpc.FleetService/GetShareSync"
+	FleetService_WaitShareSync_FullMethodName           = "/fleetgrpc.FleetService/WaitShareSync"
+	FleetService_ListShareConflicts_FullMethodName      = "/fleetgrpc.FleetService/ListShareConflicts"
+	FleetService_InspectRepo_FullMethodName             = "/fleetgrpc.FleetService/InspectRepo"
+	FleetService_GetCoderTemplateParams_FullMethodName  = "/fleetgrpc.FleetService/GetCoderTemplateParams"
+	FleetService_GetBrowserConfig_FullMethodName        = "/fleetgrpc.FleetService/GetBrowserConfig"
+	FleetService_PrepareBrowser_FullMethodName          = "/fleetgrpc.FleetService/PrepareBrowser"
 )
 
 // FleetServiceClient is the client API for FleetService service.
@@ -107,10 +127,15 @@ type FleetServiceClient interface {
 	// longer deadline and show progress.
 	DeleteBuildkitCache(ctx context.Context, in *DeleteBuildkitCacheRequest, opts ...grpc.CallOption) (*DeleteBuildkitCacheReply, error)
 	// DeleteDebCache / DeleteImageCache wipe a fleet's shared deb / docker-image
-	// cache and restart the (empty) server. Synchronous host-docker actions —
-	// clients use the same longer deadline as DeleteBuildkitCache.
+	// cache and restart the (empty) server, wherever the fleet's instances reach
+	// one (the daemon host's docker, each cluster). Synchronous — clients use
+	// the same longer deadline as DeleteBuildkitCache.
 	DeleteDebCache(ctx context.Context, in *DeleteDebCacheRequest, opts ...grpc.CallOption) (*DeleteDebCacheReply, error)
 	DeleteImageCache(ctx context.Context, in *DeleteImageCacheRequest, opts ...grpc.CallOption) (*DeleteImageCacheReply, error)
+	// GetCacheUsage reports how full each of a fleet's cache volumes is where
+	// its caches run on volumes of a fixed size (its clusters), for the fleet
+	// options' Caching rows.
+	GetCacheUsage(ctx context.Context, in *GetCacheUsageRequest, opts ...grpc.CallOption) (*GetCacheUsageReply, error)
 	SetInstanceMetadata(ctx context.Context, in *SetInstanceMetadataRequest, opts ...grpc.CallOption) (*MutationReply, error)
 	SetGroupLayout(ctx context.Context, in *SetGroupLayoutRequest, opts ...grpc.CallOption) (*MutationReply, error)
 	DeleteGroupLayout(ctx context.Context, in *DeleteGroupLayoutRequest, opts ...grpc.CallOption) (*MutationReply, error)
@@ -130,6 +155,10 @@ type FleetServiceClient interface {
 	// Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
 	// ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
 	TrustSSHHostKey(ctx context.Context, in *TrustSSHHostKeyRequest, opts ...grpc.CallOption) (*TrustSSHHostKeyReply, error)
+	// Remember / look up a remote daemon an editor alias leads to (armada.proto,
+	// editor_endpoints.json). Local-only, like Get/SetArmada.
+	SaveEditorEndpoint(ctx context.Context, in *SaveEditorEndpointRequest, opts ...grpc.CallOption) (*SaveEditorEndpointReply, error)
+	ResolveEditorEndpoint(ctx context.Context, in *ResolveEditorEndpointRequest, opts ...grpc.CallOption) (*ResolveEditorEndpointReply, error)
 	// Interactive approval of unknown git-host keys on THIS daemon's host.
 	// Unlike Armada trust, this is available to authenticated remote clients.
 	GitHostKeys(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GitHostKeyAnswer, GitHostKeyPrompt], error)
@@ -137,12 +166,32 @@ type FleetServiceClient interface {
 	Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error)
 	ResolveExecCommand(ctx context.Context, in *ResolveExecCommandRequest, opts ...grpc.CallOption) (*ResolveExecCommandReply, error)
 	ResolveLogsCommand(ctx context.Context, in *ResolveLogsCommandRequest, opts ...grpc.CallOption) (*ResolveLogsCommandReply, error)
+	// How the caller opens VS Code on an instance (exec.proto).
+	ResolveEditorLaunch(ctx context.Context, in *ResolveEditorLaunchRequest, opts ...grpc.CallOption) (*ResolveEditorLaunchReply, error)
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error)
+	// IssueKubeExecCredential hands the daemon-host `fleet kube-exec` shim the
+	// transport fleetd reaches a Kubernetes connection's API server with
+	// (kube_exec.proto), so its direct-mode attaches run no credential plugin
+	// of their own. Local-only: remote clients exec through Exec instead.
+	IssueKubeExecCredential(ctx context.Context, in *IssueKubeExecCredentialRequest, opts ...grpc.CallOption) (*IssueKubeExecCredentialReply, error)
+	// PodExec runs one command in a Kubernetes instance's pod for the
+	// daemon-host `fleet kube-exec` shim's daemon mode (a command without a
+	// terminal: every ExecCommand of a Kubernetes instance), through the pod's
+	// agent session. The first ExecIn carries pod_start. Local-only, like
+	// IssueKubeExecCredential: remote clients run the same commands through
+	// Exec.
+	PodExec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error)
 	// TriggerLogs returns an automation trigger's recorded event logs (the
 	// payloads of its recent firings, concatenated for viewing). The daemon owns
 	// the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
 	// over the service works unchanged when the daemon is remote.
 	TriggerLogs(ctx context.Context, in *TriggerLogsRequest, opts ...grpc.CallOption) (*TriggerLogsReply, error)
+	// GetAutomationStatus is the automation scheduler's view of a fleet's
+	// agents (every fleet's when fleet is empty), as Watch pushes it
+	// (Event.automation_status): which ones the login check refuses, and how
+	// many runs each has queued and running. For clients that do not watch
+	// (`fleet agent list`); served to remote clients as to local ones.
+	GetAutomationStatus(ctx context.Context, in *GetAutomationStatusRequest, opts ...grpc.CallOption) (*GetAutomationStatusReply, error)
 	// Forward is the port-forward data plane: one bidi stream per forwarded TCP
 	// connection (first frame is the ForwardOpen header, the rest raw bytes).
 	// The client listens locally and pipes each accepted connection through this
@@ -168,6 +217,44 @@ type FleetServiceClient interface {
 	// Client-streaming: first chunk is the open header, the rest are data. Backs
 	// the scp-style upload (and instance→instance relay) direction of `fleet copy`.
 	CopyInto(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply], error)
+	// ---- Deploy targets ----
+	// ListDeployTargets lists where this daemon can create an instance (judged
+	// on the daemon host), the remembered default, and the daemon host's build
+	// tools. Served to remote clients exactly as to local ones.
+	ListDeployTargets(ctx context.Context, in *ListDeployTargetsRequest, opts ...grpc.CallOption) (*ListDeployTargetsReply, error)
+	// ListKubeContexts lists the contexts of kubeconfig files on the daemon
+	// host (the context picker).
+	ListKubeContexts(ctx context.Context, in *ListKubeContextsRequest, opts ...grpc.CallOption) (*ListKubeContextsReply, error)
+	// ListKubeClusters returns every connection with its health (also pushed
+	// as Watch Event.kube_clusters).
+	ListKubeClusters(ctx context.Context, in *ListKubeClustersRequest, opts ...grpc.CallOption) (*ListKubeClustersReply, error)
+	AddKubeCluster(ctx context.Context, in *AddKubeClusterRequest, opts ...grpc.CallOption) (*AddKubeClusterReply, error)
+	// UpdateKubeCluster changes the fields its FieldMask names.
+	UpdateKubeCluster(ctx context.Context, in *UpdateKubeClusterRequest, opts ...grpc.CallOption) (*UpdateKubeClusterReply, error)
+	// RemoveKubeCluster disconnects a connection (KubeRemoveMode). Destroying
+	// its instances can take minutes: clients use a long deadline.
+	RemoveKubeCluster(ctx context.Context, in *RemoveKubeClusterRequest, opts ...grpc.CallOption) (*RemoveKubeClusterReply, error)
+	// TestKubeCluster runs the full preflight on a saved or an unsaved
+	// connection, streaming each check.
+	TestKubeCluster(ctx context.Context, in *TestKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TestKubeClusterEvent], error)
+	// PruneKubeCluster lists, and with apply deletes, the objects labelled for
+	// this daemon and connection that no instance accounts for.
+	PruneKubeCluster(ctx context.Context, in *PruneKubeClusterRequest, opts ...grpc.CallOption) (*PruneKubeClusterReply, error)
+	// LoginKubeCluster runs the connection's login plugin on the daemon host
+	// ([Run login on daemon]) and relays only its device-code URL and code.
+	LoginKubeCluster(ctx context.Context, in *LoginKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LoginKubeClusterEvent], error)
+	// CreateKubeNamespace creates a connection's namespace (AddKubeCluster and
+	// UpdateKubeCluster create a missing one themselves; this makes one that
+	// went missing later, or with other labels), or with dry_run only renders
+	// it.
+	CreateKubeNamespace(ctx context.Context, in *CreateKubeNamespaceRequest, opts ...grpc.CallOption) (*CreateKubeNamespaceReply, error)
+	// GetShareSync reports each fleet's sync: its folders, sides, pauses,
+	// shares and conflict count.
+	GetShareSync(ctx context.Context, in *GetShareSyncRequest, opts ...grpc.CallOption) (*GetShareSyncReply, error)
+	// WaitShareSync waits until the fleet's sides agree (`fleet sync wait`).
+	WaitShareSync(ctx context.Context, in *WaitShareSyncRequest, opts ...grpc.CallOption) (*WaitShareSyncReply, error)
+	// ListShareConflicts lists the conflict copies kept on the daemon host.
+	ListShareConflicts(ctx context.Context, in *ListShareConflictsRequest, opts ...grpc.CallOption) (*ListShareConflictsReply, error)
 	// ---- Repo inspection (server-side clone + checks) ----
 	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
 	// devcontainer presence (and optionally the detected container home dir).
@@ -422,6 +509,16 @@ func (c *fleetServiceClient) DeleteImageCache(ctx context.Context, in *DeleteIma
 	return out, nil
 }
 
+func (c *fleetServiceClient) GetCacheUsage(ctx context.Context, in *GetCacheUsageRequest, opts ...grpc.CallOption) (*GetCacheUsageReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCacheUsageReply)
+	err := c.cc.Invoke(ctx, FleetService_GetCacheUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) SetInstanceMetadata(ctx context.Context, in *SetInstanceMetadataRequest, opts ...grpc.CallOption) (*MutationReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MutationReply)
@@ -522,6 +619,26 @@ func (c *fleetServiceClient) TrustSSHHostKey(ctx context.Context, in *TrustSSHHo
 	return out, nil
 }
 
+func (c *fleetServiceClient) SaveEditorEndpoint(ctx context.Context, in *SaveEditorEndpointRequest, opts ...grpc.CallOption) (*SaveEditorEndpointReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SaveEditorEndpointReply)
+	err := c.cc.Invoke(ctx, FleetService_SaveEditorEndpoint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) ResolveEditorEndpoint(ctx context.Context, in *ResolveEditorEndpointRequest, opts ...grpc.CallOption) (*ResolveEditorEndpointReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveEditorEndpointReply)
+	err := c.cc.Invoke(ctx, FleetService_ResolveEditorEndpoint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) GitHostKeys(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GitHostKeyAnswer, GitHostKeyPrompt], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[7], FleetService_GitHostKeys_FullMethodName, cOpts...)
@@ -568,6 +685,16 @@ func (c *fleetServiceClient) ResolveLogsCommand(ctx context.Context, in *Resolve
 	return out, nil
 }
 
+func (c *fleetServiceClient) ResolveEditorLaunch(ctx context.Context, in *ResolveEditorLaunchRequest, opts ...grpc.CallOption) (*ResolveEditorLaunchReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveEditorLaunchReply)
+	err := c.cc.Invoke(ctx, FleetService_ResolveEditorLaunch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[9], FleetService_Logs_FullMethodName, cOpts...)
@@ -587,6 +714,29 @@ func (c *fleetServiceClient) Logs(ctx context.Context, in *LogsRequest, opts ...
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_LogsClient = grpc.ServerStreamingClient[LogLine]
 
+func (c *fleetServiceClient) IssueKubeExecCredential(ctx context.Context, in *IssueKubeExecCredentialRequest, opts ...grpc.CallOption) (*IssueKubeExecCredentialReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IssueKubeExecCredentialReply)
+	err := c.cc.Invoke(ctx, FleetService_IssueKubeExecCredential_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) PodExec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[10], FleetService_PodExec_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ExecIn, ExecOut]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_PodExecClient = grpc.BidiStreamingClient[ExecIn, ExecOut]
+
 func (c *fleetServiceClient) TriggerLogs(ctx context.Context, in *TriggerLogsRequest, opts ...grpc.CallOption) (*TriggerLogsReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TriggerLogsReply)
@@ -597,9 +747,19 @@ func (c *fleetServiceClient) TriggerLogs(ctx context.Context, in *TriggerLogsReq
 	return out, nil
 }
 
+func (c *fleetServiceClient) GetAutomationStatus(ctx context.Context, in *GetAutomationStatusRequest, opts ...grpc.CallOption) (*GetAutomationStatusReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAutomationStatusReply)
+	err := c.cc.Invoke(ctx, FleetService_GetAutomationStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardChunk, ForwardChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[10], FleetService_Forward_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[11], FleetService_Forward_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -612,7 +772,7 @@ type FleetService_ForwardClient = grpc.BidiStreamingClient[ForwardChunk, Forward
 
 func (c *fleetServiceClient) Mic(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[MicUp, MicDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[11], FleetService_Mic_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_Mic_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -635,7 +795,7 @@ func (c *fleetServiceClient) ListMicSources(ctx context.Context, in *ListMicSour
 
 func (c *fleetServiceClient) Output(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[OutputUp, OutputDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_Output_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[13], FleetService_Output_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -658,7 +818,7 @@ func (c *fleetServiceClient) ListOutputTargets(ctx context.Context, in *ListOutp
 
 func (c *fleetServiceClient) SSHAgent(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SSHAgentUp, SSHAgentDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[13], FleetService_SSHAgent_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[14], FleetService_SSHAgent_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -671,7 +831,7 @@ type FleetService_SSHAgentClient = grpc.BidiStreamingClient[SSHAgentUp, SSHAgent
 
 func (c *fleetServiceClient) CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[14], FleetService_CopyFile_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[15], FleetService_CopyFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -690,7 +850,7 @@ type FleetService_CopyFileClient = grpc.ServerStreamingClient[CopyFileChunk]
 
 func (c *fleetServiceClient) CopyInto(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[15], FleetService_CopyInto_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[16], FleetService_CopyInto_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -700,6 +860,154 @@ func (c *fleetServiceClient) CopyInto(ctx context.Context, opts ...grpc.CallOpti
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_CopyIntoClient = grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply]
+
+func (c *fleetServiceClient) ListDeployTargets(ctx context.Context, in *ListDeployTargetsRequest, opts ...grpc.CallOption) (*ListDeployTargetsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDeployTargetsReply)
+	err := c.cc.Invoke(ctx, FleetService_ListDeployTargets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) ListKubeContexts(ctx context.Context, in *ListKubeContextsRequest, opts ...grpc.CallOption) (*ListKubeContextsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListKubeContextsReply)
+	err := c.cc.Invoke(ctx, FleetService_ListKubeContexts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) ListKubeClusters(ctx context.Context, in *ListKubeClustersRequest, opts ...grpc.CallOption) (*ListKubeClustersReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListKubeClustersReply)
+	err := c.cc.Invoke(ctx, FleetService_ListKubeClusters_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) AddKubeCluster(ctx context.Context, in *AddKubeClusterRequest, opts ...grpc.CallOption) (*AddKubeClusterReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddKubeClusterReply)
+	err := c.cc.Invoke(ctx, FleetService_AddKubeCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) UpdateKubeCluster(ctx context.Context, in *UpdateKubeClusterRequest, opts ...grpc.CallOption) (*UpdateKubeClusterReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateKubeClusterReply)
+	err := c.cc.Invoke(ctx, FleetService_UpdateKubeCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) RemoveKubeCluster(ctx context.Context, in *RemoveKubeClusterRequest, opts ...grpc.CallOption) (*RemoveKubeClusterReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveKubeClusterReply)
+	err := c.cc.Invoke(ctx, FleetService_RemoveKubeCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) TestKubeCluster(ctx context.Context, in *TestKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TestKubeClusterEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[17], FleetService_TestKubeCluster_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[TestKubeClusterRequest, TestKubeClusterEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_TestKubeClusterClient = grpc.ServerStreamingClient[TestKubeClusterEvent]
+
+func (c *fleetServiceClient) PruneKubeCluster(ctx context.Context, in *PruneKubeClusterRequest, opts ...grpc.CallOption) (*PruneKubeClusterReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PruneKubeClusterReply)
+	err := c.cc.Invoke(ctx, FleetService_PruneKubeCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) LoginKubeCluster(ctx context.Context, in *LoginKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LoginKubeClusterEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[18], FleetService_LoginKubeCluster_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[LoginKubeClusterRequest, LoginKubeClusterEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_LoginKubeClusterClient = grpc.ServerStreamingClient[LoginKubeClusterEvent]
+
+func (c *fleetServiceClient) CreateKubeNamespace(ctx context.Context, in *CreateKubeNamespaceRequest, opts ...grpc.CallOption) (*CreateKubeNamespaceReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateKubeNamespaceReply)
+	err := c.cc.Invoke(ctx, FleetService_CreateKubeNamespace_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) GetShareSync(ctx context.Context, in *GetShareSyncRequest, opts ...grpc.CallOption) (*GetShareSyncReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetShareSyncReply)
+	err := c.cc.Invoke(ctx, FleetService_GetShareSync_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) WaitShareSync(ctx context.Context, in *WaitShareSyncRequest, opts ...grpc.CallOption) (*WaitShareSyncReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WaitShareSyncReply)
+	err := c.cc.Invoke(ctx, FleetService_WaitShareSync_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) ListShareConflicts(ctx context.Context, in *ListShareConflictsRequest, opts ...grpc.CallOption) (*ListShareConflictsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListShareConflictsReply)
+	err := c.cc.Invoke(ctx, FleetService_ListShareConflicts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *fleetServiceClient) InspectRepo(ctx context.Context, in *InspectRepoRequest, opts ...grpc.CallOption) (*InspectRepoReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -782,10 +1090,15 @@ type FleetServiceServer interface {
 	// longer deadline and show progress.
 	DeleteBuildkitCache(context.Context, *DeleteBuildkitCacheRequest) (*DeleteBuildkitCacheReply, error)
 	// DeleteDebCache / DeleteImageCache wipe a fleet's shared deb / docker-image
-	// cache and restart the (empty) server. Synchronous host-docker actions —
-	// clients use the same longer deadline as DeleteBuildkitCache.
+	// cache and restart the (empty) server, wherever the fleet's instances reach
+	// one (the daemon host's docker, each cluster). Synchronous — clients use
+	// the same longer deadline as DeleteBuildkitCache.
 	DeleteDebCache(context.Context, *DeleteDebCacheRequest) (*DeleteDebCacheReply, error)
 	DeleteImageCache(context.Context, *DeleteImageCacheRequest) (*DeleteImageCacheReply, error)
+	// GetCacheUsage reports how full each of a fleet's cache volumes is where
+	// its caches run on volumes of a fixed size (its clusters), for the fleet
+	// options' Caching rows.
+	GetCacheUsage(context.Context, *GetCacheUsageRequest) (*GetCacheUsageReply, error)
 	SetInstanceMetadata(context.Context, *SetInstanceMetadataRequest) (*MutationReply, error)
 	SetGroupLayout(context.Context, *SetGroupLayoutRequest) (*MutationReply, error)
 	DeleteGroupLayout(context.Context, *DeleteGroupLayoutRequest) (*MutationReply, error)
@@ -805,6 +1118,10 @@ type FleetServiceServer interface {
 	// Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
 	// ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
 	TrustSSHHostKey(context.Context, *TrustSSHHostKeyRequest) (*TrustSSHHostKeyReply, error)
+	// Remember / look up a remote daemon an editor alias leads to (armada.proto,
+	// editor_endpoints.json). Local-only, like Get/SetArmada.
+	SaveEditorEndpoint(context.Context, *SaveEditorEndpointRequest) (*SaveEditorEndpointReply, error)
+	ResolveEditorEndpoint(context.Context, *ResolveEditorEndpointRequest) (*ResolveEditorEndpointReply, error)
 	// Interactive approval of unknown git-host keys on THIS daemon's host.
 	// Unlike Armada trust, this is available to authenticated remote clients.
 	GitHostKeys(grpc.BidiStreamingServer[GitHostKeyAnswer, GitHostKeyPrompt]) error
@@ -812,12 +1129,32 @@ type FleetServiceServer interface {
 	Exec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error
 	ResolveExecCommand(context.Context, *ResolveExecCommandRequest) (*ResolveExecCommandReply, error)
 	ResolveLogsCommand(context.Context, *ResolveLogsCommandRequest) (*ResolveLogsCommandReply, error)
+	// How the caller opens VS Code on an instance (exec.proto).
+	ResolveEditorLaunch(context.Context, *ResolveEditorLaunchRequest) (*ResolveEditorLaunchReply, error)
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error
+	// IssueKubeExecCredential hands the daemon-host `fleet kube-exec` shim the
+	// transport fleetd reaches a Kubernetes connection's API server with
+	// (kube_exec.proto), so its direct-mode attaches run no credential plugin
+	// of their own. Local-only: remote clients exec through Exec instead.
+	IssueKubeExecCredential(context.Context, *IssueKubeExecCredentialRequest) (*IssueKubeExecCredentialReply, error)
+	// PodExec runs one command in a Kubernetes instance's pod for the
+	// daemon-host `fleet kube-exec` shim's daemon mode (a command without a
+	// terminal: every ExecCommand of a Kubernetes instance), through the pod's
+	// agent session. The first ExecIn carries pod_start. Local-only, like
+	// IssueKubeExecCredential: remote clients run the same commands through
+	// Exec.
+	PodExec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error
 	// TriggerLogs returns an automation trigger's recorded event logs (the
 	// payloads of its recent firings, concatenated for viewing). The daemon owns
 	// the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
 	// over the service works unchanged when the daemon is remote.
 	TriggerLogs(context.Context, *TriggerLogsRequest) (*TriggerLogsReply, error)
+	// GetAutomationStatus is the automation scheduler's view of a fleet's
+	// agents (every fleet's when fleet is empty), as Watch pushes it
+	// (Event.automation_status): which ones the login check refuses, and how
+	// many runs each has queued and running. For clients that do not watch
+	// (`fleet agent list`); served to remote clients as to local ones.
+	GetAutomationStatus(context.Context, *GetAutomationStatusRequest) (*GetAutomationStatusReply, error)
 	// Forward is the port-forward data plane: one bidi stream per forwarded TCP
 	// connection (first frame is the ForwardOpen header, the rest raw bytes).
 	// The client listens locally and pipes each accepted connection through this
@@ -843,6 +1180,44 @@ type FleetServiceServer interface {
 	// Client-streaming: first chunk is the open header, the rest are data. Backs
 	// the scp-style upload (and instance→instance relay) direction of `fleet copy`.
 	CopyInto(grpc.ClientStreamingServer[CopyIntoChunk, CopyIntoReply]) error
+	// ---- Deploy targets ----
+	// ListDeployTargets lists where this daemon can create an instance (judged
+	// on the daemon host), the remembered default, and the daemon host's build
+	// tools. Served to remote clients exactly as to local ones.
+	ListDeployTargets(context.Context, *ListDeployTargetsRequest) (*ListDeployTargetsReply, error)
+	// ListKubeContexts lists the contexts of kubeconfig files on the daemon
+	// host (the context picker).
+	ListKubeContexts(context.Context, *ListKubeContextsRequest) (*ListKubeContextsReply, error)
+	// ListKubeClusters returns every connection with its health (also pushed
+	// as Watch Event.kube_clusters).
+	ListKubeClusters(context.Context, *ListKubeClustersRequest) (*ListKubeClustersReply, error)
+	AddKubeCluster(context.Context, *AddKubeClusterRequest) (*AddKubeClusterReply, error)
+	// UpdateKubeCluster changes the fields its FieldMask names.
+	UpdateKubeCluster(context.Context, *UpdateKubeClusterRequest) (*UpdateKubeClusterReply, error)
+	// RemoveKubeCluster disconnects a connection (KubeRemoveMode). Destroying
+	// its instances can take minutes: clients use a long deadline.
+	RemoveKubeCluster(context.Context, *RemoveKubeClusterRequest) (*RemoveKubeClusterReply, error)
+	// TestKubeCluster runs the full preflight on a saved or an unsaved
+	// connection, streaming each check.
+	TestKubeCluster(*TestKubeClusterRequest, grpc.ServerStreamingServer[TestKubeClusterEvent]) error
+	// PruneKubeCluster lists, and with apply deletes, the objects labelled for
+	// this daemon and connection that no instance accounts for.
+	PruneKubeCluster(context.Context, *PruneKubeClusterRequest) (*PruneKubeClusterReply, error)
+	// LoginKubeCluster runs the connection's login plugin on the daemon host
+	// ([Run login on daemon]) and relays only its device-code URL and code.
+	LoginKubeCluster(*LoginKubeClusterRequest, grpc.ServerStreamingServer[LoginKubeClusterEvent]) error
+	// CreateKubeNamespace creates a connection's namespace (AddKubeCluster and
+	// UpdateKubeCluster create a missing one themselves; this makes one that
+	// went missing later, or with other labels), or with dry_run only renders
+	// it.
+	CreateKubeNamespace(context.Context, *CreateKubeNamespaceRequest) (*CreateKubeNamespaceReply, error)
+	// GetShareSync reports each fleet's sync: its folders, sides, pauses,
+	// shares and conflict count.
+	GetShareSync(context.Context, *GetShareSyncRequest) (*GetShareSyncReply, error)
+	// WaitShareSync waits until the fleet's sides agree (`fleet sync wait`).
+	WaitShareSync(context.Context, *WaitShareSyncRequest) (*WaitShareSyncReply, error)
+	// ListShareConflicts lists the conflict copies kept on the daemon host.
+	ListShareConflicts(context.Context, *ListShareConflictsRequest) (*ListShareConflictsReply, error)
 	// ---- Repo inspection (server-side clone + checks) ----
 	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
 	// devcontainer presence (and optionally the detected container home dir).
@@ -915,6 +1290,9 @@ func (UnimplementedFleetServiceServer) DeleteDebCache(context.Context, *DeleteDe
 func (UnimplementedFleetServiceServer) DeleteImageCache(context.Context, *DeleteImageCacheRequest) (*DeleteImageCacheReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteImageCache not implemented")
 }
+func (UnimplementedFleetServiceServer) GetCacheUsage(context.Context, *GetCacheUsageRequest) (*GetCacheUsageReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCacheUsage not implemented")
+}
 func (UnimplementedFleetServiceServer) SetInstanceMetadata(context.Context, *SetInstanceMetadataRequest) (*MutationReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetInstanceMetadata not implemented")
 }
@@ -945,6 +1323,12 @@ func (UnimplementedFleetServiceServer) ResolveArmadaRemote(context.Context, *Res
 func (UnimplementedFleetServiceServer) TrustSSHHostKey(context.Context, *TrustSSHHostKeyRequest) (*TrustSSHHostKeyReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TrustSSHHostKey not implemented")
 }
+func (UnimplementedFleetServiceServer) SaveEditorEndpoint(context.Context, *SaveEditorEndpointRequest) (*SaveEditorEndpointReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SaveEditorEndpoint not implemented")
+}
+func (UnimplementedFleetServiceServer) ResolveEditorEndpoint(context.Context, *ResolveEditorEndpointRequest) (*ResolveEditorEndpointReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveEditorEndpoint not implemented")
+}
 func (UnimplementedFleetServiceServer) GitHostKeys(grpc.BidiStreamingServer[GitHostKeyAnswer, GitHostKeyPrompt]) error {
 	return status.Errorf(codes.Unimplemented, "method GitHostKeys not implemented")
 }
@@ -957,11 +1341,23 @@ func (UnimplementedFleetServiceServer) ResolveExecCommand(context.Context, *Reso
 func (UnimplementedFleetServiceServer) ResolveLogsCommand(context.Context, *ResolveLogsCommandRequest) (*ResolveLogsCommandReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResolveLogsCommand not implemented")
 }
+func (UnimplementedFleetServiceServer) ResolveEditorLaunch(context.Context, *ResolveEditorLaunchRequest) (*ResolveEditorLaunchReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveEditorLaunch not implemented")
+}
 func (UnimplementedFleetServiceServer) Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error {
 	return status.Errorf(codes.Unimplemented, "method Logs not implemented")
 }
+func (UnimplementedFleetServiceServer) IssueKubeExecCredential(context.Context, *IssueKubeExecCredentialRequest) (*IssueKubeExecCredentialReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method IssueKubeExecCredential not implemented")
+}
+func (UnimplementedFleetServiceServer) PodExec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error {
+	return status.Errorf(codes.Unimplemented, "method PodExec not implemented")
+}
 func (UnimplementedFleetServiceServer) TriggerLogs(context.Context, *TriggerLogsRequest) (*TriggerLogsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TriggerLogs not implemented")
+}
+func (UnimplementedFleetServiceServer) GetAutomationStatus(context.Context, *GetAutomationStatusRequest) (*GetAutomationStatusReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAutomationStatus not implemented")
 }
 func (UnimplementedFleetServiceServer) Forward(grpc.BidiStreamingServer[ForwardChunk, ForwardChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method Forward not implemented")
@@ -986,6 +1382,45 @@ func (UnimplementedFleetServiceServer) CopyFile(*CopyFileRequest, grpc.ServerStr
 }
 func (UnimplementedFleetServiceServer) CopyInto(grpc.ClientStreamingServer[CopyIntoChunk, CopyIntoReply]) error {
 	return status.Errorf(codes.Unimplemented, "method CopyInto not implemented")
+}
+func (UnimplementedFleetServiceServer) ListDeployTargets(context.Context, *ListDeployTargetsRequest) (*ListDeployTargetsReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListDeployTargets not implemented")
+}
+func (UnimplementedFleetServiceServer) ListKubeContexts(context.Context, *ListKubeContextsRequest) (*ListKubeContextsReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListKubeContexts not implemented")
+}
+func (UnimplementedFleetServiceServer) ListKubeClusters(context.Context, *ListKubeClustersRequest) (*ListKubeClustersReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListKubeClusters not implemented")
+}
+func (UnimplementedFleetServiceServer) AddKubeCluster(context.Context, *AddKubeClusterRequest) (*AddKubeClusterReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) UpdateKubeCluster(context.Context, *UpdateKubeClusterRequest) (*UpdateKubeClusterReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) RemoveKubeCluster(context.Context, *RemoveKubeClusterRequest) (*RemoveKubeClusterReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) TestKubeCluster(*TestKubeClusterRequest, grpc.ServerStreamingServer[TestKubeClusterEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method TestKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) PruneKubeCluster(context.Context, *PruneKubeClusterRequest) (*PruneKubeClusterReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PruneKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) LoginKubeCluster(*LoginKubeClusterRequest, grpc.ServerStreamingServer[LoginKubeClusterEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method LoginKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) CreateKubeNamespace(context.Context, *CreateKubeNamespaceRequest) (*CreateKubeNamespaceReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateKubeNamespace not implemented")
+}
+func (UnimplementedFleetServiceServer) GetShareSync(context.Context, *GetShareSyncRequest) (*GetShareSyncReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetShareSync not implemented")
+}
+func (UnimplementedFleetServiceServer) WaitShareSync(context.Context, *WaitShareSyncRequest) (*WaitShareSyncReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WaitShareSync not implemented")
+}
+func (UnimplementedFleetServiceServer) ListShareConflicts(context.Context, *ListShareConflictsRequest) (*ListShareConflictsReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListShareConflicts not implemented")
 }
 func (UnimplementedFleetServiceServer) InspectRepo(context.Context, *InspectRepoRequest) (*InspectRepoReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InspectRepo not implemented")
@@ -1277,6 +1712,24 @@ func _FleetService_DeleteImageCache_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_GetCacheUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCacheUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).GetCacheUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_GetCacheUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).GetCacheUsage(ctx, req.(*GetCacheUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_SetInstanceMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetInstanceMetadataRequest)
 	if err := dec(in); err != nil {
@@ -1457,6 +1910,42 @@ func _FleetService_TrustSSHHostKey_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_SaveEditorEndpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SaveEditorEndpointRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).SaveEditorEndpoint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_SaveEditorEndpoint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).SaveEditorEndpoint(ctx, req.(*SaveEditorEndpointRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_ResolveEditorEndpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveEditorEndpointRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ResolveEditorEndpoint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ResolveEditorEndpoint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ResolveEditorEndpoint(ctx, req.(*ResolveEditorEndpointRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_GitHostKeys_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(FleetServiceServer).GitHostKeys(&grpc.GenericServerStream[GitHostKeyAnswer, GitHostKeyPrompt]{ServerStream: stream})
 }
@@ -1507,6 +1996,24 @@ func _FleetService_ResolveLogsCommand_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_ResolveEditorLaunch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveEditorLaunchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ResolveEditorLaunch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ResolveEditorLaunch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ResolveEditorLaunch(ctx, req.(*ResolveEditorLaunchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_Logs_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(LogsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -1517,6 +2024,31 @@ func _FleetService_Logs_Handler(srv interface{}, stream grpc.ServerStream) error
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_LogsServer = grpc.ServerStreamingServer[LogLine]
+
+func _FleetService_IssueKubeExecCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IssueKubeExecCredentialRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).IssueKubeExecCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_IssueKubeExecCredential_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).IssueKubeExecCredential(ctx, req.(*IssueKubeExecCredentialRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_PodExec_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(FleetServiceServer).PodExec(&grpc.GenericServerStream[ExecIn, ExecOut]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_PodExecServer = grpc.BidiStreamingServer[ExecIn, ExecOut]
 
 func _FleetService_TriggerLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TriggerLogsRequest)
@@ -1532,6 +2064,24 @@ func _FleetService_TriggerLogs_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FleetServiceServer).TriggerLogs(ctx, req.(*TriggerLogsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_GetAutomationStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAutomationStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).GetAutomationStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_GetAutomationStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).GetAutomationStatus(ctx, req.(*GetAutomationStatusRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1617,6 +2167,226 @@ func _FleetService_CopyInto_Handler(srv interface{}, stream grpc.ServerStream) e
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_CopyIntoServer = grpc.ClientStreamingServer[CopyIntoChunk, CopyIntoReply]
+
+func _FleetService_ListDeployTargets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDeployTargetsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ListDeployTargets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ListDeployTargets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ListDeployTargets(ctx, req.(*ListDeployTargetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_ListKubeContexts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListKubeContextsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ListKubeContexts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ListKubeContexts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ListKubeContexts(ctx, req.(*ListKubeContextsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_ListKubeClusters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListKubeClustersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ListKubeClusters(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ListKubeClusters_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ListKubeClusters(ctx, req.(*ListKubeClustersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_AddKubeCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddKubeClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).AddKubeCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_AddKubeCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).AddKubeCluster(ctx, req.(*AddKubeClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_UpdateKubeCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateKubeClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).UpdateKubeCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_UpdateKubeCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).UpdateKubeCluster(ctx, req.(*UpdateKubeClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_RemoveKubeCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveKubeClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).RemoveKubeCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_RemoveKubeCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).RemoveKubeCluster(ctx, req.(*RemoveKubeClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_TestKubeCluster_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(TestKubeClusterRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FleetServiceServer).TestKubeCluster(m, &grpc.GenericServerStream[TestKubeClusterRequest, TestKubeClusterEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_TestKubeClusterServer = grpc.ServerStreamingServer[TestKubeClusterEvent]
+
+func _FleetService_PruneKubeCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PruneKubeClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).PruneKubeCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_PruneKubeCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).PruneKubeCluster(ctx, req.(*PruneKubeClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_LoginKubeCluster_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(LoginKubeClusterRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FleetServiceServer).LoginKubeCluster(m, &grpc.GenericServerStream[LoginKubeClusterRequest, LoginKubeClusterEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_LoginKubeClusterServer = grpc.ServerStreamingServer[LoginKubeClusterEvent]
+
+func _FleetService_CreateKubeNamespace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateKubeNamespaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).CreateKubeNamespace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_CreateKubeNamespace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).CreateKubeNamespace(ctx, req.(*CreateKubeNamespaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_GetShareSync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetShareSyncRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).GetShareSync(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_GetShareSync_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).GetShareSync(ctx, req.(*GetShareSyncRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_WaitShareSync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WaitShareSyncRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).WaitShareSync(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_WaitShareSync_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).WaitShareSync(ctx, req.(*WaitShareSyncRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_ListShareConflicts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListShareConflictsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ListShareConflicts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ListShareConflicts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ListShareConflicts(ctx, req.(*ListShareConflictsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _FleetService_InspectRepo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(InspectRepoRequest)
@@ -1738,6 +2508,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FleetService_DeleteImageCache_Handler,
 		},
 		{
+			MethodName: "GetCacheUsage",
+			Handler:    _FleetService_GetCacheUsage_Handler,
+		},
+		{
 			MethodName: "SetInstanceMetadata",
 			Handler:    _FleetService_SetInstanceMetadata_Handler,
 		},
@@ -1778,6 +2552,14 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FleetService_TrustSSHHostKey_Handler,
 		},
 		{
+			MethodName: "SaveEditorEndpoint",
+			Handler:    _FleetService_SaveEditorEndpoint_Handler,
+		},
+		{
+			MethodName: "ResolveEditorEndpoint",
+			Handler:    _FleetService_ResolveEditorEndpoint_Handler,
+		},
+		{
 			MethodName: "ResolveExecCommand",
 			Handler:    _FleetService_ResolveExecCommand_Handler,
 		},
@@ -1786,8 +2568,20 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FleetService_ResolveLogsCommand_Handler,
 		},
 		{
+			MethodName: "ResolveEditorLaunch",
+			Handler:    _FleetService_ResolveEditorLaunch_Handler,
+		},
+		{
+			MethodName: "IssueKubeExecCredential",
+			Handler:    _FleetService_IssueKubeExecCredential_Handler,
+		},
+		{
 			MethodName: "TriggerLogs",
 			Handler:    _FleetService_TriggerLogs_Handler,
+		},
+		{
+			MethodName: "GetAutomationStatus",
+			Handler:    _FleetService_GetAutomationStatus_Handler,
 		},
 		{
 			MethodName: "ListMicSources",
@@ -1796,6 +2590,50 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListOutputTargets",
 			Handler:    _FleetService_ListOutputTargets_Handler,
+		},
+		{
+			MethodName: "ListDeployTargets",
+			Handler:    _FleetService_ListDeployTargets_Handler,
+		},
+		{
+			MethodName: "ListKubeContexts",
+			Handler:    _FleetService_ListKubeContexts_Handler,
+		},
+		{
+			MethodName: "ListKubeClusters",
+			Handler:    _FleetService_ListKubeClusters_Handler,
+		},
+		{
+			MethodName: "AddKubeCluster",
+			Handler:    _FleetService_AddKubeCluster_Handler,
+		},
+		{
+			MethodName: "UpdateKubeCluster",
+			Handler:    _FleetService_UpdateKubeCluster_Handler,
+		},
+		{
+			MethodName: "RemoveKubeCluster",
+			Handler:    _FleetService_RemoveKubeCluster_Handler,
+		},
+		{
+			MethodName: "PruneKubeCluster",
+			Handler:    _FleetService_PruneKubeCluster_Handler,
+		},
+		{
+			MethodName: "CreateKubeNamespace",
+			Handler:    _FleetService_CreateKubeNamespace_Handler,
+		},
+		{
+			MethodName: "GetShareSync",
+			Handler:    _FleetService_GetShareSync_Handler,
+		},
+		{
+			MethodName: "WaitShareSync",
+			Handler:    _FleetService_WaitShareSync_Handler,
+		},
+		{
+			MethodName: "ListShareConflicts",
+			Handler:    _FleetService_ListShareConflicts_Handler,
 		},
 		{
 			MethodName: "InspectRepo",
@@ -1868,6 +2706,12 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 		{
+			StreamName:    "PodExec",
+			Handler:       _FleetService_PodExec_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
 			StreamName:    "Forward",
 			Handler:       _FleetService_Forward_Handler,
 			ServerStreams: true,
@@ -1900,6 +2744,16 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "CopyInto",
 			Handler:       _FleetService_CopyInto_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "TestKubeCluster",
+			Handler:       _FleetService_TestKubeCluster_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "LoginKubeCluster",
+			Handler:       _FleetService_LoginKubeCluster_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "service.proto",
