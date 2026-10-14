@@ -18,12 +18,8 @@ on:
   schedule:
     - cron: "17 5 * * *"
   workflow_dispatch:
-  # GitHub fires schedules only from the default branch: until
-  # feat/kubernetes merges, its pushes run the nightly instead.
-  push:
-    branches: [feat/kubernetes]
 
-# One run at a time: a newer push replaces a queued run, never one in flight.
+# One run at a time: a newer run waits for the one in flight.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false

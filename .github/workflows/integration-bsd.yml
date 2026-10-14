@@ -18,15 +18,10 @@ on:
   schedule:
     - cron: "47 4 * * *"
   workflow_dispatch:
-  # GitHub fires schedules only from the default branch: until
-  # feat/kubernetes merges, its pushes run it instead.
-  push:
-    branches: [feat/kubernetes]
 
-# Serialize branch pushes: a newer push replaces a queued run but never cancels
-# one in flight. PR runs keep one group per run, so they never wait on each other.
+# One run at a time: a newer run waits for the one in flight.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

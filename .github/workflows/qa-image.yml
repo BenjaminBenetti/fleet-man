@@ -2,15 +2,15 @@ name: QA Image
 
 # Builds and publishes the fleet-man QA environment image (qa/env) to the GitHub
 # Container Registry so cloud QA agents can pull a ready-made environment to QA
-# PRs in. Runs only on trusted refs — pushes to main and to the feat/kubernetes
-# integration branch, manual dispatch, and a weekly rebuild. It deliberately
-# does NOT run on pull_request: building and (especially) running this
-# privileged Docker-in-Docker image from untrusted PR code would let a fork
-# execute attacker-controlled code on the runner with access to its credentials.
+# PRs in. Runs only on trusted refs — pushes to main, manual dispatch, and a
+# weekly rebuild. It deliberately does NOT run on pull_request: building and
+# (especially) running this privileged Docker-in-Docker image from untrusted PR
+# code would let a fork execute attacker-controlled code on the runner with
+# access to its credentials.
 
 on:
   push:
-    branches: [main, feat/kubernetes]
+    branches: [main]
     paths:
       - "qa/env/**"
       - ".github/workflows/qa-image.yml"
@@ -65,12 +65,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.img.outputs.name }}
-          # latest tracks main only. The feat/kubernetes branch publishes its
-          # own moving tag so QA of branch work picks up branch-only toolchain
-          # changes without touching latest.
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=feat-kubernetes,enable=${{ github.ref == 'refs/heads/feat/kubernetes' }}
             type=sha,format=short
             type=schedule,pattern=weekly
 

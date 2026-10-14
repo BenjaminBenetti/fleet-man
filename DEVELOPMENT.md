@@ -83,8 +83,7 @@ docker run --rm --privileged --name "fleet-itest-$RANDOM" \
   passes only on a retry passes, and the summary names it flaky. CI sets 1.
 - Shard a full run by starting several containers at once, each with its own
   range and `--name`.
-- The image tag is `qa:latest` on main and `qa:feat-kubernetes` for work on that
-  branch. After changing `qa/env/`, build and use your own:
+- The image tag is `qa:latest`. After changing `qa/env/`, build and use your own:
   `docker build -t fleet-qa qa/env`.
 
 ## Protobuf (`fleetgrpc`)
@@ -144,7 +143,7 @@ work, and a private cluster in a QA container for integration tests:
      -e FLEET_POD_BINARY_AMD64=/tmp/fleet-bin/fleet-pod-linux-amd64 \
      -v fleet-qa-minikube:/home/qa/.minikube/cache \
      -v "$PWD":/src:ro -v /tmp/fleet-itest:/usr/local/fleet-bin:ro \
-     ghcr.io/benjaminbenetti/fleet-man/qa:feat-kubernetes \
+     ghcr.io/benjaminbenetti/fleet-man/qa:latest \
      bash -lc 'cp -a /src /tmp/repo && mkdir -p /tmp/fleet-bin &&
        cp /usr/local/fleet-bin/* /tmp/fleet-bin/ && cd /tmp/repo &&
        FLEET_BIN=/tmp/fleet-bin/fleet ./integration/run.sh'
@@ -182,7 +181,7 @@ docker run --rm --privileged --init --name "fleet-nightly-$RANDOM" \
   -v "$PWD":/src:ro -v /tmp/fleet-itest:/usr/local/fleet-bin:ro \
   -v /tmp/fleet-nightly:/out -e FLEET_NIGHTLY_OUT=/out \
   -v fleet-qa-minikube:/home/qa/.minikube/cache \
-  ghcr.io/benjaminbenetti/fleet-man/qa:feat-kubernetes \
+  ghcr.io/benjaminbenetti/fleet-man/qa:latest \
   bash -lc 'cp -a /src /tmp/repo && mkdir -p /tmp/fleet-bin &&
     cp /usr/local/fleet-bin/* /tmp/fleet-bin/ && cd /tmp/repo &&
     FLEET_BIN=/tmp/fleet-bin/fleet FLEET_POD_BINARY_AMD64=/tmp/fleet-bin/fleet-pod-linux-amd64 \
