@@ -49,7 +49,8 @@ what the user asks.
 Tools that target an instance take explicit `fleet` and `instance` string
 parameters — there is no working-directory inference and no combined
 `fleet/instance` form. (Fleet-level tools take just `fleet`; `fleet_clone`
-names its instances `source` and `destination`.) Use `fleet_list` or
+names its instances `source` and `destination`; `fleet_copy` takes a
+`{fleet, instance, path}` object per side.) Use `fleet_list` or
 `fleet_status` to discover the names when you don't know them.
 
 ## What the tools can do
@@ -142,6 +143,20 @@ is an argv **array**, not a shell string — `["git", "log", "--oneline"]` — s
 there is no quoting or flag-parsing to worry about. A non-zero exit comes back
 as data, not a tool error: check `exit_code`. Not for long-running or
 interactive commands — use a session for those.
+
+**Move files.** `fleet_copy {src, dst}` copies a file or a directory between
+the daemon host and an instance, or between two instances — the MCP form of
+`fleet copy`. Each side is `{fleet, instance, path}` for a path in a running
+instance (relative = its workspace folder), or just `{path}` for a path on the
+daemon host: the machine fleetd runs on, which is not the instance you may be
+running in. A host path is absolute or starts with `~/`. The daemon moves the
+bytes itself, so they never pass through your context and size does not
+matter; the call blocks until the copy is done and returns
+`{path, bytes}` — where it landed. A destination that is an existing
+directory, or ends in `/`, keeps the source name inside it; any other path is
+the copy's own name, replacing a file already there. A directory copies
+recursively and merges into an existing one, skipping symlinks and special
+files (not supported on `codespaces`).
 
 **Drive an agent (or any long-lived process) via sessions.** This is the
 non-interactive loop for working with a coding agent inside an instance:
@@ -290,6 +305,9 @@ LIFECYCLE  (async-first: returns {job_id, done:false} in seconds; wait:true bloc
 
 EXECUTION
   fleet_exec {fleet, instance, command: [argv...]}  # one-shot; exit_code is data
+
+FILES  (the daemon copies; bytes never pass through MCP)
+  fleet_copy {src: {fleet?, instance?, path}, dst: {fleet?, instance?, path}}   # no fleet/instance = daemon host
 
 SESSIONS  (interact with an agent / long-lived process in an instance)
   fleet_session_spawn {fleet, instance, session}

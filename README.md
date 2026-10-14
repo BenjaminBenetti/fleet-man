@@ -251,7 +251,9 @@ An MCP client config (`mcp.json`) can then reference them directly:
 Tools mirror the non-interactive CLI: `fleet_list`, `fleet_status`,
 `fleet_version`, `fleet_logs`, `fleet_up`, `fleet_start`, `fleet_stop`,
 `fleet_down`, `fleet_destroy_fleet`, `fleet_clone`, `fleet_rebuild`,
-`fleet_job_status`, `fleet_exec`, `fleet_restore_backup`, the tmux session tools
+`fleet_job_status`, `fleet_exec`, `fleet_copy` (`fleet copy`, run by the daemon:
+the bytes never pass through MCP, and a non-instance path is on the daemon
+host), `fleet_restore_backup`, the tmux session tools
 `fleet_session_spawn` / `fleet_session_exec` / `fleet_session_read` /
 `fleet_session_list`, the automation CRUD tools `fleet_automation_list`,
 `fleet_agent_create` / `fleet_agent_update` / `fleet_agent_delete`,
@@ -274,10 +276,11 @@ however it was created (by you, a clone, or an automation trigger).
 
 - **It is the full fleet MCP, on purpose** — every tool, every fleet. That
   includes tools that reach the host: a `bash` automation trigger runs its
-  script on the host as you, and a `file://` fleet copies host directories into
-  an instance. Turning it on gives anything running in those instances — an
-  agent, a prompt injection of it, the repo's own scripts — host-level access:
-  an agent-escape risk you accept by turning it on.
+  script on the host as you, a `file://` fleet copies host directories into
+  an instance, and `fleet_copy` reads and writes any host path you can.
+  Turning it on gives anything running in those instances — an agent, a prompt
+  injection of it, the repo's own scripts — host-level access: an agent-escape
+  risk you accept by turning it on.
 - The daemon serves MCP on a socket in each instance's control directory
   (`/fleet-mounts/control/mcp.sock`); the staged `fleet mcp-bridge` relays it to
   an agent over stdio. No token enters the instance: only instances of a fleet
