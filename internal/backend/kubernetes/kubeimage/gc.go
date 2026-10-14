@@ -334,8 +334,10 @@ func (m *Manager) deleteFromRegistry(ctx context.Context, t Target, ix *Index, e
 		return err.Error(), false
 	}
 	if !known || state.DeleteSupported == nil || m.now().Sub(state.CheckedAt) > deleteRecheck {
-		supported, why := probeDelete(ctx, c, ownPath(registryPrefix(repo.Path), t.DaemonID))
-		state = RegistryState{DeleteSupported: &supported, Reason: why, CheckedAt: m.now()}
+		// The entry was pushed, so the daemon's repository exists and the
+		// answer stands.
+		supported, why, _ := probeDelete(ctx, c, ownPath(registryPrefix(repo.Path), t.DaemonID))
+		state = RegistryState{DeleteSupported: &supported, Reason: why, CheckedAt: m.now(), Pushed: true}
 		if path, err := m.indexPath(t); err == nil {
 			_ = m.files.update(path, func(ix *Index) error {
 				if ix.Registries == nil {

@@ -147,7 +147,7 @@ func kubeDeliveryLines(st *fleetgrpc.KubeClusterStatus) []string {
 	}
 	switch del.GetMode() {
 	case kubeDeliveryRegistry:
-		if del.GetRegistryReachable() && !del.GetRegistryDeleteSupported() {
+		if del.GetRegistryReachable() && !del.GetRegistryDeleteSupported() && !del.GetRegistryDeleteUntested() {
 			lines = append(lines, kubeWarnStyle.Render(kubeGlyphLimited+" ")+"images past retention stay in the registry: "+del.GetReason())
 		}
 	case kubeDeliveryGateway:

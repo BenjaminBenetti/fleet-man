@@ -39,6 +39,10 @@ const (
 	deleteEnabled deleteMode = iota
 	deleteDisabled
 	deleteDenied
+	// deleteNeedsRepo deletes only in a repository that has a manifest,
+	// and refuses the login elsewhere (as registries that grant delete
+	// only on a repository that exists do).
+	deleteNeedsRepo
 )
 
 type fakeManifest struct {
@@ -47,7 +51,8 @@ type fakeManifest struct {
 }
 
 // fakeRegistry is a small distribution registry: manifests by tag and
-// digest, blobs, DELETE (enabled, disabled or denied), and no auth, Basic or
+// digest, blobs, DELETE (enabled, disabled, denied, or only in a repository
+// that exists), and no auth, Basic or
 // Bearer token auth with one user.
 type fakeRegistry struct {
 	t      *testing.T
@@ -251,6 +256,11 @@ func (r *fakeRegistry) serve(w http.ResponseWriter, req *http.Request) {
 			case deleteDenied:
 				writeOCIError(w, http.StatusForbidden, "DENIED", "requested access to the resource is denied")
 				return
+			case deleteNeedsRepo:
+				if len(r.manifests[repo]) == 0 {
+					writeOCIError(w, http.StatusForbidden, "DENIED", "requested access to the resource is denied")
+					return
+				}
 			}
 			if !found {
 				writeOCIError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")

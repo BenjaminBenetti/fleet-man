@@ -131,6 +131,45 @@ type RegistryState struct {
 	// Reason says why not.
 	Reason    string    `json:"reason,omitempty"`
 	CheckedAt time.Time `json:"checked_at,omitzero"`
+	// Pushed: fleet has pushed an image to the registry. Before that, the
+	// daemon's repository may not exist, and a registry that grants delete
+	// only on a repository that exists refuses the delete check.
+	Pushed bool `json:"pushed,omitempty"`
+}
+
+// notePush records that e went to its registry.
+func (ix *Index) notePush(e Entry) {
+	if e.Strategy != StrategyRegistry {
+		return
+	}
+	repo, err := ParseReference(e.Location)
+	if err != nil {
+		return
+	}
+	if ix.Registries == nil {
+		ix.Registries = map[string]RegistryState{}
+	}
+	st := ix.Registries[repo.Domain]
+	st.Pushed = true
+	ix.Registries[repo.Domain] = st
+}
+
+// pushedTo reports whether fleet has pushed an image to domain: its state
+// says so, or an entry the index holds went there (an index from before
+// the state kept it).
+func (ix *Index) pushedTo(domain string) bool {
+	if ix.Registries[domain].Pushed {
+		return true
+	}
+	for _, e := range ix.Images {
+		if e.Strategy != StrategyRegistry {
+			continue
+		}
+		if repo, err := ParseReference(e.Location); err == nil && repo.Domain == domain {
+			return true
+		}
+	}
+	return false
 }
 
 func (ix *Index) find(key string) *Entry {
@@ -147,6 +186,7 @@ func (ix *Index) find(key string) *Entry {
 // config.
 func (ix *Index) put(e Entry) *Entry {
 	ix.noteConfig(&e)
+	ix.notePush(e)
 	if cur := ix.find(e.key()); cur != nil {
 		e.Holders, e.ReleasedAt = cur.Holders, cur.ReleasedAt
 		*cur = e
