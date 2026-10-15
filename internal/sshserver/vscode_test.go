@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -233,9 +234,13 @@ func TestPostAttachRunsOncePerVSCodeConnection(t *testing.T) {
 			}
 		}(l)
 	}
+	// Owned is asked once per forward, concurrently.
+	var askedMu sync.Mutex
 	var askedDirs []string
 	r.opts.VSCode.Owned = func(network, address string, dirs []string) bool {
+		askedMu.Lock()
 		askedDirs = dirs
+		askedMu.Unlock()
 		return network == "tcp" && address == vscodePort.Addr().String()
 	}
 
@@ -266,9 +271,11 @@ func TestPostAttachRunsOncePerVSCodeConnection(t *testing.T) {
 	if real, _ := filepath.EvalSymlinks(workspace); !reflect.DeepEqual(lines(out), []string{real, "named"}) {
 		t.Fatalf("postAttachCommand wrote %q", lines(out))
 	}
+	askedMu.Lock()
 	if real, _ := filepath.EvalSymlinks(filepath.Join(r.home, ".vscode-server")); len(askedDirs) != 1 || askedDirs[0] != real {
 		t.Errorf("owner asked about %q", askedDirs)
 	}
+	askedMu.Unlock()
 	for _, want := range []string{"==> postAttachCommand (VS Code attached)", "first-layer", "b: b-ran"} {
 		if !strings.Contains(r.log.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, r.log.String())

@@ -243,6 +243,7 @@ func (d *kubeDelivery) Check(ctx context.Context, local localcluster.Cluster, pl
 	del := &fleetgrpc.KubeImageDelivery{
 		Mode: st.Mode, Reason: st.Reason,
 		RegistryReachable: st.RegistryReachable, RegistryDeleteSupported: st.RegistryDeleteSupported,
+		RegistryDeleteUntested: st.RegistryDeleteUntested,
 	}
 	d.im.gatewayFacts(del)
 	pass := func(detail string) preflight.DeliveryCheck {
@@ -260,6 +261,8 @@ func (d *kubeDelivery) Check(ctx context.Context, local localcluster.Cluster, pl
 			return preflight.DeliveryCheck{Delivery: del, Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL,
 				Detail: "registry: " + st.Reason, Fix: "check the registry address and the daemon host's login to it (docker login)",
 				Limited: "image registry unreachable"}
+		case st.RegistryDeleteUntested:
+			return pass("registry " + reg + " reachable; whether it deletes images past retention is checked after fleet's first push")
 		case !st.RegistryDeleteSupported:
 			return preflight.DeliveryCheck{Delivery: del, Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN,
 				Detail: "registry " + reg + " reachable; " + st.Reason}

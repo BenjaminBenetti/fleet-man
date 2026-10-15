@@ -2425,6 +2425,11 @@ type KubeImageDelivery struct {
 	Mode                    string `protobuf:"bytes,1,opt,name=mode,proto3" json:"mode,omitempty"`
 	RegistryReachable       bool   `protobuf:"varint,2,opt,name=registry_reachable,json=registryReachable,proto3" json:"registry_reachable,omitempty"`
 	RegistryDeleteSupported bool   `protobuf:"varint,3,opt,name=registry_delete_supported,json=registryDeleteSupported,proto3" json:"registry_delete_supported,omitempty"`
+	// registry_delete_untested: whether the registry deletes images is not
+	// known yet. It refused the check before fleet's first push to it, which
+	// may only mean the daemon's repository does not exist yet; the first
+	// full preflight after a push tells.
+	RegistryDeleteUntested bool `protobuf:"varint,14,opt,name=registry_delete_untested,json=registryDeleteUntested,proto3" json:"registry_delete_untested,omitempty"`
 	// gateway_registry: the gateway offers image delivery for this daemon
 	// (live).
 	GatewayRegistry bool `protobuf:"varint,4,opt,name=gateway_registry,json=gatewayRegistry,proto3" json:"gateway_registry,omitempty"`
@@ -2510,6 +2515,13 @@ func (x *KubeImageDelivery) GetRegistryReachable() bool {
 func (x *KubeImageDelivery) GetRegistryDeleteSupported() bool {
 	if x != nil {
 		return x.RegistryDeleteSupported
+	}
+	return false
+}
+
+func (x *KubeImageDelivery) GetRegistryDeleteUntested() bool {
+	if x != nil {
+		return x.RegistryDeleteUntested
 	}
 	return false
 }
@@ -5652,11 +5664,12 @@ const file_kube_proto_rawDesc = "" +
 	"\x11KubeQuotaHeadroom\x12\x1a\n" +
 	"\bresource\x18\x01 \x01(\tR\bresource\x12\x12\n" +
 	"\x04used\x18\x02 \x01(\tR\x04used\x12\x12\n" +
-	"\x04hard\x18\x03 \x01(\tR\x04hard\"\xbe\x04\n" +
+	"\x04hard\x18\x03 \x01(\tR\x04hard\"\xf8\x04\n" +
 	"\x11KubeImageDelivery\x12\x12\n" +
 	"\x04mode\x18\x01 \x01(\tR\x04mode\x12-\n" +
 	"\x12registry_reachable\x18\x02 \x01(\bR\x11registryReachable\x12:\n" +
-	"\x19registry_delete_supported\x18\x03 \x01(\bR\x17registryDeleteSupported\x12)\n" +
+	"\x19registry_delete_supported\x18\x03 \x01(\bR\x17registryDeleteSupported\x128\n" +
+	"\x18registry_delete_untested\x18\x0e \x01(\bR\x16registryDeleteUntested\x12)\n" +
 	"\x10gateway_registry\x18\x04 \x01(\bR\x0fgatewayRegistry\x12.\n" +
 	"\x13gateway_manifest_ok\x18\x05 \x01(\bR\x11gatewayManifestOk\x12\x16\n" +
 	"\x06reason\x18\x06 \x01(\tR\x06reason\x12%\n" +

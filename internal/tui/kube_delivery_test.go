@@ -116,6 +116,10 @@ func TestKubeDeliveryLines(t *testing.T) {
 	if out := strings.Join(kubeDeliveryLines(keeps), "\n"); !strings.Contains(out, "images past retention stay in the registry") {
 		t.Errorf("a registry without DELETE:\n%s", out)
 	}
+	untested := deliveryStatus("registry", &fleetgrpc.KubeImageDelivery{Mode: "registry", RegistryReachable: true, RegistryDeleteUntested: true})
+	if out := strings.Join(kubeDeliveryLines(untested), "\n"); strings.Contains(out, "past retention") {
+		t.Errorf("warned before the delete check could tell:\n%s", out)
+	}
 	if out := strings.Join(kubeDeliveryLines(deliveryStatus("", nil)), "\n"); !strings.Contains(out, "once the connection has been checked") {
 		t.Errorf("unchecked:\n%s", out)
 	}

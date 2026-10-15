@@ -566,6 +566,11 @@ message KubeImageDelivery {
   string mode = 1;
   bool registry_reachable = 2;
   bool registry_delete_supported = 3;
+  // registry_delete_untested: whether the registry deletes images is not
+  // known yet. It refused the check before fleet's first push to it, which
+  // may only mean the daemon's repository does not exist yet; the first
+  // full preflight after a push tells.
+  bool registry_delete_untested = 14;
   // gateway_registry: the gateway offers image delivery for this daemon
   // (live).
   bool gateway_registry = 4;

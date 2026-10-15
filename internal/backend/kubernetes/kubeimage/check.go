@@ -18,7 +18,13 @@ type RegistryCheck struct {
 	// repository with the daemon host's login. Without it, images past
 	// retention stay in the registry (the cluster editor says so).
 	DeleteSupported bool
-	// Reason says why not, when either is false.
+	// DeleteUntested: the registry refused the delete check, or gave no
+	// clear answer, before fleet's first push to it. That may only mean the
+	// daemon's repository does not exist yet; the first check after a push
+	// tells.
+	DeleteUntested bool
+	// Reason says why not, when Reachable or DeleteSupported is false and
+	// DeleteUntested is not.
 	Reason    string
 	CheckedAt time.Time
 }
@@ -35,8 +41,11 @@ const deleteRecheck = 24 * time.Hour
 // whether it deletes manifests in the daemon's own repository. It asks for
 // the deletion of a digest no manifest has: a registry that deletes answers
 // 404 (MANIFEST_UNKNOWN), one that does not answers 405 (UNSUPPORTED), and
-// one that refuses the login 401 or 403. The result is kept in the index for
-// the GC. A connection without a registry is an error.
+// one that refuses the login 401 or 403. Before fleet's first push to the
+// registry, a refusal leaves the answer untested (DeleteUntested): some
+// registries grant delete only on a repository that exists. The result is
+// kept in the index for the GC. A connection without a registry is an
+// error.
 func (m *Manager) CheckRegistry(ctx context.Context, t Target) (RegistryCheck, error) {
 	if err := t.validate(); err != nil {
 		return RegistryCheck{}, err
@@ -59,40 +68,53 @@ func (m *Manager) CheckRegistry(ctx context.Context, t Target) (RegistryCheck, e
 		return check, nil
 	}
 	check.Reachable = true
-	check.DeleteSupported, check.Reason = probeDelete(ctx, c, ownPath(reg.Prefix, t.DaemonID))
-	if path, err := m.indexPath(t); err == nil {
-		supported := check.DeleteSupported
-		if err := m.files.update(path, func(ix *Index) error {
-			if ix.Registries == nil {
-				ix.Registries = map[string]RegistryState{}
-			}
-			ix.Registries[reg.Domain] = RegistryState{DeleteSupported: &supported, Reason: check.Reason, CheckedAt: check.CheckedAt}
-			return nil
-		}); err != nil {
-			return check, err
+	supported, why, sure := probeDelete(ctx, c, ownPath(reg.Prefix, t.DaemonID))
+	judge := func(pushed bool) {
+		check.DeleteSupported, check.DeleteUntested, check.Reason = supported, false, why
+		if !sure && !pushed {
+			check.DeleteSupported, check.DeleteUntested, check.Reason = false, true, ""
 		}
 	}
-	return check, nil
+	path, err := m.indexPath(t)
+	if err != nil {
+		judge(false)
+		return check, nil
+	}
+	err = m.files.update(path, func(ix *Index) error {
+		if ix.Registries == nil {
+			ix.Registries = map[string]RegistryState{}
+		}
+		judge(ix.pushedTo(reg.Domain))
+		st := RegistryState{Reason: check.Reason, CheckedAt: check.CheckedAt, Pushed: ix.Registries[reg.Domain].Pushed}
+		if !check.DeleteUntested {
+			supported := check.DeleteSupported
+			st.DeleteSupported = &supported
+		}
+		ix.Registries[reg.Domain] = st
+		return nil
+	})
+	return check, err
 }
 
 // probeDelete asks the registry to delete a manifest that does not exist in
-// repoPath and reads the answer.
-func probeDelete(ctx context.Context, c *registryClient, repoPath string) (bool, string) {
+// repoPath and reads the answer. sure is false for a refusal or an unclear
+// answer, which may only mean that repoPath does not exist yet.
+func probeDelete(ctx context.Context, c *registryClient, repoPath string) (supported bool, why string, sure bool) {
 	err := c.deleteManifest(ctx, repoPath, zeroDigest)
 	if err == nil || isNotFound(err) {
-		return true, ""
+		return true, "", true
 	}
 	var re *RegistryError
 	if !errors.As(err, &re) {
-		return false, fmt.Sprintf("could not tell whether %s deletes images: %v", c.domain, err)
+		return false, fmt.Sprintf("could not tell whether %s deletes images: %v", c.domain, err), false
 	}
 	switch {
 	case re.Status == http.StatusMethodNotAllowed || re.has("UNSUPPORTED"):
-		return false, fmt.Sprintf("%s does not allow deleting images (HTTP %d): images past retention stay in the registry", c.domain, re.Status)
+		return false, fmt.Sprintf("%s does not allow deleting images (HTTP %d): images past retention stay in the registry", c.domain, re.Status), true
 	case isDenied(err):
-		return false, fmt.Sprintf("the daemon host's login to %s may not delete images (HTTP %d): images past retention stay in the registry", c.domain, re.Status)
+		return false, fmt.Sprintf("the daemon host's login to %s may not delete images (HTTP %d): images past retention stay in the registry", c.domain, re.Status), false
 	}
-	return false, fmt.Sprintf("could not tell whether %s deletes images: %v", c.domain, err)
+	return false, fmt.Sprintf("could not tell whether %s deletes images: %v", c.domain, err), false
 }
 
 // DeliveryStatus is how a connection's images are delivered, for its
@@ -101,10 +123,11 @@ type DeliveryStatus struct {
 	// Mode is the resolved strategy ("node-load", "registry", "gateway",
 	// "none").
 	Mode string
-	// RegistryReachable and RegistryDeleteSupported are set when the mode is
-	// registry.
+	// RegistryReachable, RegistryDeleteSupported and RegistryDeleteUntested
+	// are set when the mode is registry.
 	RegistryReachable       bool
 	RegistryDeleteSupported bool
+	RegistryDeleteUntested  bool
 	// Reason says why Auto picked the mode, why nothing delivers, or what is
 	// wrong with the registry.
 	Reason string
@@ -125,7 +148,7 @@ func (m *Manager) Status(ctx context.Context, t Target) DeliveryStatus {
 		st.Reason = err.Error()
 		return st
 	}
-	st.RegistryReachable, st.RegistryDeleteSupported = check.Reachable, check.DeleteSupported
+	st.RegistryReachable, st.RegistryDeleteSupported, st.RegistryDeleteUntested = check.Reachable, check.DeleteSupported, check.DeleteUntested
 	if check.Reason != "" {
 		st.Reason = check.Reason
 	}
