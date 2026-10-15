@@ -251,11 +251,19 @@ func TestRegistryConnectionOnDemand(t *testing.T) {
 	if wraps.Load() != 1 {
 		t.Fatalf("the registry connection was wrapped %d times", wraps.Load())
 	}
-	// Later pulls go over it.
-	before := attachBytes.Load()
-	pullThrough(t, publicAddr, rid)
-	if attachBytes.Load()-before < 12000 {
-		t.Fatalf("the pull sent %d bytes over the registry connection", attachBytes.Load()-before)
+	// Later pulls go over it, once the gateway has bound it too: the
+	// gateway replies to the attach before it binds, so a pull in between
+	// still takes the main tunnel.
+	var sent int64
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		before := attachBytes.Load()
+		pullThrough(t, publicAddr, rid)
+		if sent = attachBytes.Load() - before; sent >= 12000 || time.Now().After(deadline) {
+			break
+		}
+	}
+	if sent < 12000 {
+		t.Fatalf("the pull sent %d bytes over the registry connection", sent)
 	}
 
 	// Idle: closed, and the next pull goes down the main tunnel again.
