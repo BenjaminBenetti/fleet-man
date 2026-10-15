@@ -27,10 +27,10 @@ import (
 // mcp.go runs the MCP (Model Context Protocol) HTTP server alongside the gRPC
 // daemon. It exposes the non-interactive subset of the fleet CLI — list/status/
 // version/logs, the create/start/stop/down/destroy/clone lifecycle, one-shot
-// exec, and tmux session read/write — as MCP tools over Streamable HTTP so AI
-// agents (and any MCP client) can drive fleet programmatically. Interactive,
-// open-ended streams (`fleet shell`, `fleet logs --follow`) are deliberately
-// omitted: they don't translate to a single tool call/result.
+// exec, file copy, and tmux session read/write — as MCP tools over Streamable
+// HTTP so AI agents (and any MCP client) can drive fleet programmatically.
+// Interactive, open-ended streams (`fleet shell`, `fleet logs --follow`) are
+// deliberately omitted: they don't translate to a single tool call/result.
 //
 // The MCP server lives IN this package (not a subpackage) because every tool
 // reuses the unexported *service methods (GetState, CreateInstance, Logs, ...)

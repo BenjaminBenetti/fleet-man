@@ -121,6 +121,12 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 		Description: "List the tmux sessions inside a running instance (name, window count, creation time, attached). Returns an empty list when the instance has no sessions.",
 	}, s.mcpSessionList)
 
+	// --- files ---
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_copy",
+		Description: "Copy a file or directory between the daemon host and an instance, or between two instances, like `fleet copy`. The daemon moves the bytes itself — they never pass through MCP — so any size works. An endpoint with fleet and instance is a path in that running instance; one with neither is a path on the daemon host (the machine fleetd runs on, not an instance you may be running in). A directory is copied recursively (not on codespaces), merging into an existing one; symlinks and special files are skipped. An existing file at the destination is replaced. Blocks until done; returns where the copy landed.",
+	}, s.mcpCopy)
+
 	// --- automation (agents & triggers) ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_automation_list",
