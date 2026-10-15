@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -162,7 +163,9 @@ func grpcEcho(t *testing.T, creds credentials.TransportCredentials, grpcAddr, id
 	if err != nil {
 		return "", err
 	}
-	if err := cs.SendMsg(&tunnel.RawFrame{Payload: []byte(payload)}); err != nil {
+	// io.EOF: the server ended the stream (a refusal can beat the send);
+	// RecvMsg has its status.
+	if err := cs.SendMsg(&tunnel.RawFrame{Payload: []byte(payload)}); err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
 	if err := cs.CloseSend(); err != nil {

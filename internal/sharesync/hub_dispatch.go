@@ -325,7 +325,17 @@ func (root *hubRoot) contentFor(s *hubSide) ContentFunc {
 		k, _, ok := root.keyFor(op.Path, s.info.Location)
 		e := root.entries[k]
 		root.mu.Unlock()
-		if !ok || e == nil || e.Rev != op.Rev {
+		if !ok || e == nil {
+			return nil, ErrStale
+		}
+		if e.Rev != op.Rev {
+			// The path changed while the batch was on its way. The op's
+			// state still goes when the hub keeps its content (a settings
+			// file's history), the newer one after it: a side slower than
+			// the path's changes would otherwise get none of them.
+			if op.Entry.Kind == File && root.blobs.has(op.Entry.Hash) {
+				return root.blobs.open(op.Entry.Hash, offset)
+			}
 			return nil, ErrStale
 		}
 		return root.hub.openContent(ctx, root, k, e.Entry, e.Rev, offset, s.info.ID)

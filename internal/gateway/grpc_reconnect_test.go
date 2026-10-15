@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -102,7 +103,9 @@ func grpcEchoDeadline(t *testing.T, grpcAddr, id, payload string, timeout time.D
 	if err != nil {
 		return "", err
 	}
-	if err := cs.SendMsg(&tunnel.RawFrame{Payload: []byte(payload)}); err != nil {
+	// io.EOF: the server ended the stream (a refusal can beat the send);
+	// RecvMsg has its status.
+	if err := cs.SendMsg(&tunnel.RawFrame{Payload: []byte(payload)}); err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
 	if err := cs.CloseSend(); err != nil {

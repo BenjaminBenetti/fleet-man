@@ -427,9 +427,14 @@ func (h *Hub) Flush(ctx context.Context) error {
 
 // FlushSide is Flush for what one side is owed: every side is asked to
 // rescan (so a change made a moment ago anywhere is in), then side gets
-// what it lacks without the lanes' delays, until it holds the state of every
-// path want keeps (nil keeps every path), and no change of such a path waits
-// for a root's cap. Only side's own rescan failing counts against it.
+// what it lacks without the lanes' delays, until it holds, of every path
+// want keeps (nil keeps every path), at least the state it was owed once
+// the rescans were in, and no change of such a path waits for a root's
+// cap. A path that changes again meanwhile is the lanes' to deliver: a flush
+// that waited for its newest state would chase a file rewritten faster than
+// a copy reaches the side (~/.claude.json, which every running Claude Code
+// rewrites, on its way to a cluster). Only side's own rescan failing counts
+// against it.
 func (h *Hub) FlushSide(ctx context.Context, side string, want func(root, path string) bool) error {
 	if h.side(side) == nil {
 		return fmt.Errorf("sharesync: flushing %s: %w", side, ErrNotAttached)
@@ -456,10 +461,14 @@ func (h *Hub) flush(ctx context.Context, side string, want func(root, path strin
 		}
 		s.poke()
 	}
+	var owes owing
+	if side != "" {
+		owes = h.owed(side, want)
+	}
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		pending, stuck := h.pending(side, want, down)
+		pending, stuck := h.pending(side, want, down, owes)
 		if len(pending) == 0 && len(unreached) == 0 {
 			return nil
 		}
@@ -474,10 +483,68 @@ func (h *Hub) flush(ctx context.Context, side string, want func(root, path strin
 	}
 }
 
+// owing is, by root and path, the state a flush for one side waits for.
+type owing map[string]map[string]owed
+
+// owed is a path's state a side was to get when a flush for it began.
+type owed struct {
+	rev  uint64
+	live bool
+}
+
+// owed is what side is to get now of the paths want keeps.
+func (h *Hub) owed(side string, want func(root, path string) bool) owing {
+	o := owing{}
+	for _, root := range h.order {
+		root.mu.Lock()
+		if sr := root.sides[side]; sr != nil && root.broken == nil {
+			note := func(p string) {
+				if want != nil && !want(root.name, p) {
+					return
+				}
+				if op, ok := root.opFor(sr, p); ok {
+					if o[root.name] == nil {
+						o[root.name] = map[string]owed{}
+					}
+					o[root.name][p] = owed{rev: op.Rev, live: op.Entry.Live()}
+				}
+			}
+			for p := range sr.dirty {
+				note(p)
+			}
+			for p := range sr.inflight {
+				note(p)
+			}
+		}
+		root.mu.Unlock()
+	}
+	return o
+}
+
+// waits reports whether sr is still behind what it was owed of p in root:
+// a rev at least the one owed (a newer one is as good), or for a delete, no
+// copy. A path the side was not owed changed after the flush began. Called
+// with the root's mu held.
+func (o owing) waits(root string, sr *sideRoot, p string) bool {
+	ow, ok := o[root][p]
+	if !ok {
+		return false
+	}
+	held, holds := sr.held[p]
+	switch {
+	case holds && held != 0 && held >= ow.rev:
+		return false
+	case !holds && !ow.live:
+		return false
+	}
+	return true
+}
+
 // pending lists each side and root still behind (only side's paths want
-// keeps when side is set); stuck is set when none of it can move (down are
+// keeps when side is set, and of those only what owes says the side was
+// owed when owes is set); stuck is set when none of it can move (down are
 // sides that could not be reached).
-func (h *Hub) pending(side string, want func(root, path string) bool, down map[string]bool) (pending []string, stuck bool) {
+func (h *Hub) pending(side string, want func(root, path string) bool, down map[string]bool, owes owing) (pending []string, stuck bool) {
 	stuck = true
 	wanted := func(root, p string) bool { return want == nil || want(root, p) }
 	for _, root := range h.order {
@@ -506,7 +573,7 @@ func (h *Hub) pending(side string, want func(root, path string) bool, down map[s
 			sr := root.sides[id]
 			n, movable := 0, false
 			for p := range sr.dirty {
-				if !wanted(root.name, p) {
+				if !wanted(root.name, p) || owes != nil && !owes.waits(root.name, sr, p) {
 					continue
 				}
 				op, ok := root.opFor(sr, p)
@@ -522,7 +589,7 @@ func (h *Hub) pending(side string, want func(root, path string) bool, down map[s
 				}
 			}
 			for p := range sr.inflight {
-				if wanted(root.name, p) {
+				if wanted(root.name, p) && (owes == nil || owes.waits(root.name, sr, p)) {
 					n++
 					movable = true
 				}

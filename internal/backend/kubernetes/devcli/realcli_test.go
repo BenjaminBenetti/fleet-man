@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -182,9 +183,9 @@ func TestCaptureSignature(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s has no signature for %s; record it with FLEET_KUBESHIM_UPDATE=1:\n%s", signaturePath(version), fx.name, mustJSON(got))
 			}
-			if mustJSON(got) != mustJSON(want) {
+			if g, w := got.steady(), want.steady(); mustJSON(g) != mustJSON(w) {
 				t.Errorf("capture signature changed for %s on devcontainer CLI %s\nnew: %s\ngone: %s\ngot:\n%s",
-					fx.name, version, strings.Join(minus(got.all(), want.all()), ", "), strings.Join(minus(want.all(), got.all()), ", "), mustJSON(got))
+					fx.name, version, strings.Join(minus(g.all(), w.all()), ", "), strings.Join(minus(w.all(), g.all()), ", "), mustJSON(got))
 			}
 		})
 	}
@@ -194,6 +195,17 @@ func TestCaptureSignature(t *testing.T) {
 		}
 		t.Logf("recorded %s", signaturePath(version))
 	}
+}
+
+// racyCalls are calls a CLI makes or not by timing: it starts `docker
+// events` beside `docker run` and kills it once the captured run fails,
+// sometimes before the shim's process has started and recorded the call.
+var racyCalls = map[string]bool{"events -> block": true}
+
+// steady is s without its racy calls, for comparing.
+func (s signature) steady() signature {
+	s.Calls = slices.DeleteFunc(slices.Clone(s.Calls), func(c string) bool { return racyCalls[c] })
+	return s
 }
 
 // all is a signature's entries, for a diff.

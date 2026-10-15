@@ -421,17 +421,26 @@ type faultyPeer struct {
 	lose bool
 	// fetchFail fails fetches.
 	fetchFail bool
+	// delay holds each Apply back, as a side across a network is.
+	delay time.Duration
 	// calls counts Apply calls.
 	calls int
 }
 
 func (f *faultyPeer) Apply(ctx context.Context, b Batch) ([]Result, error) {
 	f.mu.Lock()
-	down, lose := f.down || f.deaf, f.lose
+	down, lose, delay := f.down || f.deaf, f.lose, f.delay
 	f.calls++
 	f.mu.Unlock()
 	if down {
 		return nil, errors.New("side unreachable")
+	}
+	if delay > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
 	}
 	results, err := f.inner.Apply(ctx, b)
 	if lose {

@@ -5,6 +5,7 @@ package sharesync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -132,6 +133,86 @@ func TestFlushSideWaitsForOneSidesPaths(t *testing.T) {
 	// …but not FlushSide of another side.
 	if err := r.hub.FlushSide(ctx, "pod", nil); err != nil && strings.Contains(err.Error(), "other: rescan") {
 		t.Errorf("FlushSide of the pod counted another side's rescan: %v", err)
+	}
+}
+
+// FlushSide waits for what the side was owed when it began, not for later
+// changes of the same path: ~/.claude.json, which every running Claude Code
+// rewrites, would keep a flush chasing it until its deadline. Changes on
+// either side are covered: another side's (a newer state to send) and the
+// flushed side's own (its report merged, the merge to send back).
+func TestFlushSideDoesNotChaseLaterChanges(t *testing.T) {
+	for _, churner := range []string{"host", "pod"} {
+		t.Run(churner+" keeps writing", func(t *testing.T) {
+			r := mergeRig(t, time.Hour, SideInfo{ID: "host", Location: "host"})
+			// The pod is across a network: a delivery takes longer than
+			// the file goes between changes.
+			pod := r.faulty(SideInfo{ID: "pod", Location: "a"})
+			pod.set(func(f *faultyPeer) { f.delay = 40 * time.Millisecond })
+			r.write("host", "files", ".claude.json", `{"numStartups":1}`)
+			r.sync()
+			r.write("host", "files", ".claude.json", `{"numStartups":2}`)
+			r.scan("host")
+
+			stop := make(chan struct{})
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for n := 3; ; n++ {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					r.write(churner, "files", ".claude.json", fmt.Sprintf(`{"numStartups":%d,"%s":%d}`, n, churner, n))
+					_ = r.sides[churner].side.Rescan(context.Background())
+					time.Sleep(10 * time.Millisecond)
+				}
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			err := r.hub.FlushSide(ctx, "pod", func(root, p string) bool { return p == ".claude.json" })
+			cancel()
+			close(stop)
+			<-done
+			if err != nil {
+				t.Fatalf("FlushSide chased the churn: %v", err)
+			}
+		})
+	}
+}
+
+// A side slower than a settings file's changes still gets them: the hub
+// sends the state a batch names from its own copy when the path has moved
+// on, rather than refusing it as stale until the changes stop.
+func TestSlowSideGetsAFileThatKeepsChanging(t *testing.T) {
+	r := mergeRig(t, 0, SideInfo{ID: "host", Location: "host"})
+	pod := r.faulty(SideInfo{ID: "pod", Location: "a"})
+	pod.set(func(f *faultyPeer) { f.delay = 40 * time.Millisecond })
+	r.write("host", "files", ".claude.json", `{"numStartups":1}`)
+	r.sync()
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for n := 2; ; n++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			r.write("host", "files", ".claude.json", fmt.Sprintf(`{"numStartups":%d}`, n))
+			_ = r.sides["host"].side.Rescan(context.Background())
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	deadline := time.Now().Add(3 * time.Second)
+	for r.read("pod", "files", ".claude.json") == `{"numStartups":1}` {
+		if time.Now().After(deadline) {
+			t.Fatalf("the pod got none of the changes:\n%s", r.dump())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
