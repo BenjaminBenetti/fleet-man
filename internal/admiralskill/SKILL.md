@@ -89,13 +89,15 @@ tool-call timeout allows it. A blocking call returns
 `{job_id, done: true, success, instance, warnings}`, and a failed blocking job
 surfaces as a tool error.
 
-- `fleet_up {fleet, instance, remote?, branch?, backend?, cluster?, wait?}` creates and
+- `fleet_up {fleet, instance, remote?, branch?, backend?, cluster?, settings?, wait?}` creates and
   starts an instance. `remote` is required only when creating the first
   instance of a new fleet; after that the fleet's recorded remote is used. It
   is normally a git URL, but `file:///abs/dir` names a local TEMPLATE directory
   on the daemon host instead: fleet copies it into each new instance rather
   than cloning (a template fleet takes no `branch` and only the `devcontainer`
-  or `kubernetes` backend).
+  or `kubernetes` backend). `settings` gives the new fleet its options (the
+  object `fleet_edit` takes, see Fleet options) before its first instance is
+  made; it is refused for a fleet that already exists.
   `backend` selects where it runs: `devcontainer`, `coder`, `codespaces`, or
   `kubernetes` (a pod on one of the daemon's cluster connections).
   `cluster` names that connection by id, name or kube context (see
@@ -212,6 +214,38 @@ on a cluster), which must exist. `fleet_mount_delete {fleet, path}` removes
 one and leaves its content alone. Instances take a change at their next
 create or rebuild, and a set returns any warning (a host folder missing).
 
+**Fleet options.** A fleet's options are the settings of its Edit fleet
+dialog in the TUI, shared by all its instances. `fleet_settings {fleet}`
+returns them; `fleet_edit {fleet, settings}` changes the ones you pass and
+returns the result; `fleet_up` can set them on a fleet it makes. They are:
+
+- `claude_code_mount`, `codex_mount`, `auggie_mount`, `gh_mount` — one shared
+  login and state for Claude Code, Codex, Auggie or the GitHub CLI across the
+  fleet's instances, so it is logged in once for all of them. They land under
+  `home_dir`, the home of the instances' user: empty means `/home/vscode`,
+  which suits the stock devcontainer images; set it when the image's user is
+  another (`/home/node`, `/root`), or the logins land where nothing reads them.
+- `fleet_mcp` — serves these same tools and this skill to the coding agents in
+  the fleet's instances: the full set, every fleet, which gives anything
+  running in them host-level access (a risk the user takes on by turning it
+  on).
+- `prefer_fleet_launch` — which page the built-in browser opens when the
+  devcontainer.json configures both an `initialUrl` and a Fleet Launch page.
+- `layout_presets` — `[{name, pane_commands, layout?}]`, the pane layouts the
+  TUI offers when a session is made: one startup command per pane (`""` is a
+  plain shell). `layout` is a captured tmux geometry; omitted, a same-named
+  preset keeps its own while its pane count is unchanged, else the panes stack.
+- `custom_mounts` — `[{path, host_folder?}]`, as `fleet_mount_set` takes them.
+- `buildkit_server`, `deb_cache_server`, `image_cache_server` — shared caches
+  for the fleet's docker builds, apt packages and Docker Hub pulls.
+- `coder_workspace_name`, `coder_template`, `coder_preset`,
+  `coder_parameters` (`[{name, value}]`) — how the `coder` backend creates the
+  fleet's workspaces. Clearing the template clears the preset and parameters.
+
+A list you pass replaces the whole list (`[]` empties it), so read the fleet's
+options first to change one entry. The logins, home dir, mounts and caches
+reach an instance when it is created or rebuilt.
+
 **Configure automations.** A fleet can run unattended: **agents** are worker
 definitions (a launch command with `${PROMPT}`/`${SYS_PROMPT}` placeholders, a
 system prompt, an env backend) and **triggers** fire one or more agents — on a
@@ -294,7 +328,7 @@ INSPECT
   fleet_restore_backup                              # docs only: where state backups are + how to restore
 
 LIFECYCLE  (async-first: returns {job_id, done:false} in seconds; wait:true blocks)
-  fleet_up {fleet, instance, remote?, branch?, backend?, cluster?, wait?}
+  fleet_up {fleet, instance, remote?, branch?, backend?, cluster?, settings?, wait?}   # settings: a new fleet's options
   fleet_clone {fleet, source, destination, display_name?, tag?, color?, branch?, wait?}
   fleet_rebuild {fleet, instance, wait?}            # recreate container, keep workspace; retries a failed cluster create/rebuild
   fleet_down {fleet, instance, wait?}               # remove one instance      (irreversible)
@@ -329,6 +363,12 @@ CUSTOM MOUNTS  (folders every instance of a fleet gets; taken at next create/reb
   fleet_mount_list {fleet}
   fleet_mount_set {fleet, path, host_folder?}                  # add, or re-point to a daemon-host folder
   fleet_mount_delete {fleet, path}
+
+FLEET OPTIONS  (the TUI's Edit fleet settings; a passed list replaces the list)
+  fleet_settings {fleet}                                       # read every option
+  fleet_edit {fleet, settings: {claude_code_mount?, codex_mount?, auggie_mount?, fleet_mcp?, gh_mount?, home_dir?,
+      prefer_fleet_launch?, layout_presets?, custom_mounts?, buildkit_server?, deb_cache_server?,
+      image_cache_server?, coder_workspace_name?, coder_template?, coder_preset?, coder_parameters?}}
 
 KUBERNETES  (the daemon's cluster connections; cluster = id, name or kube context)
   fleet_cluster_list {cluster?}                                # health, settings, capabilities

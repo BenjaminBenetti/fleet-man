@@ -478,6 +478,15 @@ func loadInstanceSnapshot(fleetName, instanceName string) *fleetgrpc.Instance {
 // (this removes the client-side pre-create write that drove issue #63), then
 // starts the provisioning job.
 func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, automated bool) (*job, error) {
+	return s.startCreateInstanceJobWith(req, automated, nil)
+}
+
+// startCreateInstanceJobWith is startCreateInstanceJob for a create that may
+// make its fleet with settings (MCP fleet_up): a non-nil newFleet, already
+// normalized, is stored on the fleet record in the same state write that
+// makes it, so the first instance provisions with it and a refused create
+// leaves no fleet behind. A fleet that already exists refuses it.
+func (s *service) startCreateInstanceJobWith(req *fleetgrpc.CreateInstanceRequest, automated bool, newFleet *fleet.FleetSettings) (*job, error) {
 	fleetName, instanceName := req.GetFleet(), req.GetInstance()
 	if fleetName == "" || instanceName == "" {
 		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
@@ -505,6 +514,11 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 				return status.Error(codes.InvalidArgument, err.Error())
 			}
 			f = st.GetOrCreateFleet(fleetName, req.GetRemote())
+			if newFleet != nil {
+				f.Settings = *newFleet
+			}
+		} else if newFleet != nil {
+			return status.Errorf(codes.AlreadyExists, "fleet %q already exists; settings only apply to a new fleet (change an existing fleet's with fleet_edit)", fleetName)
 		}
 		if req.Remote != nil && req.GetRemote() != "" {
 			remote = req.GetRemote()
