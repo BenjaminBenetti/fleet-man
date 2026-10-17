@@ -260,7 +260,10 @@ host), `fleet_restore_backup`, the tmux session tools
 `fleet_trigger_create` / `fleet_trigger_update` / `fleet_trigger_delete`, and
 `fleet_trigger_logs` (mirroring the `fleet agent` and `fleet trigger` CLI
 commands), the custom-mount tools `fleet_mount_list` / `fleet_mount_set` /
-`fleet_mount_delete` (`fleet mount`), and the Kubernetes tools
+`fleet_mount_delete` (`fleet mount`), the fleet tools
+`fleet_create` (a fleet with no instance yet) / `fleet_settings` /
+`fleet_edit` (every setting of the TUI's Edit fleet dialog, which
+`fleet_create` and `fleet_up` can also give a fleet they make), and the Kubernetes tools
 `fleet_cluster_list` / `fleet_cluster_test` (`fleet cluster ls` / `test`).
 Interactive, open-ended commands (`fleet shell`, log following) are intentionally
 not exposed.

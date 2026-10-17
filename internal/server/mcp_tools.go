@@ -68,7 +68,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	// --- lifecycle ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_up",
-		Description: "Create (provision) a new instance in a fleet. Returns immediately with a job_id to poll via fleet_job_status (provisioning takes minutes); pass wait:true to block until done instead. Provide remote (a git URL, or file:///abs/dir for a local template directory that is copied per instance) when creating the first instance of a new fleet. Without backend the instance goes to the daemon's remembered default deploy target (the one last picked in a TUI New instance dialog, else devcontainer), not necessarily devcontainer; the reply's target names where it went.",
+		Description: "Create (provision) a new instance in a fleet. Returns immediately with a job_id to poll via fleet_job_status (provisioning takes minutes); pass wait:true to block until done instead. Provide remote (a git URL, or file:///abs/dir for a local template directory that is copied per instance) when creating the first instance of a new fleet (or make the fleet first with fleet_create), and optionally settings, the new fleet's options (those of fleet_edit). Without backend the instance goes to the daemon's remembered default deploy target (the one last picked in a TUI New instance dialog, else devcontainer), not necessarily devcontainer; the reply's target names where it went.",
 	}, s.mcpUp)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_start",
@@ -174,6 +174,20 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 		Name:        "fleet_mount_delete",
 		Description: "Remove a custom mount from a fleet (its host folder's content is left alone). Instances lose it at their next create or rebuild. Returns the fleet's mounts.",
 	}, s.mcpMountDelete)
+
+	// --- fleets & their options ---
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_create",
+		Description: "Create a fleet without an instance: its name, its remote (a git URL, or file:///abs/dir for a template directory on the daemon host copied into each instance) and optionally its options (those of fleet_edit). A git remote is not cloned until the first fleet_up, which then needs no remote; a template directory must exist now. A fleet name in use is refused. Returns the new fleet's options and any warning (a custom mount host folder missing on the daemon host).",
+	}, s.mcpFleetCreate)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_settings",
+		Description: "Read a fleet's options, every setting of the TUI's Edit fleet dialog: the shared Claude Code, Codex, Auggie and GitHub CLI logins, Fleet MCP, home dir, Prefer Fleet Launch, layout presets, custom mounts, the caches (BuildKit, apt, Docker Hub images) and the Coder backend's workspace name, template, preset and parameters. Returns {fleet, remote, settings}.",
+	}, s.mcpFleetSettings)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_edit",
+		Description: "Change a fleet's options, any setting of the TUI's Edit fleet dialog (see fleet_settings). Only the settings you pass change; a list (layout_presets, custom_mounts, coder_parameters) replaces the whole list, [] empties it. The shared logins, home dir, custom mounts and caches reach an existing instance at its next rebuild. Returns the fleet's resulting options and any warning (a custom mount host folder missing on the daemon host).",
+	}, s.mcpFleetEdit)
 
 	// --- Kubernetes cluster connections ---
 	mcp.AddTool(srv, &mcp.Tool{
@@ -418,6 +432,9 @@ type FleetUpInput struct {
 	Backend  string `json:"backend,omitempty" jsonschema:"backend type: devcontainer, coder, codespaces or kubernetes; omit to use the daemon's remembered default deploy target (the one last picked in a TUI New instance dialog, else devcontainer). A file:// template fleet runs on devcontainer or kubernetes only"`
 	Cluster  string `json:"cluster,omitempty" jsonschema:"Kubernetes connection to run the instance on: its id, name or kube context (see fleet_cluster_list); implies the kubernetes backend. Omitted with backend kubernetes: the remembered or only connection"`
 	Wait     bool   `json:"wait,omitempty" jsonschema:"block until provisioning completes instead of returning a job handle immediately; provisioning takes minutes, so only set this with a generous tool-call timeout"`
+	// Settings is a pointer so an omitted object is told apart from an
+	// empty one: only a create that makes the fleet takes one.
+	Settings *mcpFleetSettingsInput `json:"settings,omitempty" jsonschema:"the new fleet's options (those of the TUI's Edit fleet dialog), stored on it before its first instance is made; everything left out is off or empty. Only when this call makes the fleet (with remote): an existing fleet's options are changed with fleet_edit"`
 }
 
 func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpInput) (*mcp.CallToolResult, FleetJobOutput, error) {
@@ -448,6 +465,16 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 		}
 		cluster = c.GetCluster().GetId()
 	}
+	var (
+		settings         *fleet.FleetSettings
+		settingsWarnings []string
+	)
+	if in.Settings != nil {
+		var err error
+		if settings, settingsWarnings, err = newFleetSettings(in.Settings); err != nil {
+			return nil, FleetJobOutput{}, err
+		}
+	}
 	// Verbose is left false (unlike `fleet up`): MCP returns only the final
 	// JobDone result, never a live provisioning stream, so verbose output would
 	// just be discarded.
@@ -458,7 +485,7 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 	if in.Branch != "" {
 		req.Branch = &in.Branch
 	}
-	j, err := s.startCreateInstanceJob(req, false)
+	j, err := s.startCreateInstanceJobWith(req, false, settings)
 	if err != nil {
 		return nil, FleetJobOutput{}, mcpErr(err)
 	}
@@ -482,6 +509,7 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 	}
 	if err == nil {
 		out.Target = target
+		out.Warnings = append(settingsWarnings, out.Warnings...)
 	}
 	return result, out, err
 }
