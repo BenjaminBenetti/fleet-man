@@ -28,9 +28,10 @@ what the user asks.
 ```
 
 - **Fleet** — a group of instances tied to one repository. You name it when
-  you create its first instance (conventionally the repo basename, but any
-  name works); use `fleet_list`/`fleet_status` to find existing names rather
-  than deriving them from URLs.
+  you create it, with `fleet_create` or with its first instance's `fleet_up`
+  (conventionally the repo basename, but any name works); use
+  `fleet_status` to find existing names rather than deriving them from URLs
+  (`fleet_list` lists instances, so it misses a fleet that has none).
 - **Instance** — one devcontainer: an isolated workspace you can run
   commands in, open in an editor, or run an agent inside. It runs where its
   **backend** puts it: `devcontainer` (Docker on the daemon host), `coder`,
@@ -97,7 +98,8 @@ surfaces as a tool error.
   than cloning (a template fleet takes no `branch` and only the `devcontainer`
   or `kubernetes` backend). `settings` gives the new fleet its options (the
   object `fleet_edit` takes, see Fleet options) before its first instance is
-  made; it is refused for a fleet that already exists.
+  made; it is refused for a fleet that already exists. To make a fleet
+  without an instance, use `fleet_create`.
   `backend` selects where it runs: `devcontainer`, `coder`, `codespaces`, or
   `kubernetes` (a pod on one of the daemon's cluster connections).
   `cluster` names that connection by id, name or kube context (see
@@ -215,9 +217,13 @@ one and leaves its content alone. Instances take a change at their next
 create or rebuild, and a set returns any warning (a host folder missing).
 
 **Fleet options.** A fleet's options are the settings of its Edit fleet
-dialog in the TUI, shared by all its instances. `fleet_settings {fleet}`
-returns them; `fleet_edit {fleet, settings}` changes the ones you pass and
-returns the result; `fleet_up` can set them on a fleet it makes. They are:
+dialog in the TUI, shared by all its instances. `fleet_create {fleet,
+remote, settings?}` makes a fleet with no instance yet, its options set (a
+git remote is not cloned until the first `fleet_up`, which then needs no
+`remote`; a template directory must exist now); a name in use is refused.
+`fleet_settings {fleet}` returns the options; `fleet_edit {fleet, settings}`
+changes the ones you pass and returns the result; `fleet_up` can also set
+them on a fleet it makes. They are:
 
 - `claude_code_mount`, `codex_mount`, `auggie_mount`, `gh_mount` — one shared
   login and state for Claude Code, Codex, Auggie or the GitHub CLI across the
@@ -364,7 +370,8 @@ CUSTOM MOUNTS  (folders every instance of a fleet gets; taken at next create/reb
   fleet_mount_set {fleet, path, host_folder?}                  # add, or re-point to a daemon-host folder
   fleet_mount_delete {fleet, path}
 
-FLEET OPTIONS  (the TUI's Edit fleet settings; a passed list replaces the list)
+FLEETS & OPTIONS  (the TUI's Edit fleet settings; a passed list replaces the list)
+  fleet_create {fleet, remote, settings?}                      # a fleet with no instance yet
   fleet_settings {fleet}                                       # read every option
   fleet_edit {fleet, settings: {claude_code_mount?, codex_mount?, auggie_mount?, fleet_mcp?, gh_mount?, home_dir?,
       prefer_fleet_launch?, layout_presets?, custom_mounts?, buildkit_server?, deb_cache_server?,

@@ -259,3 +259,78 @@ func TestMCPUpMakesTheFleetWithSettings(t *testing.T) {
 		t.Errorf("refused creates changed state: %d fleets, web %+v", len(st.Fleets), st.Fleets["web"])
 	}
 }
+
+// TestMCPFleetCreate: fleet_create makes a fleet with no instance, its remote
+// and its settings, which the first fleet_up (with no remote) provisions
+// with; a name in use, a bad name, a missing template directory and a bad
+// setting are tool errors that leave state alone.
+func TestMCPFleetCreate(t *testing.T) {
+	isolateFleetDir(t)
+	provisioned := make(chan fleet.FleetSettings, 1)
+	orig := jobRunCreate
+	jobRunCreate = func(_ context.Context, fleetName, instanceName, remote, _ string, _ bool, _ fleet.BackendType) error {
+		return state.Update(func(st *state.State) error {
+			if remote != "git@example.com:web.git" {
+				t.Errorf("provisioned from remote %q", remote)
+			}
+			provisioned <- st.Fleets[fleetName].Settings
+			inst, _ := st.Fleets[fleetName].GetInstance(instanceName)
+			inst.Status = fleet.StatusRunning
+			return nil
+		})
+	}
+	defer func() { jobRunCreate = orig }()
+	svc := newService()
+	startHub(t, svc)
+	cs := mcpConnect(t, svc)
+	big := t.TempDir()
+
+	var out FleetSettingsOutput
+	callJSON(t, cs, "fleet_create", map[string]any{"fleet": "web", "remote": " git@example.com:web.git ", "settings": everySetting(big)}, &out)
+	if out.Fleet != "web" || out.Remote != "git@example.com:web.git" || !out.Settings.ClaudeCodeMount || out.Settings.HomeDir != "/home/node" || len(out.Settings.CustomMounts) != 2 {
+		t.Fatalf("fleet_create returned %+v", out)
+	}
+	st, _ := state.Load()
+	if f := st.Fleets["web"]; f == nil || len(f.Instances) != 0 || f.Settings.CustomMountHostFolders["/srv/big"] != big {
+		t.Fatalf("persisted fleet %+v", f)
+	}
+
+	var bare FleetSettingsOutput
+	tpl := t.TempDir()
+	callJSON(t, cs, "fleet_create", map[string]any{"fleet": "tpl", "remote": "file://" + tpl}, &bare)
+	if s := bare.Settings; s.ClaudeCodeMount || s.FleetMCP || s.HomeDir != "" || len(s.CustomMounts) != 0 || s.PreferFleetLaunch != nil {
+		t.Errorf("a fleet made without settings has %+v", s)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"name in use", map[string]any{"fleet": "web", "remote": "git@example.com:other.git"}, "already exists"},
+		{"bad name", map[string]any{"fleet": "a/b", "remote": "git@example.com:a.git"}, "path separators"},
+		{"missing template", map[string]any{"fleet": "gone", "remote": "file://" + tpl + "/nope"}, "template dir"},
+		{"relative template", map[string]any{"fleet": "rel", "remote": "file://rel/dir"}, "absolute"},
+		{"bad setting", map[string]any{"fleet": "bad", "remote": "git@example.com:bad.git", "settings": map[string]any{"home_dir": "home"}}, "absolute"},
+		{"no remote", map[string]any{"fleet": "none", "remote": " "}, "remote are required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if msg := callErr(t, cs, "fleet_create", tc.args); !strings.Contains(msg, tc.want) {
+				t.Errorf("error %q, want it to mention %q", msg, tc.want)
+			}
+		})
+	}
+	st, _ = state.Load()
+	if len(st.Fleets) != 2 || st.Fleets["web"].Remote != "git@example.com:web.git" {
+		t.Errorf("refused creates changed state: %+v", st.Fleets)
+	}
+
+	var up FleetJobOutput
+	callJSON(t, cs, "fleet_up", map[string]any{"fleet": "web", "instance": "i1", "backend": "devcontainer", "wait": true}, &up)
+	if !up.Success {
+		t.Fatalf("fleet_up into the made fleet returned %+v", up)
+	}
+	if s := <-provisioned; !s.ClaudeCodeMount || !s.BuildkitServer || s.CoderTemplate != "docker" || len(s.LayoutPresets) != 1 {
+		t.Errorf("the first instance provisioned with settings %+v", s)
+	}
+}

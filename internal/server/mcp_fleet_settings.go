@@ -15,9 +15,10 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 )
 
-// mcp_fleet_settings.go adds the fleet options tools: read (fleet_settings)
-// and change (fleet_edit) every setting of the TUI's Edit fleet dialog, and
-// the settings object fleet_up stores on a fleet it makes. The automation
+// mcp_fleet_settings.go adds the fleet tools: make a fleet without an
+// instance (fleet_create), read (fleet_settings) and change (fleet_edit)
+// every setting of the TUI's Edit fleet dialog, and the settings object
+// fleet_create and fleet_up store on a fleet they make. The automation
 // agents and triggers stored beside them have their own tools
 // (mcp_automation.go). A change is read-modify-write of FleetSettings through
 // mutateAutomation, so SetFleetSettings checks it like any other write.
@@ -309,6 +310,38 @@ func (s *service) mcpFleetEdit(ctx context.Context, _ *mcp.CallToolRequest, in F
 	})
 	if err != nil {
 		return nil, FleetSettingsOutput{}, err
+	}
+	out, err := s.fleetSettingsOutput(ctx, in.Fleet, warnings)
+	return nil, out, err
+}
+
+type FleetCreateInput struct {
+	Fleet    string                 `json:"fleet" jsonschema:"name for the new fleet"`
+	Remote   string                 `json:"remote" jsonschema:"git remote URL, or file:///abs/dir naming a template directory on the daemon host that is copied into each instance instead of cloned"`
+	Settings *mcpFleetSettingsInput `json:"settings,omitempty" jsonschema:"the fleet's options (those of fleet_edit); everything left out is off or empty"`
+}
+
+func (s *service) mcpFleetCreate(ctx context.Context, _ *mcp.CallToolRequest, in FleetCreateInput) (*mcp.CallToolResult, FleetSettingsOutput, error) {
+	remote := strings.TrimSpace(in.Remote)
+	if in.Fleet == "" || remote == "" {
+		return nil, FleetSettingsOutput{}, errors.New("fleet and remote are required")
+	}
+	// A template directory is on this host, so it is checked now; a git
+	// remote is first cloned by fleet_up.
+	if fleet.IsTemplateRemote(remote) {
+		if _, err := fleet.ResolveTemplateDir(remote); err != nil {
+			return nil, FleetSettingsOutput{}, err
+		}
+	}
+	if in.Settings == nil {
+		in.Settings = &mcpFleetSettingsInput{}
+	}
+	settings, warnings, err := newFleetSettings(in.Settings)
+	if err != nil {
+		return nil, FleetSettingsOutput{}, err
+	}
+	if err := s.createNewFleet(in.Fleet, remote, *settings); err != nil {
+		return nil, FleetSettingsOutput{}, mcpErr(err)
 	}
 	out, err := s.fleetSettingsOutput(ctx, in.Fleet, warnings)
 	return nil, out, err

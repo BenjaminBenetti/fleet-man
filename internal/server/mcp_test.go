@@ -120,7 +120,7 @@ func TestNewMCPServerRegistersAllTools(t *testing.T) {
 		"fleet_automation_list", "fleet_agent_create", "fleet_agent_update", "fleet_agent_delete",
 		"fleet_trigger_create", "fleet_trigger_update", "fleet_trigger_delete", "fleet_trigger_logs",
 		"fleet_mount_list", "fleet_mount_set", "fleet_mount_delete",
-		"fleet_settings", "fleet_edit",
+		"fleet_create", "fleet_settings", "fleet_edit",
 		"fleet_cluster_list", "fleet_cluster_test",
 	}
 	for _, name := range want {

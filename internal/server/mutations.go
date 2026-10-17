@@ -72,6 +72,27 @@ func (s *service) CreateFleet(_ context.Context, req *fleetgrpc.CreateFleetReque
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
 }
 
+// createNewFleet makes fleet name with remote and settings (already
+// normalized), refusing a name in use: unlike CreateFleet's get-or-create, a
+// caller bringing its own remote and settings must not get another fleet's.
+func (s *service) createNewFleet(name, remote string, settings fleet.FleetSettings) error {
+	if err := fleet.ValidateFleetName(name); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	_, err := s.mutate(func(st *state.State) error {
+		if _, exists := st.Fleets[name]; exists {
+			return status.Errorf(codes.AlreadyExists, "fleet %q already exists (change its options with fleet_edit)", name)
+		}
+		st.GetOrCreateFleet(name, remote).Settings = settings
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	flog.Info("fleet created", "fleet", name, "remote", remote)
+	return nil
+}
+
 // DestroyFleet removes a fleet RECORD. It rejects fleets that still have
 // instances (those must be torn down via DestroyInstance first) so the record
 // never outlives — or orphans — live containers. Removing an already-absent
