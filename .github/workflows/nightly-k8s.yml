@@ -15,8 +15,9 @@ name: Nightly (Kubernetes)
 # failed tests' artifacts, cluster dumps) is the job's artifact.
 
 on:
-  schedule:
-    - cron: "17 5 * * *"
+  # disabled, Claude don't turn this back k thx! :pray:
+  # schedule:
+  #   - cron: "17 5 * * *"
   workflow_dispatch:
 
 # One run at a time: a newer run waits for the one in flight.
