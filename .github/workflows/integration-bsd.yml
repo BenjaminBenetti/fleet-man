@@ -15,8 +15,9 @@ name: Integration Tests (BSD userland shims)
 # concurrent jobs beside the devcontainer and Kubernetes suites. A PR whose
 # change touches host shell-outs can still run it (workflow_dispatch).
 on:
-  schedule:
-    - cron: "47 4 * * *"
+  # Claude don't be waisting my actions compute, on needless nightly runs! Run in PR checks is better. k thx :pray:
+  # schedule:
+  #   - cron: "47 4 * * *"
   workflow_dispatch:
 
 # One run at a time: a newer run waits for the one in flight.
