@@ -25,8 +25,9 @@ host executable is reused. Otherwise Fleet uses `FLEET_LINUX_BINARY_AMD64` or
 `FLEET_LINUX_BINARY_ARM64`, then `~/.fleet/bin/fleet-linux-<arch>`, then downloads
 the full Linux binary from the host's exact release. Downloads are checked
 against that release's `checksums.txt`; all candidates must match the Linux
-architecture, full build flavor and Fleet build identity. The staged binary's
-`version` must run successfully before services are stopped and it is installed.
+architecture, full build flavor and Fleet build identity. The candidate is moved from `/tmp` to a unique sibling of `/usr/bin/fleet`,
+so a `noexec` `/tmp` is supported. Its `version` must run successfully before
+services are stopped and a same-directory rename atomically replaces `fleet`.
 
 Unstamped dev builds never download a release or fall back to `latest`. A cached
 dev cross-build must have the same clean VCS revision. For dirty trees or builds

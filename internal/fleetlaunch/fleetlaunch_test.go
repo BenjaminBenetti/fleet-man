@@ -26,6 +26,7 @@ type recordingBackend struct {
 	execScripts   []string
 	failExec      bool // when set, every exec exits non-zero (drives error paths)
 	failInstall   bool
+	failPrepare   bool
 	copyErr       error
 	platform      string
 	remoteVersion string
@@ -66,7 +67,10 @@ func (b *recordingBackend) ExecCommand(workspaceDir string, command []string) *b
 		}
 	case len(command) == 3 && strings.Contains(command[2], "echo ABSENT"):
 		output = b.remoteVersion
-	case len(command) == 3 && strings.Contains(command[2], "write="):
+	case len(command) == 3 && strings.Contains(command[2], "chmod 0755"):
+		b.events = append(b.events, "prepare")
+		fail = fail || b.failPrepare
+	case len(command) == 3 && strings.Contains(command[2], "mv -f") && !strings.Contains(command[2], "rm -f"):
 		b.events = append(b.events, "install")
 		fail = fail || b.failInstall
 	}
@@ -136,12 +140,18 @@ func TestCopyBinaryStagesViaCopyFileThenInstalls(t *testing.T) {
 	if b.copiedBytes == 0 {
 		t.Error("no bytes streamed to CopyFile")
 	}
-	if len(b.execScripts) != 1 {
-		t.Fatalf("expected 1 install exec, got %d: %v", len(b.execScripts), b.execScripts)
+	if len(b.execScripts) != 2 {
+		t.Fatalf("expected prepare + install execs, got %d: %v", len(b.execScripts), b.execScripts)
 	}
-	install := b.execScripts[0]
-	if !strings.Contains(install, b.copiedTo) || !strings.Contains(install, RemotePath) {
+	install := b.execScripts[1]
+	if !strings.Contains(install, remoteDir+strings.TrimPrefix(b.copiedTo, "/tmp")) || !strings.Contains(install, RemotePath) {
 		t.Errorf("install script missing the staged/remote paths:\n%s", install)
+	}
+	if strings.Contains(install, "rm -f") || strings.Contains(install, "chmod") {
+		t.Fatalf("replacement must only rename: %s", install)
+	}
+	if !strings.Contains(b.execScripts[0], "sudo -n") {
+		t.Fatal("prepare lost sudo fallback")
 	}
 	if strings.Contains(install, "cat >") {
 		t.Errorf("install must not stream over stdin (hangs on coder):\n%s", install)
@@ -159,11 +169,12 @@ func TestCopyBinaryCleansStageOnInstallFailure(t *testing.T) {
 	if err := copyBinary(b, "/ws", strings.NewReader("fleet binary"), nil); err == nil {
 		t.Fatal("expected the failing install to surface as an error")
 	}
-	if len(b.execScripts) != 2 {
-		t.Fatalf("expected install + cleanup execs, got %d: %v", len(b.execScripts), b.execScripts)
+	if len(b.execScripts) != 3 {
+		t.Fatalf("expected prepare + install + cleanup execs, got %d: %v", len(b.execScripts), b.execScripts)
 	}
-	cleanup := b.execScripts[1]
-	if !strings.Contains(cleanup, "rm -f") || !strings.Contains(cleanup, b.copiedTo) {
+	cleanup := b.execScripts[2]
+	if !strings.Contains(cleanup, "rm -f") || !strings.Contains(cleanup, b.copiedTo) ||
+		!strings.Contains(cleanup, remoteDir+strings.TrimPrefix(b.copiedTo, "/tmp")) || !strings.Contains(cleanup, "sudo -n") {
 		t.Errorf("cleanup must rm the staged temp %q:\n%s", b.copiedTo, cleanup)
 	}
 }
@@ -241,7 +252,7 @@ func TestEnsureFreshResolvesBeforeStoppingServices(t *testing.T) {
 				if changed || len(b.events) != 0 {
 					t.Fatalf("current binary churned: %v", b.events)
 				}
-			} else if !changed || strings.Join(b.events, ",") != "resolve,copy,verify,stop,install" {
+			} else if !changed || strings.Join(b.events, ",") != "resolve,copy,prepare,verify,stop,install" {
 				t.Fatalf("changed %v, events %v", changed, b.events)
 			}
 		})
@@ -252,11 +263,14 @@ func TestEnsureFreshFailuresPreserveServices(t *testing.T) {
 	old := version.Version
 	version.Version = "v9.9.9"
 	t.Cleanup(func() { version.Version = old })
-	for _, failure := range []string{"resolve", "open", "changed", "copy", "verify", "version", "hook"} {
+	for _, failure := range []string{"resolve", "open", "changed", "copy", "prepare", "verify", "version", "hook"} {
 		t.Run(failure, func(t *testing.T) {
 			b := &recordingBackend{remoteVersion: "VERSION v9.9.8", stagedVersion: version.Version}
 			if failure == "copy" {
 				b.copyErr = errors.New("copy failed")
+			}
+			if failure == "prepare" {
+				b.failPrepare = true
 			}
 			if failure == "verify" {
 				b.verifyErr = true
@@ -297,10 +311,14 @@ func TestEnsureFreshFailuresPreserveServices(t *testing.T) {
 // a temporary directory, without requiring Docker or touching /usr/bin.
 type localInstallBackend struct {
 	recordingBackend
-	dir string
+	dir    string
+	direct bool
 }
 
 func (b *localInstallBackend) local(path string) string {
+	if b.direct {
+		return path
+	}
 	path = strings.ReplaceAll(path, remoteDir, b.dir+"/bin")
 	return strings.ReplaceAll(path, "/tmp/.fleet-launch-stage.", b.dir+"/stage.")
 }
@@ -330,8 +348,8 @@ func TestCopyBinaryExecutesReplacementBeforeInstall(t *testing.T) {
 	old := version.Version
 	version.Version = "v9.9.9"
 	t.Cleanup(func() { version.Version = old })
-	for _, broken := range []bool{false, true} {
-		t.Run(fmt.Sprint(broken), func(t *testing.T) {
+	for _, failure := range []string{"", "execute", "version", "hook"} {
+		t.Run(failure, func(t *testing.T) {
 			b := &localInstallBackend{dir: t.TempDir()}
 			if err := os.Mkdir(b.dir+"/bin", 0o755); err != nil {
 				t.Fatal(err)
@@ -341,33 +359,53 @@ func TestCopyBinaryExecutesReplacementBeforeInstall(t *testing.T) {
 				t.Fatal(err)
 			}
 			payload := "#!/bin/sh\nprintf 'v9.9.9\\n'\n"
-			if broken {
+			if failure == "execute" {
 				payload = "not an executable"
 			}
+			if failure == "version" {
+				payload = "#!/bin/sh\nprintf old"
+			}
+			oldFile, err := os.Open(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer oldFile.Close()
 			stopped := false
-			err := copyBinary(b, "/ws", strings.NewReader(payload), func() error {
+			err = copyBinary(b, "/ws", strings.NewReader(payload), func() error {
 				data, err := os.ReadFile(target)
 				if err != nil || string(data) != "old executable" {
 					t.Fatalf("old executable replaced before hook: %q %v", data, err)
 				}
 				stopped = true
+				if failure == "hook" {
+					return errors.New("hook failed")
+				}
 				return nil
 			})
-			if (err != nil) != broken || stopped == broken {
-				t.Fatalf("broken=%v stopped=%v err=%v", broken, stopped, err)
+			if (err != nil) != (failure != "") || stopped != (failure == "" || failure == "hook") {
+				t.Fatalf("failure=%s stopped=%v err=%v", failure, stopped, err)
 			}
 			data, readErr := os.ReadFile(target)
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
 			want := payload
-			if broken {
+			if failure != "" {
 				want = "old executable"
 			}
 			if string(data) != want {
 				t.Fatalf("installed %q, want %q", data, want)
 			}
+			oldData, err := io.ReadAll(oldFile)
+			if err != nil || string(oldData) != "old executable" {
+				t.Fatalf("overwrote old inode: %q %v", oldData, err)
+			}
 			leftovers, err := filepath.Glob(b.dir + "/stage.*")
+			siblings, siblingErr := filepath.Glob(b.dir + "/bin/.fleet-launch-stage.*")
+			leftovers = append(leftovers, siblings...)
+			if siblingErr != nil {
+				t.Fatal(siblingErr)
+			}
 			if err != nil || len(leftovers) != 0 {
 				t.Fatalf("staging leftovers %v: %v", leftovers, err)
 			}

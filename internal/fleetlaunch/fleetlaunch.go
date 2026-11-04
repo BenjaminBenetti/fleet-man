@@ -184,43 +184,45 @@ func stageBinaryPath() string {
 	return fmt.Sprintf("/tmp/.fleet-launch-stage.%d.%x", stageSeq.Add(1), b[:])
 }
 
-// copyBinary transfers the resolved fleet binary into the container at RemotePath
-// using stdin-EOF-safe transfers and commands:
-//
-//   - CopyFile streams it to a user-writable staging path. CopyFile is the
-//     backend strategy seam, so this works on every backend including coder
-//     (whose `coder ssh` transport hangs a stdin-reading `cat`); the host-side
-//     conditional that used to branch on transport is gone.
-//
-//   - the staged version command verifies it runs before beforeRefresh.
-//
-//   - a small exec installs it into RemotePath. /usr/bin is typically not
-//     writable by a devcontainer's default user, so the script probes the
-//     directory and either moves directly or re-runs through `sudo -n`
-//     (passwordless, matching the privoxy/tmux installers elsewhere). It unlinks
-//     the old file before the move: a process the caller just signalled may
-//     still have the old binary mmap'd, and overwriting a mapped executable
-//     surfaces as ETXTBSY — rm-then-mv allocates a fresh inode so the running
-//     process keeps its old copy. The install reads no stdin, so it cannot hang
-//     on any backend.
+// inRemoteDir runs a filesystem operation with the privileges needed to write
+// /usr/bin, using the same check for preparation, installation and cleanup.
+func inRemoteDir(command string) string {
+	return fmt.Sprintf(`
+if [ -w %s ]; then
+  sh -c %s
+else
+  sudo -n sh -c %s
+fi`, remoteDir, backend.ShellQuote(command), backend.ShellQuote(command))
+}
+
+// copyBinary transfers through the backend's stdin-EOF-safe CopyFile into /tmp,
+// then moves the candidate beside RemotePath before executing it: /tmp may be
+// mounted noexec. Preparation and verification leave the installed binary and
+// its services untouched. After beforeRefresh, a same-directory rename replaces
+// the old inode atomically, even if a process still has it mmap'd.
 func copyBinary(instanceBackend backend.Backend, workspaceDir string, bin io.Reader, beforeRefresh func() error) error {
 	stagePath := stageBinaryPath()
+	candidate := remoteDir + strings.TrimPrefix(stagePath, "/tmp")
 	installed := false
-	// Clean up partial transfers and failures before install as well as failed
-	// installs. A successful move leaves nothing at stagePath.
 	defer func() {
 		if installed {
 			return
 		}
-		rm := fmt.Sprintf("rm -f %s", backend.ShellQuote(stagePath))
-		_, _ = instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", rm}).CombinedOutputWithTimeout(backend.CopyTimeout)
+		// Always remove the unprivileged transfer, even when sudo is denied.
+		// A failed cross-filesystem move may also leave a partial candidate.
+		cleanup := fmt.Sprintf("rm -f %s\nif [ -e %s ]; then\n%s\nfi",
+			backend.ShellQuote(stagePath), backend.ShellQuote(candidate),
+			inRemoteDir("rm -f "+backend.ShellQuote(candidate)))
+		_, _ = instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", cleanup}).CombinedOutputWithTimeout(backend.CopyTimeout)
 	}()
 	if err := instanceBackend.CopyFile(workspaceDir, bin, stagePath, 0o755); err != nil {
 		return fmt.Errorf("stage fleet binary: %w", err)
 	}
-	// Exercise the replacement before stopping a healthy service or unlinking
-	// its executable. This also catches loader and transfer failures.
-	out, err := instanceBackend.ExecCommand(workspaceDir, []string{stagePath, "version"}).CombinedOutputWithTimeout(backend.CopyTimeout)
+	prepare := inRemoteDir(fmt.Sprintf("mv -f %s %s && chmod 0755 %s", stagePath, candidate, candidate))
+	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", prepare}).CombinedOutputWithTimeout(backend.CopyTimeout); err != nil {
+		return fmt.Errorf("prepare fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	out, err := instanceBackend.ExecCommand(workspaceDir, []string{candidate, "version"}).CombinedOutputWithTimeout(backend.CopyTimeout)
 	if err != nil {
 		return fmt.Errorf("verify staged fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -232,15 +234,7 @@ func copyBinary(instanceBackend backend.Backend, workspaceDir string, bin io.Rea
 			return err
 		}
 	}
-
-	install := fmt.Sprintf(`
-write='rm -f %[1]s && mv -f %[2]s %[1]s && chmod +x %[1]s'
-if [ -w %[3]s ]; then
-  sh -c "$write"
-else
-  sudo -n sh -c "$write"
-fi`, RemotePath, stagePath, remoteDir)
-
+	install := inRemoteDir(fmt.Sprintf("mv -f %s %s", candidate, RemotePath))
 	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", install}).CombinedOutputWithTimeout(backend.CopyTimeout); err != nil {
 		return fmt.Errorf("install fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
