@@ -59,7 +59,7 @@ func program(t *testing.T, goos, goarch string, pod bool, version string) string
 		}
 	}
 	out := filepath.Join(buildDir, key)
-	args := []string{"build", "-o", out}
+	args := []string{"build", "-buildvcs=false", "-o", out}
 	if pod {
 		args = append(args, "-tags", buildflavor.PodTag)
 	}

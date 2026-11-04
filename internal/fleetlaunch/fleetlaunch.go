@@ -11,13 +11,15 @@
 package fleetlaunch
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"sync/atomic"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/binstore"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 )
 
@@ -42,7 +44,7 @@ func MicSinkArgv() []string { return []string{RemotePath, "mic", "sink"} }
 // source (`fleet output source`), by the staged binary's absolute path.
 func OutputSourceArgv() []string { return []string{RemotePath, "output", "source"} }
 
-// EnsureFresh stages the host's fleet binary at RemotePath when the
+// EnsureFresh stages a matching full Linux fleet binary at RemotePath when the
 // remote copy is absent, predates the version subcommand, is a dev
 // build, or has a different version than the host. A host that is
 // itself a dev build always re-stages, so host-side iteration
@@ -59,6 +61,12 @@ func OutputSourceArgv() []string { return []string{RemotePath, "output", "source
 // A backend that stages the binary its own way (Stager) does all of this
 // itself.
 func EnsureFresh(instanceBackend backend.Backend, workspaceDir string, beforeRefresh func() error) (bool, error) {
+	return ensureFresh(instanceBackend, workspaceDir, beforeRefresh, func(arch string) (*binstore.Artifact, error) {
+		return binstore.Default().FullBinary(context.Background(), arch)
+	})
+}
+
+func ensureFresh(instanceBackend backend.Backend, workspaceDir string, beforeRefresh func() error, resolve func(string) (*binstore.Artifact, error)) (bool, error) {
 	if stager, ok := instanceBackend.(Stager); ok {
 		return stager.StageFleet(workspaceDir, beforeRefresh)
 	}
@@ -69,15 +77,42 @@ func EnsureFresh(instanceBackend backend.Backend, workspaceDir string, beforeRef
 	if !refresh {
 		return false, nil
 	}
-	if beforeRefresh != nil {
-		if err := beforeRefresh(); err != nil {
-			return false, err
-		}
+	arch, err := containerArch(instanceBackend, workspaceDir)
+	if err != nil {
+		return false, err
 	}
-	if err := copyBinary(instanceBackend, workspaceDir); err != nil {
+	artifact, err := resolve(arch)
+	if err != nil {
+		return false, fmt.Errorf("resolve fleet binary for linux/%s: %w", arch, err)
+	}
+	bin, err := artifact.Open()
+	if err != nil {
+		return false, fmt.Errorf("open fleet binary: %w", err)
+	}
+	defer bin.Close()
+	if err := copyBinary(instanceBackend, workspaceDir, bin, beforeRefresh); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// containerArch probes the instance rather than assuming the daemon's CPU or
+// Docker host architecture. This also handles emulated and remote containers.
+func containerArch(b backend.Backend, workspaceDir string) (string, error) {
+	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", "uname -s && uname -m"}).CombinedOutputWithTimeout(backend.CopyTimeout)
+	if err != nil {
+		return "", fmt.Errorf("probe container architecture: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 2 && fields[0] == "Linux" {
+		switch fields[1] {
+		case "x86_64", "amd64":
+			return "amd64", nil
+		case "aarch64", "arm64":
+			return "arm64", nil
+		}
+	}
+	return "", fmt.Errorf("unsupported container platform %q; need Linux amd64 or arm64", strings.TrimSpace(string(out)))
 }
 
 // needsRefresh reports whether the binary at RemotePath should be
@@ -114,7 +149,7 @@ else
   fi
 fi`, RemotePath, RemotePath)
 
-	out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", probe}).CombinedOutput()
+	out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", probe}).CombinedOutputWithTimeout(backend.CopyTimeout)
 	if err != nil {
 		return false, fmt.Errorf("probe remote binary: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -149,13 +184,15 @@ func stageBinaryPath() string {
 	return fmt.Sprintf("/tmp/.fleet-launch-stage.%d.%x", stageSeq.Add(1), b[:])
 }
 
-// copyBinary transfers the running fleet binary into the container at RemotePath
-// in two stdin-EOF-safe steps:
+// copyBinary transfers the resolved fleet binary into the container at RemotePath
+// using stdin-EOF-safe transfers and commands:
 //
 //   - CopyFile streams it to a user-writable staging path. CopyFile is the
 //     backend strategy seam, so this works on every backend including coder
 //     (whose `coder ssh` transport hangs a stdin-reading `cat`); the host-side
 //     conditional that used to branch on transport is gone.
+//
+//   - the staged version command verifies it runs before beforeRefresh.
 //
 //   - a small exec installs it into RemotePath. /usr/bin is typically not
 //     writable by a devcontainer's default user, so the script probes the
@@ -166,20 +203,34 @@ func stageBinaryPath() string {
 //     surfaces as ETXTBSY — rm-then-mv allocates a fresh inode so the running
 //     process keeps its old copy. The install reads no stdin, so it cannot hang
 //     on any backend.
-func copyBinary(instanceBackend backend.Backend, workspaceDir string) error {
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate fleet binary: %w", err)
-	}
-	bin, err := os.Open(self)
-	if err != nil {
-		return fmt.Errorf("open fleet binary: %w", err)
-	}
-	defer bin.Close()
-
+func copyBinary(instanceBackend backend.Backend, workspaceDir string, bin io.Reader, beforeRefresh func() error) error {
 	stagePath := stageBinaryPath()
+	installed := false
+	// Clean up partial transfers and failures before install as well as failed
+	// installs. A successful move leaves nothing at stagePath.
+	defer func() {
+		if installed {
+			return
+		}
+		rm := fmt.Sprintf("rm -f %s", backend.ShellQuote(stagePath))
+		_, _ = instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", rm}).CombinedOutputWithTimeout(backend.CopyTimeout)
+	}()
 	if err := instanceBackend.CopyFile(workspaceDir, bin, stagePath, 0o755); err != nil {
 		return fmt.Errorf("stage fleet binary: %w", err)
+	}
+	// Exercise the replacement before stopping a healthy service or unlinking
+	// its executable. This also catches loader and transfer failures.
+	out, err := instanceBackend.ExecCommand(workspaceDir, []string{stagePath, "version"}).CombinedOutputWithTimeout(backend.CopyTimeout)
+	if err != nil {
+		return fmt.Errorf("verify staged fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if got := strings.TrimSpace(string(out)); got != version.Version {
+		return fmt.Errorf("staged fleet version %q does not match host %q", got, version.Version)
+	}
+	if beforeRefresh != nil {
+		if err := beforeRefresh(); err != nil {
+			return err
+		}
 	}
 
 	install := fmt.Sprintf(`
@@ -191,13 +242,8 @@ else
 fi`, RemotePath, stagePath, remoteDir)
 
 	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", install}).CombinedOutputWithTimeout(backend.CopyTimeout); err != nil {
-		// CopyFile landed the binary but the install didn't move it (e.g. /usr/bin
-		// not writable and `sudo -n` denied). Remove the staged copy best-effort so
-		// repeated provision attempts don't pile up /tmp/.fleet-launch-stage.*
-		// orphans — each gets a fresh random name. Mirrors coder.removeRemote.
-		rm := fmt.Sprintf("rm -f %s", backend.ShellQuote(stagePath))
-		_, _ = instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", rm}).CombinedOutputWithTimeout(backend.CopyTimeout)
 		return fmt.Errorf("install fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
+	installed = true
 	return nil
 }

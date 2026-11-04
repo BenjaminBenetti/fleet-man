@@ -17,6 +17,34 @@ Every linux release binary is static (`CGO_ENABLED=0`). `fleet-pod` is the
 natively per arch, so a foreign arch needs QEMU binfmt; without it, pass
 `POD_ARCHES=amd64` (or your host arch).
 
+### Linux helpers on macOS or a different CPU architecture
+
+For non-Kubernetes instances, Fleet probes the instance with `uname` and stages
+`fleet-linux-amd64` or `fleet-linux-arm64` at `/usr/bin/fleet`. A compatible Linux
+host executable is reused. Otherwise Fleet uses `FLEET_LINUX_BINARY_AMD64` or
+`FLEET_LINUX_BINARY_ARM64`, then `~/.fleet/bin/fleet-linux-<arch>`, then downloads
+the full Linux binary from the host's exact release. Downloads are checked
+against that release's `checksums.txt`; all candidates must match the Linux
+architecture, full build flavor and Fleet build identity. The staged binary's
+`version` must run successfully before services are stopped and it is installed.
+
+Unstamped dev builds never download a release or fall back to `latest`. A cached
+dev cross-build must have the same clean VCS revision. For dirty trees or builds
+without VCS metadata, explicitly point the appropriate `FLEET_LINUX_BINARY_*`
+variable at a binary built from the **same source tree** as the host daemon:
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/fleet-linux-arm64 ./cmd/fleet
+export FLEET_LINUX_BINARY_ARM64=/tmp/fleet-linux-arm64
+```
+
+Set the override in the daemon's environment and restart the daemon. Matching
+recorded build identities are still required; an explicit override attests that
+the unrecorded source changes match. A stamped development version with no GitHub
+release likewise needs a matching locally built binary (with the same version
+ldflag). Missing or invalid artifacts fail before the service-stop hook.
+Kubernetes continues to use its separate `fleet-pod` artifacts and overrides.
+
 ## Test
 
 ```bash

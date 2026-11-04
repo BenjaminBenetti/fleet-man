@@ -2,6 +2,7 @@ package fleetlaunch
 
 import (
 	"errors"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/binstore"
 	"testing"
 )
 
@@ -50,7 +51,7 @@ func TestEnsureFreshHandsAStagerTheWholeJob(t *testing.T) {
 // the probe and the copy.
 func TestEnsureFreshStagesItselfWithoutAStager(t *testing.T) {
 	b := &recordingBackend{}
-	if _, err := EnsureFresh(b, "/ws", nil); err != nil {
+	if _, err := ensureFresh(b, "/ws", nil, func(string) (*binstore.Artifact, error) { return fixtureArtifact(t), nil }); err != nil {
 		t.Fatalf("EnsureFresh: %v", err)
 	}
 	if len(b.execScripts) == 0 {

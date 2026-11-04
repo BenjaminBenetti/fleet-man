@@ -1,8 +1,8 @@
 package fleetlaunch
 
 // Stager is an optional capability for backends that stage the fleet binary
-// into an instance their own way, instead of EnsureFresh copying the daemon's
-// own executable to RemotePath. Kubernetes pods get a static fleet-pod build of
+// into an instance their own way, instead of EnsureFresh staging a matching
+// full Linux executable to RemotePath. Kubernetes pods get a static fleet-pod build of
 // the daemon's version, kept content-addressed under /opt/fleet/bin with
 // RemotePath linked to it, because the daemon's own executable (on Linux, the
 // full build that links client-go) is not what a pod should run.

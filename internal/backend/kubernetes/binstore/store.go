@@ -1,10 +1,10 @@
-// Package binstore finds the fleet binaries fleetd stages into Kubernetes
-// pods: the pod build of fleet (`fleet-pod-linux-<arch>`, -tags nok8s, no
-// client-go) of exactly the daemon's own version, and the static tmux bundle
+// Package binstore finds the fleet binaries fleetd stages into instances:
+// full Linux builds for non-Kubernetes instances, and for Kubernetes pods,
+// the pod build of fleet (`fleet-pod-linux-<arch>`, -tags nok8s, no client-go) of exactly the daemon's own version, and the static tmux bundle
 // (`fleet-tmux-linux-<arch>.tar.gz`) that pods whose image has no tmux run
 // their sessions on.
 //
-// A binary is looked up, per arch, in this order:
+// A pod binary is looked up, per arch, in this order:
 //
 //  1. FLEET_POD_BINARY_<ARCH> (FLEET_POD_TMUX_<ARCH> for the bundle), a path
 //     on the daemon host: the override. A wrong one is an error, never
@@ -19,6 +19,11 @@
 // build, for linux and the pod's arch, and the same build of fleet's source
 // as the daemon (Identity.Equal). The daemon's own executable is never
 // served: on a Linux host it is the full build, with client-go.
+//
+// FullBinary uses the same download and verification machinery for the full
+// fleet-linux-<arch> build. It first tries a compatible host executable, then
+// FLEET_LINUX_BINARY_<ARCH>, the cache, and the exact release. It never accepts
+// a pod build. Unverifiable dev cross-builds require an explicit override.
 //
 // The cached files may be rewritten in place (make writes them directly), so
 // a file's sha256 is taken when it is looked up, and Artifact.Open checks it
@@ -50,8 +55,9 @@ import (
 // Environment overrides: the prefix plus the arch in capitals
 // (FLEET_POD_BINARY_AMD64).
 const (
-	EnvBinaryPrefix = "FLEET_POD_BINARY_"
-	EnvTmuxPrefix   = "FLEET_POD_TMUX_"
+	EnvBinaryPrefix     = "FLEET_POD_BINARY_"
+	EnvFullBinaryPrefix = "FLEET_LINUX_BINARY_"
+	EnvTmuxPrefix       = "FLEET_POD_TMUX_"
 )
 
 // Release assets.
@@ -78,6 +84,9 @@ var downloadRetry = time.Minute
 // BinaryAsset is the pod binary's name for arch (a GOARCH).
 func BinaryAsset(arch string) string { return "fleet-pod-linux-" + arch }
 
+// FullBinaryAsset is the full Linux CLI used by non-Kubernetes instances.
+func FullBinaryAsset(arch string) string { return "fleet-linux-" + arch }
+
 // TmuxAsset is the tmux bundle's name for arch.
 func TmuxAsset(arch string) string { return "fleet-tmux-linux-" + arch + ".tar.gz" }
 
@@ -85,8 +94,9 @@ func TmuxAsset(arch string) string { return "fleet-tmux-linux-" + arch + ".tar.g
 type Kind string
 
 const (
-	KindBinary Kind = "fleet-pod"
-	KindTmux   Kind = "tmux"
+	KindBinary     Kind = "fleet-pod"
+	KindFullBinary Kind = "fleet"
+	KindTmux       Kind = "tmux"
 )
 
 // Source is where an artifact was found.
@@ -96,6 +106,7 @@ const (
 	SourceEnv     Source = "env"
 	SourceCache   Source = "cache"
 	SourceRelease Source = "release"
+	SourceHost    Source = "host"
 )
 
 // Artifact is one file to stage.
@@ -107,7 +118,7 @@ type Artifact struct {
 	// SHA256 is the file's hex sha256 when it was looked up.
 	SHA256 string
 	Source Source
-	// Info is a pod binary's build information (zero for the tmux bundle).
+	// Info is a fleet binary's build information (zero for the tmux bundle).
 	Info Info
 }
 
@@ -137,14 +148,15 @@ func (e *MissingError) Error() string {
 // ErrOwnExecutable is a candidate that is the daemon's own executable.
 var ErrOwnExecutable = errors.New("it is fleetd's own executable, never staged into a pod")
 
-// Store finds pod artifacts. Its zero value is not usable: use New or
+// Store finds instance artifacts. Its zero value is not usable: use New or
 // Default. It is safe for concurrent use.
 type Store struct {
 	// Dir is the cache (~/.fleet/bin).
 	Dir string
-	// Self is the daemon's identity, which a pod binary must equal.
+	// Self is the daemon's identity, which a fleet binary must equal.
 	Self Identity
-	// SelfExe is the daemon's own executable, never served ("" for none).
+	// SelfExe is the daemon's executable ("" for none). Only FullBinary may
+	// serve it; Binary always rejects it.
 	SelfExe string
 	// Getenv reads the overrides (os.Getenv).
 	Getenv func(string) string
@@ -211,6 +223,21 @@ func (s *Store) Binary(ctx context.Context, arch string) (*Artifact, error) {
 	return s.find(ctx, KindBinary, arch)
 }
 
+// FullBinary finds the full Linux build for a non-Kubernetes instance. Prefer
+// the running executable when compatible; otherwise use an explicit override,
+// the cache, or the exact release. Binary's pod-only constraints are unchanged.
+func (s *Store) FullBinary(ctx context.Context, arch string) (*Artifact, error) {
+	if arch != "amd64" && arch != "arm64" {
+		return nil, fmt.Errorf("unsupported Linux architecture %q (want amd64 or arm64)", arch)
+	}
+	if s.SelfExe != "" {
+		if a, err := s.check(KindFullBinary, arch, s.SelfExe, SourceHost); err == nil {
+			return a, nil
+		}
+	}
+	return s.find(ctx, KindFullBinary, arch)
+}
+
 // Tmux is the tmux bundle for arch.
 func (s *Store) Tmux(ctx context.Context, arch string) (*Artifact, error) {
 	return s.find(ctx, KindTmux, arch)
@@ -221,6 +248,9 @@ func (s *Store) find(ctx context.Context, kind Kind, arch string) (*Artifact, er
 		return nil, fmt.Errorf("bad arch %q", arch)
 	}
 	envName, asset := EnvBinaryPrefix+strings.ToUpper(arch), BinaryAsset(arch)
+	if kind == KindFullBinary {
+		envName, asset = EnvFullBinaryPrefix+strings.ToUpper(arch), FullBinaryAsset(arch)
+	}
 	if kind == KindTmux {
 		envName, asset = EnvTmuxPrefix+strings.ToUpper(arch), TmuxAsset(arch)
 	}
@@ -243,6 +273,9 @@ func (s *Store) find(ctx context.Context, kind Kind, arch string) (*Artifact, er
 	}
 	if s.Self.Version == "" || s.ReleaseBase == "" {
 		hint := "build them with `make pod-binaries`, or point " + envName + " at one"
+		if kind == KindFullBinary {
+			hint = "build a full Linux fleet binary from the same source with CGO_ENABLED=0 GOOS=linux GOARCH=" + arch + " go build ./cmd/fleet, and point " + envName + " at it"
+		}
 		if s.Self.Version == "" {
 			tried = append(tried, "a dev build has no release to download")
 		}
@@ -316,21 +349,31 @@ func (s *Store) check(kind Kind, arch, path string, src Source) (*Artifact, erro
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
 	a := &Artifact{Kind: kind, Arch: arch, Path: path, Source: src}
-	if kind == KindBinary {
-		if s.isSelf(fi) {
+	if kind == KindBinary || kind == KindFullBinary {
+		if kind == KindBinary && s.isSelf(fi) {
 			return nil, fmt.Errorf("%s: %w", path, ErrOwnExecutable)
 		}
 		info, err := Inspect(path)
 		if err != nil {
 			return nil, err
 		}
+		wantFlavor := buildflavor.Pod
+		if kind == KindFullBinary {
+			wantFlavor = buildflavor.Full
+		}
 		switch {
-		case info.Flavor != buildflavor.Pod:
-			return nil, fmt.Errorf("%s is the %s build of fleet, not the pod build (-tags %s)", path, info.Flavor, buildflavor.PodTag)
+		case info.Flavor != wantFlavor:
+			return nil, fmt.Errorf("%s is the %s build of fleet, not the %s build", path, info.Flavor, wantFlavor)
 		case info.GOOS != "linux" || info.GOARCH != arch:
 			return nil, fmt.Errorf("%s is built for %s/%s, not linux/%s", path, info.GOOS, info.GOARCH, arch)
 		case !info.Equal(s.Self):
 			return nil, fmt.Errorf("%s is %s, not the daemon's %s", path, info.Identity, s.Self)
+		}
+		// A dirty or revisionless dev cache cannot establish source equality.
+		// Only an explicit override may attest to a matching local cross-build.
+		if kind == KindFullBinary && src != SourceHost && src != SourceEnv &&
+			info.Version == "" && (info.Revision == "" || info.Modified) {
+			return nil, fmt.Errorf("%s has an unverifiable dev identity; set %s%s to a build from the same source", path, EnvFullBinaryPrefix, strings.ToUpper(arch))
 		}
 		a.Info = info
 	} else if err := checkTmuxBundle(path, arch); err != nil {
