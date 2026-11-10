@@ -2,12 +2,14 @@ package tui
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -2518,5 +2520,264 @@ func TestEditFleetMountHostFolder(t *testing.T) {
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if len(saved.CustomMounts) != 1 || len(saved.CustomMountHostFolders) != 0 {
 		t.Errorf("after remove: %+v", saved)
+	}
+}
+
+// addMountFixture is fleet alpha's dialog (one custom mount, /srv, bound to
+// /data/srv) open on its "+ Add mount" row. Every settings save is counted in
+// attempts and, unless fail refuses it as the daemon would, kept in saves.
+type addMountFixture struct {
+	fp       *fleetPage
+	m        *model
+	f        *fleet.Fleet
+	attempts int
+	saves    []fleet.FleetSettings
+	fail     error
+}
+
+func newAddMountFixture(t *testing.T) *addMountFixture {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	fx := &addMountFixture{}
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(_ string, s fleet.FleetSettings) ([]string, error) {
+		fx.attempts++
+		if fx.fail != nil {
+			return nil, fx.fail
+		}
+		fx.saves = append(fx.saves, s)
+		return nil, nil
+	}
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+
+	fx.f = &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{
+		CustomMounts:           []string{"/srv"},
+		CustomMountHostFolders: map[string]string{"/srv": "/data/srv"},
+	}}
+	fx.fp = newFleetPage()
+	fx.fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	fx.m = &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": fx.f}}, fleetPage: fx.fp, width: 120, height: 50}
+	fx.fp.updateNormal(fx.m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToCustomMountRow(t, fx.fp, fx.m, 1) // the add row, past /srv
+	return fx
+}
+
+func (fx *addMountFixture) press(keys ...tea.KeyType) {
+	for _, k := range keys {
+		fx.fp.updateEditFleet(fx.m, tea.KeyMsg{Type: k})
+	}
+}
+
+func (fx *addMountFixture) typeIn(s string) {
+	for _, r := range s {
+		fx.fp.updateEditFleet(fx.m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+}
+
+// unchanged reports whether the dialog's working copy and the fleet's settings
+// still hold only the fixture's /srv mount and its folder.
+func (fx *addMountFixture) unchanged() bool {
+	srv := map[string]string{"/srv": "/data/srv"}
+	return slices.Equal(fx.fp.editFleet.customMounts, []string{"/srv"}) && maps.Equal(fx.fp.editFleet.customMountHosts, srv) &&
+		slices.Equal(fx.f.Settings.CustomMounts, []string{"/srv"}) && maps.Equal(fx.f.Settings.CustomMountHostFolders, srv)
+}
+
+// TestEditFleetAddMountDefaultHost: "+ Add mount" takes the in-instance path
+// first, refusing a relative or repeated one, then offers the optional host
+// folder without saving anything; an empty one saves the mount once with its
+// .mnt folder, the other mount's folder kept.
+func TestEditFleetAddMountDefaultHost(t *testing.T) {
+	fx := newAddMountFixture(t)
+	fx.press(tea.KeyEnter)
+	if !fx.fp.editFleet.addingMount || !strings.Contains(fx.fp.editFleetHint(), "[enter] Next") {
+		t.Fatalf("enter on the add row: adding %v, hint %q", fx.fp.editFleet.addingMount, fx.fp.editFleetHint())
+	}
+	if footer := fx.fp.customMountFooter(""); !strings.Contains(footer, "inside the instance") {
+		t.Errorf("the path step's footer %q does not say the path is the instance's", footer)
+	}
+
+	fx.typeIn("opt/data")
+	fx.press(tea.KeyEnter)
+	if fx.fp.editFleet.addingMountHost || !strings.Contains(fx.fp.customMountFooter(""), "absolute") {
+		t.Fatalf("a relative path: host step %v, footer %q", fx.fp.editFleet.addingMountHost, fx.fp.customMountFooter(""))
+	}
+	fx.fp.customMountInput.SetValue("/srv/")
+	fx.press(tea.KeyEnter)
+	if fx.fp.editFleet.addingMountHost || !strings.Contains(fx.fp.customMountFooter(""), "/srv is already mounted") {
+		t.Fatalf("a repeated path: host step %v, footer %q", fx.fp.editFleet.addingMountHost, fx.fp.customMountFooter(""))
+	}
+
+	fx.fp.customMountInput.SetValue("/opt/data/")
+	fx.press(tea.KeyEnter)
+	if !fx.fp.editFleet.addingMountHost || fx.fp.editFleet.newMountPath != "/opt/data" {
+		t.Fatalf("a valid path: host step %v, held path %q", fx.fp.editFleet.addingMountHost, fx.fp.editFleet.newMountPath)
+	}
+	if fx.attempts != 0 || !fx.unchanged() {
+		t.Fatalf("saved before the host step was accepted: %d saves, mounts %v", fx.attempts, fx.fp.editFleet.customMounts)
+	}
+	view := fx.fp.renderEditFleet(fx.m)
+	for _, want := range []string{"New mount: /opt/data", "Host folder (optional):", "[enter] Add mount  [esc] Back"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the host step does not show %q:\n%s", want, view)
+		}
+	}
+	footer := fx.fp.customMountFooter("")
+	for _, want := range []string{"Optional", "~/.fleet/workspaces/alpha/.mnt/opt/data", "daemon host", "(this computer)"} {
+		if !strings.Contains(footer, want) {
+			t.Errorf("the host step's footer does not say %q:\n%s", want, footer)
+		}
+	}
+	t.Setenv(fleetclient.EnvServer, "fleetd.example:7777")
+	if footer := fx.fp.customMountFooter(""); !strings.Contains(footer, "(not this computer)") {
+		t.Errorf("a remote TUI's footer does not say the folder is not this computer's:\n%s", footer)
+	}
+
+	fx.press(tea.KeyEnter)
+	if fx.attempts != 1 || len(fx.saves) != 1 {
+		t.Fatalf("the default host folder: %d saves, want 1", fx.attempts)
+	}
+	saved := fx.saves[0]
+	if !slices.Equal(saved.CustomMounts, []string{"/srv", "/opt/data"}) || !maps.Equal(saved.CustomMountHostFolders, map[string]string{"/srv": "/data/srv"}) {
+		t.Errorf("saved %v with folders %v", saved.CustomMounts, saved.CustomMountHostFolders)
+	}
+	if fx.fp.editFleet.addingMount || fx.fp.editFleet.addingMountHost || fx.fp.dlg.row != fx.fp.customMountAddRow() {
+		t.Errorf("after the save: adding %v/%v, row %d (add row %d)", fx.fp.editFleet.addingMount, fx.fp.editFleet.addingMountHost, fx.fp.dlg.row, fx.fp.customMountAddRow())
+	}
+}
+
+// TestEditFleetAddMountCustomHost: a typed host folder is checked in its step
+// (a relative one keeps the step, the held path and the error) and saved
+// cleaned with the mount in one save; the row shows it and [f] opens on it.
+func TestEditFleetAddMountCustomHost(t *testing.T) {
+	fx := newAddMountFixture(t)
+	fx.press(tea.KeyEnter)
+	fx.typeIn("/cache")
+	fx.press(tea.KeyEnter)
+	fx.typeIn("bulk/cache")
+	if footer := fx.fp.customMountFooter(""); !strings.Contains(footer, "daemon host") || !strings.Contains(footer, "does not create it") {
+		t.Errorf("a typed folder's footer:\n%s", footer)
+	}
+	fx.press(tea.KeyEnter)
+	if !fx.fp.editFleet.addingMountHost || fx.fp.editFleet.newMountPath != "/cache" || !strings.Contains(fx.fp.customMountFooter(""), "must be absolute") {
+		t.Fatalf("a relative folder: host step %v, held path %q, footer %q", fx.fp.editFleet.addingMountHost, fx.fp.editFleet.newMountPath, fx.fp.customMountFooter(""))
+	}
+	if fx.attempts != 0 || !fx.unchanged() {
+		t.Fatalf("a relative folder was saved: %d saves", fx.attempts)
+	}
+	fx.typeIn("x")
+	if fx.fp.editFleet.mountHostErr != "" {
+		t.Errorf("typing kept the stale error %q", fx.fp.editFleet.mountHostErr)
+	}
+
+	fx.fp.mountHostInput.SetValue(" /mnt/bulk//cache/ ")
+	fx.press(tea.KeyEnter)
+	if fx.attempts != 1 || len(fx.saves) != 1 {
+		t.Fatalf("a custom host folder: %d saves, want 1", fx.attempts)
+	}
+	want := map[string]string{"/srv": "/data/srv", "/cache": "/mnt/bulk/cache"}
+	if saved := fx.saves[0]; !slices.Equal(saved.CustomMounts, []string{"/srv", "/cache"}) || !maps.Equal(saved.CustomMountHostFolders, want) {
+		t.Errorf("saved %v with folders %v", saved.CustomMounts, saved.CustomMountHostFolders)
+	}
+	if view := fx.fp.renderEditFleet(fx.m); !strings.Contains(view, "/cache → /mnt/bulk/cache") {
+		t.Errorf("the new row does not show its host folder:\n%s", view)
+	}
+
+	fx.press(tea.KeyUp)
+	if footer := fx.fp.customMountFooter(""); !strings.Contains(footer, "host: /mnt/bulk/cache") {
+		t.Errorf("the new mount's footer %q", footer)
+	}
+	fx.typeIn("f")
+	if !fx.fp.editFleet.editingMountHost || fx.fp.mountHostInput.Value() != "/mnt/bulk/cache" {
+		t.Errorf("[f] on the new mount: editing %v, value %q", fx.fp.editFleet.editingMountHost, fx.fp.mountHostInput.Value())
+	}
+	fx.press(tea.KeyEsc)
+	if fx.attempts != 1 {
+		t.Errorf("[f] then esc saved: %d saves", fx.attempts)
+	}
+}
+
+// TestEditFleetAddMountBackAndCancel: Esc in the host-folder step goes back to
+// the path with both drafts kept; Esc there cancels the add with nothing
+// saved, the dialog open on the add row, and the next add starts blank;
+// ctrl+c in the step closes the dialog, saving nothing.
+func TestEditFleetAddMountBackAndCancel(t *testing.T) {
+	fx := newAddMountFixture(t)
+	fx.press(tea.KeyEnter)
+	fx.typeIn("/opt/data")
+	fx.press(tea.KeyEnter)
+	fx.typeIn("/mnt/bulk")
+
+	fx.press(tea.KeyEsc)
+	if fx.fp.editFleet.addingMountHost || !fx.fp.editFleet.addingMount || fx.fp.customMountInput.Value() != "/opt/data" {
+		t.Fatalf("esc in the host step: host step %v, adding %v, path %q", fx.fp.editFleet.addingMountHost, fx.fp.editFleet.addingMount, fx.fp.customMountInput.Value())
+	}
+	if fx.fp.mode != viewEditFleet || !strings.Contains(fx.fp.editFleetHint(), "[esc] Cancel") {
+		t.Fatalf("esc in the host step left mode %v, hint %q", fx.fp.mode, fx.fp.editFleetHint())
+	}
+	fx.press(tea.KeyEnter)
+	if !fx.fp.editFleet.addingMountHost || fx.fp.mountHostInput.Value() != "/mnt/bulk" {
+		t.Fatalf("back in the host step: %v, folder %q", fx.fp.editFleet.addingMountHost, fx.fp.mountHostInput.Value())
+	}
+
+	fx.press(tea.KeyEsc, tea.KeyEsc)
+	if fx.fp.editFleet.addingMount || fx.fp.mode != viewEditFleet || fx.fp.dlg.row != fx.fp.customMountAddRow() {
+		t.Fatalf("esc twice: adding %v, mode %v, row %d", fx.fp.editFleet.addingMount, fx.fp.mode, fx.fp.dlg.row)
+	}
+	if fx.attempts != 0 || !fx.unchanged() {
+		t.Fatalf("a cancelled add saved: %d saves, mounts %v", fx.attempts, fx.fp.editFleet.customMounts)
+	}
+	if view := fx.fp.renderEditFleet(fx.m); strings.Contains(view, "/opt/data") || !strings.Contains(view, "+ Add mount") {
+		t.Errorf("a cancelled add still shows:\n%s", view)
+	}
+
+	fx.press(tea.KeyEnter)
+	if fx.fp.customMountInput.Value() != "" {
+		t.Errorf("the next add starts with %q", fx.fp.customMountInput.Value())
+	}
+	fx.typeIn("/opt/data")
+	fx.press(tea.KeyEnter)
+	if fx.fp.mountHostInput.Value() != "" {
+		t.Errorf("the next host step starts with %q", fx.fp.mountHostInput.Value())
+	}
+	fx.typeIn("/mnt/bulk")
+	fx.press(tea.KeyCtrlC)
+	if fx.fp.mode != viewNormal || fx.attempts != 0 || !fx.unchanged() {
+		t.Fatalf("ctrl+c in the host step: mode %v, %d saves", fx.fp.mode, fx.attempts)
+	}
+	fx.fp.updateNormal(fx.m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if fx.fp.editFleet.addingMount || fx.fp.editFleet.addingMountHost || fx.fp.editFleet.newMountPath != "" {
+		t.Errorf("the reopened dialog is still adding: %+v", fx.fp.editFleet)
+	}
+}
+
+// TestEditFleetAddMountSaveFailure: a save the daemon refuses leaves the
+// mounts, their folders and the fleet's settings as they were, keeps the step
+// open with the reason, the held path and the typed folder, and a retry saves.
+func TestEditFleetAddMountSaveFailure(t *testing.T) {
+	fx := newAddMountFixture(t)
+	fx.fail = errors.New("invalid custom mount: overlaps fleet's own state")
+	fx.press(tea.KeyEnter)
+	fx.typeIn("/opt/data")
+	fx.press(tea.KeyEnter)
+	fx.typeIn("/home/u/.fleet")
+	fx.press(tea.KeyEnter)
+	if fx.attempts != 1 || len(fx.saves) != 0 || !fx.unchanged() {
+		t.Fatalf("a refused save: %d attempts, %d saves, mounts %v, folders %v", fx.attempts, len(fx.saves), fx.fp.editFleet.customMounts, fx.fp.editFleet.customMountHosts)
+	}
+	if !fx.fp.editFleet.addingMountHost || fx.fp.editFleet.newMountPath != "/opt/data" || fx.fp.mountHostInput.Value() != "/home/u/.fleet" {
+		t.Fatalf("a refused save left the step: %v, path %q, folder %q", fx.fp.editFleet.addingMountHost, fx.fp.editFleet.newMountPath, fx.fp.mountHostInput.Value())
+	}
+	if footer := fx.fp.customMountFooter(""); !strings.Contains(footer, "not saved") || !strings.Contains(footer, "fleet's own state") {
+		t.Errorf("a refused save's footer %q", footer)
+	}
+
+	fx.fail = nil
+	fx.fp.mountHostInput.SetValue("/mnt/ok")
+	fx.press(tea.KeyEnter)
+	if fx.attempts != 2 || len(fx.saves) != 1 {
+		t.Fatalf("the retry: %d attempts, %d saves", fx.attempts, len(fx.saves))
+	}
+	if saved := fx.saves[0]; !slices.Equal(saved.CustomMounts, []string{"/srv", "/opt/data"}) || saved.CustomMountHostFolders["/opt/data"] != "/mnt/ok" {
+		t.Errorf("the retry saved %v with folders %v", saved.CustomMounts, saved.CustomMountHostFolders)
 	}
 }
