@@ -1,0 +1,38 @@
+│   settings                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭──────────────────────────────────────────────────╮
+│                                                  │
+│  Edit fleet                                      │
+│                                                  │
+│    Fleet:     demo                               │
+│    ▶ Agents (0)                                  │
+│    [ ] Fleet MCP  ⚠ exposes full control         │
+│    [ ] GitHub CLI mount                          │
+│    Home dir:  /home/vscode                       │
+│    [ ] Prefer Fleet Launch                       │
+│    ▶ Layouts (0)                                 │
+│    ▼ Custom mounts (2)                           │
+│      /opt/models → /mnt/bulk/models   [remove]   │
+│      /var/cache/pip   [remove]                   │
+│  >   New mount: /data/corpus                     │
+│      Host folder (optional):                     │
+│      > /data/big (empty: the .mnt folder)        │
+│    ▶ Caching (0)                                 │
+│    ▶ Coder (no template)                         │
+│                                                  │
+│    Optional. Empty keeps Fleet's .mnt folder:    │
+│    ~/.fleet/workspaces/demo/.mnt/data/corpus     │
+│    A custom folder is on the daemon host         │
+│    (not this computer), not the instance.        │
+│                                                  │
+│    Mounts apply on supported backends only       │
+│                                                  │
+│                                                  │
+│  [enter] Add mount  [esc] Back                   │
+│                                                  │
+╰──────────────────────────────────────────────────╯
+
+j/k: navigate  →/l: select  space/enter: expand/collapse  m: automations  e: edit fleet  a: add instance
+n: new fleet  d: delete fleet  r: refresh  A: armada  f: focus  q: quit
+

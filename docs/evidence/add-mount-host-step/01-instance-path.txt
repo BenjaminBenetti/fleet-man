@@ -1,0 +1,38 @@
+╭── Armada [ local ] ──────────────────────────────────────────────────────────────────────────────────────────────╮
+│ > ▼ demo (2) [ ↻ ]                                                                                               │
+│         ○ web-1                  stopped  ⬡                                                                      │
+│         ○ worker-1               stopped  ⬡                                                                      │
+│   settings                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭──────────────────────────────────────────────────╮
+│                                                  │
+│  Edit fleet                                      │
+│                                                  │
+│    Fleet:     demo                               │
+│    ▶ Agents (0)                                  │
+│    [ ] Fleet MCP  ⚠ exposes full control         │
+│    [ ] GitHub CLI mount                          │
+│    Home dir:  /home/vscode                       │
+│    [ ] Prefer Fleet Launch                       │
+│    ▶ Layouts (0)                                 │
+│    ▼ Custom mounts (2)                           │
+│      /opt/models → /mnt/bulk/models   [remove]   │
+│      /var/cache/pip   [remove]                   │
+│  >   New mount: > /data/corpus                   │
+│    ▶ Caching (0)                                 │
+│    ▶ Coder (no template)                         │
+│                                                  │
+│    Next: an optional host folder. Default:       │
+│    ~/.fleet/workspaces/demo/.mnt/data/corpus     │
+│                                                  │
+│    Mounts apply on supported backends only       │
+│                                                  │
+│                                                  │
+│  [enter] Next  [esc] Cancel                      │
+│                                                  │
+╰──────────────────────────────────────────────────╯
+
+j/k: navigate  →/l: select  space/enter: expand/collapse  m: automations  e: edit fleet  a: add instance
+n: new fleet  d: delete fleet  r: refresh  A: armada  f: focus  q: quit
+
