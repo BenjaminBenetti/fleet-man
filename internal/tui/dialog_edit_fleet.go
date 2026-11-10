@@ -14,6 +14,8 @@ import (
 	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 )
@@ -2165,21 +2167,22 @@ func (fleetPage *fleetPage) customMountFooter(synced string) string {
 		return fleetPage.newMountHostFooter(synced)
 	}
 	if fleetPage.editFleet.customMountErr != "" {
-		return errorStyle.Render("✗ " + fleetPage.editFleet.customMountErr)
+		return addMountFooterLine(errorStyle, "✗ "+fleetPage.editFleet.customMountErr)
 	}
 	if v := strings.TrimSpace(fleetPage.customMountInput.Value()); v != "" {
-		return dimStyle.Render("default host: " + customMountHostPreview(fleetPage.dlg.fleet, v) + synced)
+		return addMountFooterLine(dimStyle, "Next: an optional host folder. Default:") + "\n  " +
+			addMountFooterLine(dimStyle, customMountHostPreview(fleetPage.dlg.fleet, v)+synced)
 	}
-	return dimStyle.Render("a path inside the instance, e.g. /opt/data")
+	return addMountFooterLine(dimStyle, "a path inside the instance, e.g. /opt/data")
 }
 
 // newMountHostFooter explains the add flow's optional host-folder step: an
 // empty folder keeps the mount's .mnt folder, a typed one is the daemon
 // host's (this computer only for a local TUI), never the instance's, and is
-// bound as it is. Each line fits the dialog's 46 columns, so none wraps.
+// bound as it is.
 func (fleetPage *fleetPage) newMountHostFooter(synced string) string {
 	if err := fleetPage.editFleet.mountHostErr; err != "" {
-		return errorStyle.Render("✗ " + err)
+		return addMountFooterLine(errorStyle, "✗ "+err)
 	}
 	where := "(this computer), not in the instance."
 	if fleetclient.IsRemote() {
@@ -2194,9 +2197,20 @@ func (fleetPage *fleetPage) newMountHostFooter(synced string) string {
 		}
 	}
 	for i, line := range lines {
-		lines[i] = dimStyle.Render(line)
+		lines[i] = addMountFooterLine(dimStyle, line)
 	}
 	return strings.Join(lines, "\n  ")
+}
+
+// addMountFooterWidth is the add flow's footer width: the dialog's 46 columns
+// less the footer's two-space indent.
+const addMountFooterWidth = 44
+
+// addMountFooterLine renders text in style, wrapped to addMountFooterWidth with
+// each continuation line indented like the first, so a long path or error stays
+// inside the footer's column instead of wrapping to the dialog's edge.
+func addMountFooterLine(style lipgloss.Style, text string) string {
+	return strings.ReplaceAll(style.Render(ansi.Wrap(text, addMountFooterWidth, "")), "\n", "\n  ")
 }
 
 // renderCacheRow renders one cache row (checkbox + label, indented under the

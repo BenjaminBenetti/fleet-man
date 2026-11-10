@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestUpdateNormalStopShortcutStopsRunningInstance(t *testing.T) {
@@ -2658,7 +2659,7 @@ func TestEditFleetAddMountCustomHost(t *testing.T) {
 		t.Errorf("a typed folder's footer:\n%s", footer)
 	}
 	fx.press(tea.KeyEnter)
-	if !fx.fp.editFleet.addingMountHost || fx.fp.editFleet.newMountPath != "/cache" || !strings.Contains(fx.fp.customMountFooter(""), "must be absolute") {
+	if !fx.fp.editFleet.addingMountHost || fx.fp.editFleet.newMountPath != "/cache" || !strings.Contains(fx.fp.customMountFooter(""), "absolute") {
 		t.Fatalf("a relative folder: host step %v, held path %q, footer %q", fx.fp.editFleet.addingMountHost, fx.fp.editFleet.newMountPath, fx.fp.customMountFooter(""))
 	}
 	if fx.attempts != 0 || !fx.unchanged() {
@@ -2767,8 +2768,16 @@ func TestEditFleetAddMountSaveFailure(t *testing.T) {
 	if !fx.fp.editFleet.addingMountHost || fx.fp.editFleet.newMountPath != "/opt/data" || fx.fp.mountHostInput.Value() != "/home/u/.fleet" {
 		t.Fatalf("a refused save left the step: %v, path %q, folder %q", fx.fp.editFleet.addingMountHost, fx.fp.editFleet.newMountPath, fx.fp.mountHostInput.Value())
 	}
-	if footer := fx.fp.customMountFooter(""); !strings.Contains(footer, "not saved") || !strings.Contains(footer, "fleet's own state") {
+	footer := fx.fp.customMountFooter("")
+	if !strings.Contains(footer, "not saved") || !strings.Contains(footer, "fleet's own state") {
 		t.Errorf("a refused save's footer %q", footer)
+	}
+	// The long reason wraps inside the footer's column: indented, within the
+	// dialog's 46.
+	for _, line := range strings.Split("  "+footer, "\n") {
+		if w := ansi.StringWidth(line); w > 46 || !strings.HasPrefix(ansi.Strip(line), "  ") {
+			t.Errorf("footer line %q is %d wide or not indented", ansi.Strip(line), w)
+		}
 	}
 
 	fx.fail = nil
