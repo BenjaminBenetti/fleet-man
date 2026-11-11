@@ -430,8 +430,15 @@ func TestStopServiceKeepsTheVolume(t *testing.T) {
 }
 
 // available makes the fake's Deployments report their pod up.
-func available(f *fakePool) {
+func available(f *fakePool) { availableWhen(f, func() bool { return true }) }
+
+// availableWhen makes the fake's Deployments report their pod up while up
+// holds. Like any reactor it goes in before a server's watch reads the fake.
+func availableWhen(f *fakePool, up func() bool) {
 	f.cs.PrependReactor("get", "deployments", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if !up() {
+			return false, nil, nil
+		}
 		obj, err := f.cs.Tracker().Get(appsv1.SchemeGroupVersion.WithResource("deployments"), a.GetNamespace(), a.(k8stesting.GetAction).GetName())
 		if err != nil {
 			return true, nil, err
@@ -440,6 +447,36 @@ func available(f *fakePool) {
 		d.Status.AvailableReplicas, d.Status.ObservedGeneration = 1, d.Generation
 		return true, d, nil
 	})
+}
+
+// TestServerWatchKeepsItsClock: a server's watch outlives the ensure that
+// started it, so it times the server with the clock it started with: a
+// clock a test swaps while the watch runs (as the certificate tests swap
+// now) is never read from the watch.
+func TestServerWatchKeepsItsClock(t *testing.T) {
+	f := useFake(t)
+	m := meta("alpha")
+	// The pod comes up only after the swap, so the watch ends after it.
+	var up atomic.Bool
+	availableWhen(f, up.Load)
+	if err := For(testCluster).EnsureService("alpha", fleet.ServiceDebCache); err != nil {
+		t.Fatal(err)
+	}
+	origNow := now
+	t.Cleanup(func() { now = origNow })
+	var swapped atomic.Int64
+	now = func() time.Time {
+		swapped.Add(1)
+		return origNow()
+	}
+	up.Store(true)
+	watchers.Wait()
+	if st := readyState(testCluster, m, fleet.ServiceDebCache); st != stateReady {
+		t.Fatalf("state %q", st)
+	}
+	if n := swapped.Load(); n != 0 {
+		t.Fatalf("the watch read the clock swapped after it started (%d times)", n)
+	}
 }
 
 // TestWipeService: the server goes to 0, the volume is deleted and made
