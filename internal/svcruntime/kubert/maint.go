@@ -104,6 +104,9 @@ func watchReady(c *conn, m fleetMeta, svc fleet.SharedService) {
 	watchMu.Lock()
 	base := watchBase
 	watchMu.Unlock()
+	// The watch outlives this call, so it times the server with the clock
+	// read here: now is a seam tests swap, and the watch never reads it.
+	clock := now
 	watchers.Add(1)
 	go func() {
 		defer watchers.Done()
@@ -114,14 +117,14 @@ func watchReady(c *conn, m fleetMeta, svc fleet.SharedService) {
 		}()
 		ctx, cancel := context.WithTimeout(base, readyTimeout)
 		defer cancel()
-		start := now()
+		start := clock()
 		if err := c.waitAvailable(ctx, m, svc); err != nil {
 			setReady(cluster, m, svc, "failed: "+err.Error())
 			flog.Warn("kube caches: the server is not up", "cluster", cluster, "fleet", m.Fleet, "service", svc, "err", err)
 			return
 		}
 		setReady(cluster, m, svc, stateReady)
-		flog.Info("kube caches: the server is up", "cluster", cluster, "fleet", m.Fleet, "service", svc, "ms", now().Sub(start).Milliseconds())
+		flog.Info("kube caches: the server is up", "cluster", cluster, "fleet", m.Fleet, "service", svc, "ms", clock().Sub(start).Milliseconds())
 	}()
 }
 

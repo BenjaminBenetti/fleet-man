@@ -1,0 +1,176 @@
+{
+  "change": "Add mount: an optional host-folder step after the in-instance path",
+  "captured_from_commit": "fd8f0bcbd7b23b370971721eff41c8fb22f5b974",
+  "captured_utc": "2026-11-10T23:18:19Z",
+  "capture_method": "The production TUI model (internal/tui model.Update and View, unchanged) in a private tmux 3.8 server (its own -L socket, -f /dev/null) pane of 116x38, and 60x38 for the narrow frames, driven by real key presses (send-keys). capture-pane -p -e -N parsed with pyte 0.8.2 and rendered to PNG with Pillow 12.0.0 and DejaVu Sans Mono 18px; matching plain capture-pane -p frames accompany every PNG. No mocked UI, layout or generated images.",
+  "harness": "A test-only file compiled into the tui test binary with `go test -c -overlay` and not committed. It builds the model over synthetic state, replaces setFleetSettingsRemote (the only daemon call the add flow makes) with a recorder writing to the fixture HOME, and runs tea.NewProgram with the production options (alt screen, mouse cell motion) without running the commands the model returns (update checks, the Watch stream, cursor blink timers), so nothing dialled a daemon or the network. It ran under env -i with HOME and TMPDIR in a throwaway fixture folder.",
+  "fixture": "Synthetic fleet 'demo' with two stopped instances (web-1, worker-1) and custom mounts /opt/models (host folder /mnt/bulk/models) and /var/cache/pip (default .mnt folder). Every path is illustrative: no host folder was created, nothing was bound, no instance was built or rebuilt. The remote frame sets FLEET_SERVER=fleetd.example:7777, which is never dialled.",
+  "observed_saves": {
+    "wide-116x38": [
+      {
+        "customMountHostFolders": {
+          "/data/corpus": "/mnt/big/corpus",
+          "/opt/models": "/mnt/bulk/models"
+        },
+        "customMounts": [
+          "/opt/models",
+          "/var/cache/pip",
+          "/data/corpus"
+        ],
+        "fleet": "demo"
+      },
+      {
+        "customMountHostFolders": {
+          "/data/corpus": "/mnt/big/corpus",
+          "/opt/models": "/mnt/bulk/models"
+        },
+        "customMounts": [
+          "/opt/models",
+          "/var/cache/pip",
+          "/data/corpus",
+          "/srv/scratch"
+        ],
+        "fleet": "demo"
+      }
+    ],
+    "narrow-60x38": [],
+    "remote-116x38": []
+  },
+  "frames": [
+    {
+      "file": "01-instance-path.png",
+      "plain": "01-instance-path.txt",
+      "state": "Step 1: the in-instance path; Enter goes on to the optional host step",
+      "terminal": "116x38",
+      "png_px": [
+        1308,
+        944
+      ],
+      "settings_saves_so_far": 0,
+      "png_sha256": "2e25125e411b0aefd197a2546659566e2682f71d2b59779499f54af59d663aa7",
+      "txt_sha256": "277210cb3904c8d524c719f3131c3f02f43b48d7514afe88bbe7ce60850807c4",
+      "ansi_sha256": "d93326df19fed8e7456b135eb36b04c88b36d96a875534658eebc0e87c142c49"
+    },
+    {
+      "file": "02-host-step-default.png",
+      "plain": "02-host-step-default.txt",
+      "state": "Step 2 empty: Enter keeps the default .mnt folder; nothing saved yet",
+      "terminal": "116x38",
+      "png_px": [
+        1308,
+        944
+      ],
+      "settings_saves_so_far": 0,
+      "png_sha256": "f99f4af6ce1f112c0a4322ddcb5a481b1d0945022d2bdd76b5a5a1fec5abccdf",
+      "txt_sha256": "39ff5726e662b0317a073083156e298861626960027b823a25420c27f911a15e",
+      "ansi_sha256": "cbbec5ce94c83496d5d6a437c6eb412e1f6c7eeb599a32faebf6c0060d2c9975"
+    },
+    {
+      "file": "04-host-error.png",
+      "plain": "04-host-error.txt",
+      "state": "A relative host folder stays in step 2 with the error and the draft",
+      "terminal": "116x38",
+      "png_px": [
+        1308,
+        944
+      ],
+      "settings_saves_so_far": 0,
+      "png_sha256": "2dcfccd7eb3a0f30e34e4e8afba1ab0c623d1fed527473fa95112c2051bcf587",
+      "txt_sha256": "1266575bb09a56bcef0b0fbca561b995780c1558e5e1ae7dbcb4295d44f3b878",
+      "ansi_sha256": "371022485b5d471e629a5e11bc9f64a20576276df15eafb6f4e2607a6a0a49c7"
+    },
+    {
+      "file": "05-host-custom.png",
+      "plain": "05-host-custom.txt",
+      "state": "A custom absolute folder on the daemon host, before Enter",
+      "terminal": "116x38",
+      "png_px": [
+        1308,
+        944
+      ],
+      "settings_saves_so_far": 0,
+      "png_sha256": "b1d94784295b26048d3fde17856fc42633ed1cce3ee10513b16bd8aa80303636",
+      "txt_sha256": "d9a33fe3456097f4172545b5e35fed149f5ec09fc58da9cd07db7fc2032e49c5",
+      "ansi_sha256": "88089279fd66bdb2ea98007e938e6d758e352880b36eb274f42191bef7dc6a42"
+    },
+    {
+      "file": "06-saved-custom.png",
+      "plain": "06-saved-custom.txt",
+      "state": "Saved once: the new mount row and its host folder",
+      "terminal": "116x38",
+      "png_px": [
+        1308,
+        944
+      ],
+      "settings_saves_so_far": 1,
+      "png_sha256": "36172716b6b20b24e7634bcca8d1da4baa6142a44b612d886cefa57f5e253605",
+      "txt_sha256": "e07e39da1c22c9ae9994d9d4f7d8c1c67be7086f9ad7bcf46c07b9f741bcc7fc",
+      "ansi_sha256": "f6250718d828e7679658deaf735501739801b838a8f2b15362ee55edc72c1860"
+    },
+    {
+      "file": "07-saved-default.png",
+      "plain": "07-saved-default.txt",
+      "state": "Empty step 2 saved once with the default .mnt folder",
+      "terminal": "116x38",
+      "png_px": [
+        1308,
+        944
+      ],
+      "settings_saves_so_far": 2,
+      "png_sha256": "468236d6197ef6806b3d9174046bce9610c1b3147f966b1024643176902024b4",
+      "txt_sha256": "a8da0468985c0da9291c5e5f39e4026f6d10f00f0c249d44f622a5fa2ea5c283",
+      "ansi_sha256": "40971055e861ef997d32604ab4e26577dff05408a4e56f656d7eef5aaa52074b"
+    },
+    {
+      "file": "n02-host-step-default.png",
+      "plain": "n02-host-step-default.txt",
+      "state": "Narrow terminal: step 2 empty",
+      "terminal": "60x38",
+      "png_px": [
+        692,
+        944
+      ],
+      "settings_saves_so_far": 0,
+      "png_sha256": "22bde1bf24801931e9473c56bb30a90623272086a7e399e30f52d9c0eb58bdf9",
+      "txt_sha256": "a8bd98ca6006498a763980fe1f55d1cf208f84b10cb337220fd81f9fbfb580d5",
+      "ansi_sha256": "7a2e9e12408beff9a9ffc20fed21f3a2ec131fcd26e1f9578c6a5d8a30fed0c5"
+    },
+    {
+      "file": "n08-cancelled.png",
+      "plain": "n08-cancelled.txt",
+      "state": "Esc, Esc: the add is cancelled, nothing saved, cursor on + Add mount",
+      "terminal": "60x38",
+      "png_px": [
+        692,
+        944
+      ],
+      "settings_saves_so_far": 0,
+      "png_sha256": "7c9273954c5b0a3b722a7fb83d2e452b0f06ae94f922d3883dca3de2b9e8d8ab",
+      "txt_sha256": "e6858fa62c28259ae1e235c8efbd5ecdc8b2b7846803f3025fb534ebe24a929b",
+      "ansi_sha256": "7c36964f759f3415f116aacdd471381440f554ea2497fdfedef4d20d7f522254"
+    },
+    {
+      "file": "r02-host-step-remote.png",
+      "plain": "r02-host-step-remote.txt",
+      "state": "A TUI on a remote daemon (FLEET_SERVER set, never dialled): not this computer",
+      "terminal": "116x38",
+      "png_px": [
+        1308,
+        944
+      ],
+      "settings_saves_so_far": 0,
+      "png_sha256": "a05865f5078238726f3fc41398e37c0e907fee377cb262c995a88d6ae836daff",
+      "txt_sha256": "6f268924bb624b932235a3def3fe9c366b2c6a7327613e24595bd41c8164911c",
+      "ansi_sha256": "099dae8e4dec722703fa1615dc9ae001b27ad4af12bf6ea66f73123f83b1cf09"
+    }
+  ],
+  "not_selected": [
+    "03-back-keeps-path (wide): after Esc in the host step; byte-identical to 01-instance-path, the path draft kept.",
+    "n05-host-custom (narrow): a custom folder typed at 60 columns."
+  ],
+  "limits": [
+    "The UI is real; the daemon is not. A real daemon's save warnings (a host folder missing on the daemon host) and its own-state refusal are covered by unit tests with a faked save, not shown here.",
+    "Not run over a real SSH or gateway connection; the remote frame only sets the environment variable the TUI reads.",
+    "Unchanged and out of scope: an existing mount's row wraps its [remove] past the dialog's 46 columns when path and host folder are long, and an existing row's host: footer wraps a long .mnt path at the dialog's edge."
+  ]
+}

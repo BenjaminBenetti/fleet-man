@@ -9,10 +9,13 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/inspector"
 	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 )
@@ -331,6 +334,8 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.editFleet.customMounts = slices.Clone(f.Settings.CustomMounts)
 	fleetPage.editFleet.customMountHosts = maps.Clone(f.Settings.CustomMountHostFolders)
 	fleetPage.editFleet.addingMount = false
+	fleetPage.editFleet.addingMountHost = false
+	fleetPage.editFleet.newMountPath = ""
 	fleetPage.editFleet.customMountErr = ""
 	fleetPage.editFleet.mountRemoveConfirm = false
 	fleetPage.customMountInput.SetValue("")
@@ -433,11 +438,30 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		return cmd
 	}
 
-	// Add-custom-mount text-editing sub-mode.
-	if fleetPage.editFleet.addingMount {
+	// The add flow's optional host-folder step: Enter saves the mount, Esc
+	// goes back to its in-instance path.
+	if fleetPage.editFleet.addingMountHost {
 		switch keyMsg.String() {
 		case "enter":
 			return fleetPage.commitNewMount(m)
+		case "esc":
+			fleetPage.backToNewMountPath()
+			return fleetPage.customMountInput.Cursor.BlinkCmd()
+		case "ctrl+c":
+			fleetPage.closeEditFleet(m)
+			return nil
+		}
+		fleetPage.editFleet.mountHostErr = ""
+		var cmd tea.Cmd
+		fleetPage.mountHostInput, cmd = fleetPage.mountHostInput.Update(msg)
+		return cmd
+	}
+
+	// Add-custom-mount text-editing sub-mode: the in-instance path.
+	if fleetPage.editFleet.addingMount {
+		switch keyMsg.String() {
+		case "enter":
+			return fleetPage.commitNewMountPath()
 		case "esc":
 			fleetPage.cancelAddMount()
 			return nil
@@ -1164,19 +1188,25 @@ func (fleetPage *fleetPage) beginAddMount() {
 	fleetPage.customMountInput.Focus()
 }
 
-// cancelAddMount leaves the add-custom-mount sub-mode, discarding the input.
+// cancelAddMount leaves the add-custom-mount sub-mode, either step, discarding
+// both inputs.
 func (fleetPage *fleetPage) cancelAddMount() {
 	fleetPage.editFleet.addingMount = false
+	fleetPage.editFleet.addingMountHost = false
+	fleetPage.editFleet.newMountPath = ""
 	fleetPage.editFleet.customMountErr = ""
+	fleetPage.editFleet.mountHostErr = ""
 	fleetPage.customMountInput.SetValue("")
 	fleetPage.customMountInput.Blur()
+	fleetPage.mountHostInput.SetValue("")
+	fleetPage.mountHostInput.Blur()
 }
 
-// commitNewMount validates the typed path, appends it to the working list and
-// persists (instant-save). On a validation failure the inline error is set and
-// the sub-mode stays open so the user can fix the value; on an RPC failure the
-// optimistic append is reverted.
-func (fleetPage *fleetPage) commitNewMount(m *model) tea.Cmd {
+// commitNewMountPath validates the typed in-instance path and moves on to the
+// optional host-folder step, holding the path unsaved. On a validation failure
+// the inline error is set and the sub-mode stays open so the user can fix the
+// value.
+func (fleetPage *fleetPage) commitNewMountPath() tea.Cmd {
 	norm, err := fleet.NormalizeCustomMount(fleetPage.customMountInput.Value())
 	if err != nil {
 		fleetPage.editFleet.customMountErr = err.Error()
@@ -1189,12 +1219,56 @@ func (fleetPage *fleetPage) commitNewMount(m *model) tea.Cmd {
 		fleetPage.editFleet.customMountErr = fmt.Sprintf("%s is already mounted", norm)
 		return nil
 	}
+	fleetPage.editFleet.addingMountHost = true
+	fleetPage.editFleet.newMountPath = norm
+	fleetPage.editFleet.mountHostErr = ""
+	fleetPage.customMountInput.Blur()
+	fleetPage.mountHostInput.CursorEnd()
+	fleetPage.mountHostInput.Focus()
+	return fleetPage.mountHostInput.Cursor.BlinkCmd()
+}
 
-	prev := fleetPage.editFleet.customMounts
-	fleetPage.editFleet.customMounts = append(slices.Clone(prev), norm)
+// backToNewMountPath leaves the host-folder step for the in-instance path,
+// whose typed text is kept, as is the host folder's for the way back.
+func (fleetPage *fleetPage) backToNewMountPath() {
+	fleetPage.editFleet.addingMountHost = false
+	fleetPage.editFleet.newMountPath = ""
+	fleetPage.editFleet.mountHostErr = ""
+	fleetPage.mountHostInput.Blur()
+	fleetPage.customMountInput.Focus()
+}
+
+// commitNewMount adds the held in-instance path to the working list with the
+// typed host folder (an empty one: its .mnt folder) and persists both in one
+// save (instant-save). A folder that is not absolute keeps the step open with
+// the error; a save the daemon refuses (fleet's own state) is reverted, the
+// step kept open with the daemon's reason to retry, go back or cancel.
+func (fleetPage *fleetPage) commitNewMount(m *model) tea.Cmd {
+	path := fleetPage.editFleet.newMountPath
+	folder := strings.TrimSpace(fleetPage.mountHostInput.Value())
+	if folder != "" {
+		norm, err := fleet.NormalizeCustomMountHostFolder(folder)
+		if err != nil {
+			fleetPage.editFleet.mountHostErr = err.Error()
+			return nil
+		}
+		folder = norm
+	}
+	prev, prevHosts := fleetPage.editFleet.customMounts, fleetPage.editFleet.customMountHosts
+	hosts := maps.Clone(prevHosts)
+	if folder == "" {
+		delete(hosts, path)
+	} else {
+		if hosts == nil {
+			hosts = map[string]string{}
+		}
+		hosts[path] = folder
+	}
+	fleetPage.editFleet.customMounts = append(slices.Clone(prev), path)
+	fleetPage.editFleet.customMountHosts = hosts
 	if err := fleetPage.persistFleetSettings(m); err != nil {
-		fleetPage.editFleet.customMounts = prev
-		m.message = fmt.Sprintf("Failed to save: %v", err)
+		fleetPage.editFleet.customMounts, fleetPage.editFleet.customMountHosts = prev, prevHosts
+		fleetPage.editFleet.mountHostErr = fmt.Sprintf("not saved: %v", err)
 		return nil
 	}
 	// Leave the cursor on the (now shifted-down) add row so the user can keep
@@ -1734,9 +1808,15 @@ type editFleetState struct {
 	// Custom mounts section.
 	customMountsExpanded bool     // ▼ Custom mounts expanded, revealing per-mount rows + the add row
 	customMounts         []string // working copy of the fleet's custom mounts (instant-save)
-	addingMount          bool     // true while the "+ Add mount" text input is active
+	addingMount          bool     // true while the "+ Add mount" flow is active (either of its steps)
 	customMountErr       string   // inline validation error shown under the add-mount input
 	mountRemoveConfirm   bool     // inline "[remove?]" confirm armed on the focused custom-mount row (mirrors the Caching [Delete cache] flow)
+	// addingMountHost is the add flow's second, optional step: the new
+	// mount's host folder, typed into mountHostInput (errors in mountHostErr).
+	// newMountPath is the in-instance path the first step validated, held
+	// unsaved until this step saves the mount.
+	addingMountHost bool
+	newMountPath    string
 	// customMountHosts is the working copy of each custom mount's host
 	// folder (FleetSettings.CustomMountHostFolders; instant-save).
 	customMountHosts map[string]string
@@ -1923,11 +2003,17 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 
 // renderCustomMountRow renders one dynamic custom-mount child row: an existing
 // mount (with a [remove] affordance) or the "+ Add mount" row (which becomes an
-// inline text input while the add sub-mode is active).
+// inline text input while the add sub-mode is active, then the held path over
+// the optional host-folder input).
 func (fleetPage *fleetPage) renderCustomMountRow(row int, marker func(int) string) string {
 	idx := row - editFleetRowCustomMountBase
 	if idx == len(fleetPage.editFleet.customMounts) {
 		// The "+ Add mount" row.
+		if fleetPage.editFleet.addingMountHost {
+			return marker(row) + "  " + dialogLabel.Render("New mount: ") + fleetPage.editFleet.newMountPath +
+				"\n    " + dialogLabel.Render("Host folder (optional):") +
+				"\n    " + fleetPage.mountHostInput.View()
+		}
 		if fleetPage.editFleet.addingMount {
 			return marker(row) + "  " + dialogLabel.Render("New mount: ") + fleetPage.customMountInput.View()
 		}
@@ -2077,13 +2163,54 @@ func (fleetPage *fleetPage) customMountFooter(synced string) string {
 	if !fleetPage.editFleet.addingMount {
 		return ""
 	}
+	if fleetPage.editFleet.addingMountHost {
+		return fleetPage.newMountHostFooter(synced)
+	}
 	if fleetPage.editFleet.customMountErr != "" {
-		return errorStyle.Render("✗ " + fleetPage.editFleet.customMountErr)
+		return addMountFooterLine(errorStyle, "✗ "+fleetPage.editFleet.customMountErr)
 	}
 	if v := strings.TrimSpace(fleetPage.customMountInput.Value()); v != "" {
-		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, v) + synced)
+		return addMountFooterLine(dimStyle, "Next: an optional host folder. Default:") + "\n  " +
+			addMountFooterLine(dimStyle, customMountHostPreview(fleetPage.dlg.fleet, v)+synced)
 	}
-	return dimStyle.Render("enter an absolute container path, e.g. /opt/data")
+	return addMountFooterLine(dimStyle, "a path inside the instance, e.g. /opt/data")
+}
+
+// newMountHostFooter explains the add flow's optional host-folder step: an
+// empty folder keeps the mount's .mnt folder, a typed one is the daemon
+// host's (this computer only for a local TUI), never the instance's, and is
+// bound as it is.
+func (fleetPage *fleetPage) newMountHostFooter(synced string) string {
+	if err := fleetPage.editFleet.mountHostErr; err != "" {
+		return addMountFooterLine(errorStyle, "✗ "+err)
+	}
+	where := "(this computer), not in the instance."
+	if fleetclient.IsRemote() {
+		where = "(not this computer), not the instance."
+	}
+	lines := []string{"A custom folder is on the daemon host", where, "Bound as is; Fleet does not create it."}
+	if strings.TrimSpace(fleetPage.mountHostInput.Value()) == "" {
+		lines = []string{
+			"Optional. Empty keeps Fleet's .mnt folder:",
+			customMountHostPreview(fleetPage.dlg.fleet, fleetPage.editFleet.newMountPath) + synced,
+			lines[0], lines[1],
+		}
+	}
+	for i, line := range lines {
+		lines[i] = addMountFooterLine(dimStyle, line)
+	}
+	return strings.Join(lines, "\n  ")
+}
+
+// addMountFooterWidth is the add flow's footer width: the dialog's 46 columns
+// less the footer's two-space indent.
+const addMountFooterWidth = 44
+
+// addMountFooterLine renders text in style, wrapped to addMountFooterWidth with
+// each continuation line indented like the first, so a long path or error stays
+// inside the footer's column instead of wrapping to the dialog's edge.
+func addMountFooterLine(style lipgloss.Style, text string) string {
+	return strings.ReplaceAll(style.Render(ansi.Wrap(text, addMountFooterWidth, "")), "\n", "\n  ")
 }
 
 // renderCacheRow renders one cache row (checkbox + label, indented under the
@@ -2135,8 +2262,11 @@ func (fleetPage *fleetPage) editFleetHint() string {
 	if fleetPage.dlg.fieldActive {
 		return "[enter] Save  [esc] Discard edit"
 	}
+	if fleetPage.editFleet.addingMountHost {
+		return "[enter] Add mount  [esc] Back"
+	}
 	if fleetPage.editFleet.addingMount {
-		return "[enter] Add mount  [esc] Cancel"
+		return "[enter] Next  [esc] Cancel"
 	}
 	if fleetPage.editFleet.editingMountHost {
 		return "[enter] Save  [esc] Cancel"

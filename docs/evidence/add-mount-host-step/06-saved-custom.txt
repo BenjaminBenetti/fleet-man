@@ -1,0 +1,38 @@
+│ > ▼ demo (2) [ ↻ ]                                                                                               │
+│         ○ web-1                  stopped  ⬡                                                                      │
+│         ○ worker-1               stopped  ⬡                                                                      │
+│   settings                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭──────────────────────────────────────────────────╮
+│                                                  │
+│  Edit fleet                                      │
+│                                                  │
+│    Fleet:     demo                               │
+│    ▶ Agents (0)                                  │
+│    [ ] Fleet MCP  ⚠ exposes full control         │
+│    [ ] GitHub CLI mount                          │
+│    Home dir:  /home/vscode                       │
+│    [ ] Prefer Fleet Launch                       │
+│    ▶ Layouts (0)                                 │
+│    ▼ Custom mounts (3)                           │
+│      /opt/models → /mnt/bulk/models   [remove]   │
+│      /var/cache/pip   [remove]                   │
+│  >   /data/corpus → /mnt/big/corpus   [remove]   │
+│      + Add mount                                 │
+│    ▶ Caching (0)                                 │
+│    ▶ Coder (no template)                         │
+│                                                  │
+│    host: /mnt/big/corpus                         │
+│                                                  │
+│    Mounts apply on supported backends only       │
+│                                                  │
+│                                                  │
+│  [f] Host folder  [enter/d] Remove  [j/k]        │
+│  Select  [q/esc] Save & Close                    │
+│                                                  │
+╰──────────────────────────────────────────────────╯
+
+j/k: navigate  →/l: select  space/enter: expand/collapse  m: automations  e: edit fleet  a: add instance
+n: new fleet  d: delete fleet  r: refresh  A: armada  f: focus  q: quit
+

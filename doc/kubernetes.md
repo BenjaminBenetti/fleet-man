@@ -481,9 +481,11 @@ sync pauses while fleetd is down and catches up when it returns.
   host binds have no cap.
 - **Custom mounts.** A custom mount (`e` on the fleet → Custom mounts, `fleet
   mount add <fleet> <path>`, MCP `fleet_mount_set`) is a folder every instance
-  gets. By default it is `~/.fleet/workspaces/<fleet>/.mnt/<path>`; **[f]** in
-  the dialog, `--host <folder>` or `host_folder` binds a daemon-host folder of
-  your choice as it is (a bigger disk, say). On a cluster either is synced both
+  gets. By default it is `~/.fleet/workspaces/<fleet>/.mnt/<path>`; the
+  dialog's optional Host folder step after a new mount's path (Enter on it
+  empty keeps the default, Esc goes back to the path), **[f]** on an existing
+  one, `--host <folder>` or `host_folder` binds a daemon-host folder of your
+  choice as it is (a bigger disk, say). On a cluster either is synced both
   ways. A host folder must exist when an instance is created.
 - **Host binds** in devcontainer.json (`~/.aws`, `~/.gitconfig`) sync from the
   real host path: two-way for a read-write bind, host to pod for a read-only
