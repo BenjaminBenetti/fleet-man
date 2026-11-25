@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: Ship a PR — with Claude Code enabled for the fleet, selecting the PR status (l) and pressing s starts a "ship" session tagged with the PR (@fleet_ship) that boots `claude '/ship <PR URL>'`; the row wears the ship icon, and its colours change once the daemon's probe sees the PR merged.
+# Description: Ship a PR — with Claude Code enabled for the fleet, selecting the PR status (l) and pressing s starts a "ship" session tagged with the PR (@fleet_ship) that boots claude and types /ship <PR URL> into its prompt box; the row wears the ship icon, and its colours change once the daemon's probe sees the PR merged.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -39,17 +39,23 @@ exit 1
 STUB
 chmod +x "${stub_dir}/gh"
 
-# claude stub: a /ship prompt is recorded and the stub stays up like an agent
-# would; anything else (the Claude Code startup script's `claude --version`)
-# answers at once, so provisioning never blocks on it. On PATH for every exec
-# (remoteEnv), the startup script finds it and skips the real install; once the
-# instance is up it is also copied to ~/.local/bin, which the ship session's
-# login shell puts on PATH (its profile may reset the exec PATH).
+# claude stub: run bare (the ship session types plain `claude`), it draws a
+# prompt box like Claude Code's, records the line typed into it, and stays up
+# like an agent would; with arguments (the Claude Code startup script's
+# `claude --version`) it answers at once, so provisioning never blocks on it.
+# On PATH for every exec (remoteEnv), the startup script finds it and skips the
+# real install; once the instance is up it is also copied to ~/.local/bin,
+# which the ship session's login shell puts on PATH (its profile may reset the
+# exec PATH).
 cat > "${stub_dir}/claude" <<'STUB'
 #!/bin/sh
-case "$1" in
-  /ship*) printf '%s\n' "$*" > /tmp/ship-claude-args; exec sleep 600 ;;
-esac
+if [ "$#" -eq 0 ]; then
+  rule=────────────────────────────────────────
+  printf '%s\n❯ \n%s\n' "${rule}" "${rule}"
+  IFS= read -r line
+  printf '%s\n' "${line}" > /tmp/ship-claude-prompt
+  exec sleep 600
+fi
 echo "0.0.0 (Claude Code stub)"
 STUB
 chmod +x "${stub_dir}/claude"
@@ -81,7 +87,7 @@ inst="${FIXTURE_REPO_NAME}/alpha"
   || fail "could not put the claude stub in ~/.local/bin"
 "${FLEET_BIN}" exec "${inst}" -- git -c safe.directory='*' checkout -q -b feature/ship \
   || fail "could not switch the workspace to a feature branch"
-"${FLEET_BIN}" exec "${inst}" -- rm -f /tmp/gh-stub.log /tmp/ship-claude-args /tmp/ship-pr-state
+"${FLEET_BIN}" exec "${inst}" -- rm -f /tmp/gh-stub.log /tmp/ship-claude-prompt /tmp/ship-pr-state
 
 info "spawning the TUI (the PR probe runs only while a TUI is connected)"
 # termenv draws no colour at all while CI is set (GitHub Actions sets it), and
@@ -112,15 +118,20 @@ sessions=$("${FLEET_BIN}" exec "${inst}" -- tmux list-sessions -F '#{session_nam
   || fail "could not list the instance's tmux sessions"
 assert_contains "${sessions}" "alpha~ship ${pr_url}" "the ship session should carry the PR in @fleet_ship"
 
-deadline=$(( $(date +%s) + $(_scale_timeout 20) ))
-args=""
+# /ship runs only from a line typed into Claude's prompt box, so the session
+# starts plain claude and types /ship <PR URL> into the box once it shows.
+deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
+typed=""
 while [ "$(date +%s)" -lt "${deadline}" ]; do
-  args=$("${FLEET_BIN}" exec "${inst}" -- cat /tmp/ship-claude-args 2>/dev/null || true)
-  [ -n "${args}" ] && break
+  typed=$("${FLEET_BIN}" exec "${inst}" -- cat /tmp/ship-claude-prompt 2>/dev/null || true)
+  [ -n "${typed}" ] && break
   sleep 0.5
 done
-[ "${args}" = "/ship ${pr_url}" ] \
-  || fail "claude should start with /ship <PR URL> as its prompt, got: ${args:-<never started>}"
+if [ "${typed}" != "/ship ${pr_url}" ]; then
+  printf -- '--- ship pane ---\n%s\n--- end ---\n' \
+    "$("${FLEET_BIN}" exec "${inst}" -- tmux capture-pane -p -t '=alpha~ship:' 2>&1 || true)" >&2
+  fail "claude's prompt box should get /ship <PR URL> typed into it, got: ${typed:-<nothing typed>}"
+fi
 
 # Park the cursor off the ship row so it renders in its own colours, not the
 # selection style.
@@ -150,4 +161,4 @@ assert_contains "$(printf '%s' "${after}" | sed 's/\x1b\[[0-9;]*m//g')" "ship �
 log=$("${FLEET_BIN}" exec "${inst}" -- cat /tmp/gh-stub.log) || fail "the gh stub never ran"
 assert_contains "${log}" "pr view ${pr_url} --json" "the probe should look the ship's PR up by URL"
 
-pass "s on the PR status ships it: a tagged ship session runs claude /ship, and turns green once merged"
+pass "s on the PR status ships it: a tagged ship session types /ship into claude's prompt, and turns green once merged"

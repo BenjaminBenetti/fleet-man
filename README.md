@@ -193,7 +193,7 @@ Restart hook failures are logged while the container remains running.
 | `L` | View logs (instance logs, or a selected trigger's event logs in the automation view) |
 | `→/l`, `←/h` | Select / deselect the PR-status auto tag |
 | `enter` (on PR status) | Open the PR in a browser |
-| `s` (on PR status) | Ship the PR: a `ship` session runs Claude Code on `/ship <PR URL>`; the session is blue while shipping, green once merged (needs Claude Code enabled for the fleet) |
+| `s` (on PR status) | Ship the PR: a `ship` session starts Claude Code and types `/ship <PR URL>` into its prompt; the session is blue while shipping, green once merged (needs Claude Code enabled for the fleet) |
 | `A` | Switch armada (remote fleet) |
 | `r` | Refresh |
 | `q` | Quit |

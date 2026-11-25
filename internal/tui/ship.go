@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -10,8 +11,8 @@ import (
 )
 
 // ship.go is "shipping" a PR: with the PR status selected, s starts a "ship"
-// tmux session that boots Claude Code on `/ship <PR URL>`, after which Claude
-// carries on as a normal session. The session records the PR in its @fleet_ship
+// tmux session that boots Claude Code and types `/ship <PR URL>` into its
+// prompt, after which Claude carries on as a normal session. The session records the PR in its @fleet_ship
 // tmux option; the daemon reports that back on the session list
 // (TmuxSession.ship_pr_url) and probes the PR's state by URL
 // (PrStatus.ships), so the row wears a blue gradient and a ship icon while
@@ -136,28 +137,78 @@ func shipGroupID(sanitizedInstance string, existing []tmuxSession) string {
 	}
 }
 
-// shipCommand is the command line typed into the ship session's shell: Claude
-// Code with `/ship <url>` as its first prompt. Claude runs a slash command given
-// as the initial prompt, and it waits out a first-run trust prompt rather than
-// losing keystrokes typed before it is ready.
-func shipCommand(url string) string {
-	return "claude " + shQuote("/ship "+url)
+// shipLaunch is typed into the ship session's shell: Claude Code, interactive.
+// /ship runs only from a line typed into Claude's prompt box, not from a
+// prompt on Claude's command line, so the prompt is typed in once the box is
+// up (shipPromptScript).
+const shipLaunch = "claude"
+
+// shipPromptWait bounds, in seconds, how long a ship session waits for
+// Claude's prompt box before giving up on typing /ship into it: long enough
+// for a first start and for the user to answer a folder-trust prompt.
+const shipPromptWait = 300
+
+// shipPromptPrefix starts the line typed into Claude's prompt box; the PR URL
+// follows it.
+const shipPromptPrefix = "/ship "
+
+// shipPromptReadyAWK exits 0 when a captured pane shows Claude Code's prompt
+// box: an input line starting with ❯ (> in the older boxed UI) between two
+// rules of ─ (with ╭╮/╰╯ corners and │ sides in that UI). A folder-trust
+// prompt's "❯ 1. Yes, proceed" and a shell prompt drawn as ❯ have no rule on
+// both sides. Multi-byte glyphs appear only as whole literals or groups, so
+// it reads the same in a byte (C locale) awk as in a UTF-8 one.
+const shipPromptReadyAWK = `function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+function rule(s) { s = trim(s); sub(/^(╭|╰)/, "", s); sub(/(╮|╯)$/, "", s); return length(s) >= 30 && s ~ /^(─)+$/ }
+function input(s) { s = trim(s); sub(/^│ */, "", s); return index(s, "❯") == 1 || index(s, ">") == 1 }
+{ l[NR] = $0 }
+END { for (i = 2; i < NR; i++) if (input(l[i]) && rule(l[i-1]) && rule(l[i+1])) exit 0; exit 1 }`
+
+// shipPromptScript is the waiter the ship session runs inside the instance's
+// tmux server (run-shell -b), so it outlives the command that started it and
+// the TUI: every second it captures the session's pane until Claude's prompt
+// box shows, then types shipPromptPrefix and the session's @fleet_ship URL, with
+// Enter sent a moment later (an Enter inside the same burst would land in the
+// prompt as part of a paste). It gives up after shipPromptWait seconds, or as
+// soon as the session is gone; it never types into anything but the prompt
+// box. The tmux it calls is the server's own (TMUX names its socket; the
+// server is its parent, should tmux not be on PATH).
+func shipPromptScript(session string) string {
+	sess := shQuote("=" + session)
+	target := shQuote("=" + session + ":")
+	return fmt.Sprintf(`exec >/dev/null 2>&1
+tm=tmux; command -v tmux || tm=/proc/$PPID/exe
+url=$("$tm" show-options -v -t %[2]s %[3]s) && [ -n "$url" ] || exit 0
+i=0
+while [ "$i" -lt %[4]d ]; do
+  "$tm" has-session -t %[1]s || exit 0
+  if "$tm" capture-pane -p -t %[2]s | awk %[5]s; then
+    "$tm" send-keys -t %[2]s -l -- %[6]s"$url" && sleep 1 && "$tm" send-keys -t %[2]s Enter
+    exit 0
+  fi
+  sleep 1
+  i=$((i+1))
+done`, sess, target, shipOption, shipPromptWait, shQuote(shipPromptReadyAWK), shQuote(shipPromptPrefix))
 }
 
 // buildShipSessionScript builds the in-container one-liner that creates the ship
-// session, tags it with the PR URL, and types shipCommand into its shell. The
-// session keeps a shell under Claude, so quitting Claude leaves a normal
-// session. Like buildPresetSessionScript, the session is created on its own
-// first (a name collision exits without touching the existing session), later
-// failures kill only the session this run made, targets are "=<name>:" (exact
-// session match), and every step keeps its stderr for runSessionScript.
+// session, tags it with the PR URL, starts shipPromptScript in the tmux server,
+// and types shipLaunch into the session's shell. The session keeps a shell
+// under Claude, so quitting Claude leaves a normal session. Like
+// buildPresetSessionScript, the session is created on its own first (a name
+// collision exits without touching the existing session), later failures kill
+// only the session this run made, targets are "=<name>:" (exact session
+// match), and every step keeps its stderr for runSessionScript. run-shell
+// expands formats in its command, so the waiter's '#'s are doubled.
 func buildShipSessionScript(session, url string) string {
 	target := shQuote("=" + session + ":")
+	waiter := shQuote(strings.ReplaceAll(shipPromptScript(session), "#", "##"))
 	return tmuxEnsureInstalled +
 		fmt.Sprintf(`tmux new-session -d -s %s 2>&1 || exit 1`, shQuote(session)) + "\n" +
-		fmt.Sprintf(`{ tmux set-option -t %s %s %s 2>&1 && tmux send-keys -t %s -l -- %s 2>&1 && tmux send-keys -t %s Enter 2>&1; } || { tmux kill-session -t %s 2>/dev/null; exit 1; }`,
+		fmt.Sprintf(`{ tmux set-option -t %s %s %s 2>&1 && tmux run-shell -b %s 2>&1 && tmux send-keys -t %s -l -- %s 2>&1 && tmux send-keys -t %s Enter 2>&1; } || { tmux kill-session -t %s 2>/dev/null; exit 1; }`,
 			target, shipOption, shQuote(url),
-			target, shQuote(shipCommand(url)),
+			waiter,
+			target, shQuote(shipLaunch),
 			target,
 			target)
 }

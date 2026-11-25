@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -129,7 +131,8 @@ func TestShipSelectedPR_Single(t *testing.T) {
 	for _, want := range []string{
 		"tmux new-session -d -s 'agent-1~ship'",
 		"tmux set-option -t '=agent-1~ship:' @fleet_ship 'https://x/pull/42'",
-		`claude '\''/ship https://x/pull/42'\''`,
+		"tmux run-shell -b ",
+		"tmux send-keys -t '=agent-1~ship:' -l -- 'claude'",
 	} {
 		if !strings.Contains(*script, want) {
 			t.Errorf("ship script missing %q:\n%s", want, *script)
@@ -162,7 +165,7 @@ func TestShipSelectedPR_MultipleOpensShipChooser(t *testing.T) {
 	if msg := cmd().(shipStartedMsg); msg.number != 2 {
 		t.Fatalf("shipped PR #%d, want #2", msg.number)
 	}
-	if !strings.Contains(*script, "/ship https://x/pull/2") {
+	if !strings.Contains(*script, "@fleet_ship 'https://x/pull/2'") {
 		t.Errorf("shipped the wrong PR:\n%s", *script)
 	}
 	if fp.mode != viewNormal {
@@ -306,13 +309,67 @@ func gradientStart(c theme.RGB) string {
 	return fmt.Sprintf("38;2;%d;%d;%dm", int(c.R), int(c.G), int(c.B))
 }
 
-// TestShipSessionScriptInRealTmux runs the ship script against a real tmux
-// server on a private socket: the session comes up tagged with the PR URL, the
-// session list format the daemon polls reports it, and claude is started with
-// `/ship <url>` as its prompt. claude is a stub and the session shell is plain
-// sh, so no real agent starts; TMUX is unset so the developer's own tmux server
-// is never touched.
+// shipScreens are captured panes: Claude Code's prompt box (current UI, with a
+// placeholder, and the older boxed UI) next to look-alikes that are not it.
+var shipScreens = []struct {
+	name  string
+	pane  string
+	ready bool
+}{
+	{"prompt box", "fleet-man/inst\n" + strings.Repeat("─", 60) + "\n❯\u00a0\n" + strings.Repeat("─", 60) + "\n  ⏵⏵ auto mode on (shift+tab to cycle)\n", true},
+	{"prompt box with a placeholder", "\n" + strings.Repeat("─", 80) + "\n❯ Try \"fix lint errors\"\n" + strings.Repeat("─", 80) + "\n  ? for shortcuts\n", true},
+	{"older boxed prompt", "╭" + strings.Repeat("─", 58) + "╮\n│ > Try \"refactor <filepath>\"" + strings.Repeat(" ", 24) + "│\n╰" + strings.Repeat("─", 58) + "╯\n", true},
+	{"folder-trust prompt", strings.Repeat("─", 60) + "\n Do you trust the files in this folder?\n\n ❯ 1. Yes, proceed\n   2. No, exit\n\n Enter to confirm · Esc to exit\n", false},
+	{"shell prompt drawn as ❯", "~/src/fleet-man on main\n❯ \n", false},
+	{"a rule above a ❯ only", strings.Repeat("─", 60) + "\n❯ \n", false},
+	{"a short rule", strings.Repeat("─", 8) + "\n❯ \n" + strings.Repeat("─", 8) + "\n", false},
+	{"booting", "Welcome to Claude Code\n", false},
+}
+
+// The prompt-box check reads the same under every awk an image may ship, in a
+// byte (C) locale and a UTF-8 one.
+func TestShipPromptReadyAWK(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("instances are Linux")
+	}
+	var awks [][]string
+	for _, a := range []string{"awk", "mawk", "gawk", "original-awk"} {
+		if _, err := exec.LookPath(a); err == nil {
+			awks = append(awks, []string{a})
+		}
+	}
+	if _, err := exec.LookPath("busybox"); err == nil {
+		awks = append(awks, []string{"busybox", "awk"})
+	}
+	if len(awks) == 0 {
+		t.Skip("no awk")
+	}
+	for _, awk := range awks {
+		for _, locale := range []string{"C", "C.UTF-8"} {
+			for _, sc := range shipScreens {
+				c := exec.Command(awk[0], append(awk[1:], shipPromptReadyAWK)...)
+				c.Env = append(os.Environ(), "LC_ALL="+locale)
+				c.Stdin = strings.NewReader(sc.pane)
+				err := c.Run()
+				var exitErr *exec.ExitError
+				if err != nil && !errors.As(err, &exitErr) {
+					t.Fatalf("%v: %v", awk, err)
+				}
+				if got := err == nil; got != sc.ready {
+					t.Errorf("%v (LC_ALL=%s) on %q: ready=%v, want %v", awk, locale, sc.name, got, sc.ready)
+				}
+			}
+		}
+	}
+}
+
+// The ship script, run in a real tmux, starts Claude in the session and types
+// /ship <url> into its prompt box once that shows: never into the
+// folder-trust prompt before it, and with Enter as its own keystroke.
 func TestShipSessionScriptInRealTmux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("instances are Linux")
+	}
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not available")
 	}
@@ -321,9 +378,20 @@ func TestShipSessionScriptInRealTmux(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(sock) })
-	bin, home := t.TempDir(), t.TempDir()
-	argsFile := filepath.Join(t.TempDir(), "claude-args")
-	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shQuote(argsFile) + "\n"
+	bin, home, work := t.TempDir(), t.TempDir(), t.TempDir()
+	gate, early, typed := filepath.Join(work, "gate"), filepath.Join(work, "early"), filepath.Join(work, "typed")
+	rule := strings.Repeat("─", 40)
+	// A fake Claude: run bare, it shows a folder-trust prompt until the test
+	// opens the gate, keeps whatever was typed meanwhile, then draws its prompt
+	// box and keeps the line typed into it.
+	stub := "#!/bin/sh\n" +
+		"[ \"$#\" -eq 0 ] || exit 0\n" +
+		"printf 'Do you trust the files in this folder?\\n\\n❯ 1. Yes, proceed\\n  2. No, exit\\n'\n" +
+		"while [ ! -e " + shQuote(gate) + " ]; do sleep 0.1; done\n" +
+		"stty -icanon min 0 time 0; dd bs=4096 count=1 > " + shQuote(early) + " 2>/dev/null; stty icanon\n" +
+		"printf '%s\\n❯\\302\\240\\n%s\\n' " + shQuote(rule) + " " + shQuote(rule) + "\n" +
+		"IFS= read -r line; printf '%s\\n' \"$line\" > " + shQuote(typed) + "\n" +
+		"exec sleep 600\n"
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -341,6 +409,17 @@ func TestShipSessionScriptInRealTmux(t *testing.T) {
 		return string(out), err
 	}
 	t.Cleanup(func() { _, _ = run("tmux kill-server 2>/dev/null") })
+	pane := func() string { out, _ := run("tmux capture-pane -p -t '=inst~ship:'"); return out }
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for !ok() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s never happened; pane:\n%s", what, pane())
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
 
 	const url = "https://github.com/o/r/pull/7"
 	if out, err := run(buildShipSessionScript("inst~ship", url)); err != nil {
@@ -354,17 +433,21 @@ func TestShipSessionScriptInRealTmux(t *testing.T) {
 		t.Fatalf("session list %q should report the ship URL", out)
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		got, err := os.ReadFile(argsFile)
-		if err == nil && strings.TrimSpace(string(got)) == "/ship "+url {
-			break
-		}
-		if time.Now().After(deadline) {
-			pane, _ := run("tmux capture-pane -p -t '=inst~ship:'")
-			t.Fatalf("claude was not started with \"/ship %s\" (args %q)\npane:\n%s", url, got, pane)
-		}
-		time.Sleep(50 * time.Millisecond)
+	waitFor("claude starting in the session", func() bool { return strings.Contains(pane(), "Yes, proceed") })
+	time.Sleep(2500 * time.Millisecond) // a few of the waiter's polls
+	if _, err := os.Stat(typed); err == nil {
+		t.Fatal("a line was typed before Claude's prompt box showed")
+	}
+	if err := os.WriteFile(gate, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("a line typed into the prompt box", func() bool { _, err := os.Stat(typed); return err == nil })
+	got, _ := os.ReadFile(typed)
+	if strings.TrimSpace(string(got)) != shipPromptPrefix+url {
+		t.Fatalf("typed %q into the prompt box, want %q", got, shipPromptPrefix+url)
+	}
+	if e, _ := os.ReadFile(early); len(e) != 0 {
+		t.Fatalf("typed %q while the folder-trust prompt showed", e)
 	}
 
 	// A second ship under the same name leaves the first session alone.
@@ -374,5 +457,66 @@ func TestShipSessionScriptInRealTmux(t *testing.T) {
 	out, _ = run(backend.ListSessionsScript)
 	if !strings.Contains(out, "inst~ship:1:0:"+url) {
 		t.Fatalf("a failed duplicate ship must not touch the existing session: %q", out)
+	}
+}
+
+// The waiter gives up as soon as its session is gone.
+func TestShipPromptWaiterStopsWithItsSession(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("instances are Linux")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available")
+	}
+	sock, err := os.MkdirTemp("", "shp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sock) })
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nexec sleep 600\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "HOME=" + t.TempDir(), "SHELL=/bin/sh", "TMUX_TMPDIR=" + sock, "TERM=xterm"}
+	run := func(script string) (string, error) {
+		c := exec.Command("sh", "-c", script)
+		c.Env = env
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+	t.Cleanup(func() { _, _ = run("tmux kill-server 2>/dev/null") })
+	// A keeper session holds the server up once the ship session is gone.
+	if out, err := run("tmux new-session -d -s keep"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if out, err := run(buildShipSessionScript("stopw~ship", "https://github.com/o/r/pull/7")); err != nil {
+		t.Fatalf("ship script failed: %v\n%s", err, out)
+	}
+	waiting := func() bool {
+		out, _ := run("ps -eww -o args")
+		for _, l := range strings.Split(out, "\n") {
+			if strings.Contains(l, "=stopw~ship") && strings.Contains(l, "capture-pane") {
+				return true
+			}
+		}
+		return false
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !waiting() {
+		if time.Now().After(deadline) {
+			t.Fatal("the waiter never ran")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if out, err := run("tmux kill-session -t '=stopw~ship'"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	deadline = time.Now().Add(10 * time.Second) // the waiter checks once a second
+	for waiting() {
+		if time.Now().After(deadline) {
+			out, _ := run("ps -eww -o pid,ppid,stat,args; tmux ls")
+			t.Fatalf("the waiter kept running after its session was killed:\n%s", out)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
