@@ -74,8 +74,8 @@ func caseSessions(c *C) {
 		line = sessionLine(out, name)
 		return line != "", out
 	})
-	if fields := strings.Split(line, ":"); len(fields) != 3 || fields[1] != "1" || fields[2] != "0" {
-		c.Errorf("ListSessions line %q, want %s:1:0 (name:windows:attached)", line, name)
+	if fields := strings.Split(line, ":"); len(fields) != 4 || fields[1] != "1" || fields[2] != "0" || fields[3] != "" {
+		c.Errorf("ListSessions line %q, want %s:1:0: (name:windows:attached:ship)", line, name)
 	}
 	c.Eventually("CaptureAllSessions to capture the pane", 15*time.Second, func() (bool, string) {
 		all := i.B.CaptureAllSessions(i.ID())

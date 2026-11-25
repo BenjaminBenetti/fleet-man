@@ -48,6 +48,7 @@ func keybindingsData() []keybindingGroup {
 				{"L", "View logs"},
 				{"→ / l, ← / h", "Select / deselect PR status"},
 				{"enter (on PR status)", "Open PR in browser"},
+				{"s (on PR status)", "Ship PR with Claude Code /ship"},
 				{"A", "Switch armada (remote fleet)"},
 				{"r", "Refresh / rename session"},
 			},

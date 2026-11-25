@@ -36,6 +36,12 @@ func Fleet() Theme {
 		GradientFrom: RGB{130, 220, 255},
 		GradientTo:   RGB{60, 80, 200},
 
+		// Sky to royal blue while shipping; mint to green once shipped.
+		ShipFrom:    RGB{120, 200, 255},
+		ShipTo:      RGB{50, 100, 235},
+		ShippedFrom: RGB{150, 255, 170},
+		ShippedTo:   RGB{20, 170, 80},
+
 		Instance: InstancePalette{
 			Red: c("196"), Orange: c("214"), Yellow: c("226"), Green: c("42"),
 			Cyan: c("39"), Blue: c("69"), Purple: c("170"), Pink: c("213"),
@@ -70,6 +76,12 @@ func GruvboxDark() Theme {
 
 		GradientFrom: RGB{250, 189, 47}, // yellow
 		GradientTo:   RGB{214, 93, 14},  // faded orange
+
+		// blue → faded blue; green → faded green.
+		ShipFrom:    RGB{131, 165, 152},
+		ShipTo:      RGB{69, 133, 136},
+		ShippedFrom: RGB{184, 187, 38},
+		ShippedTo:   RGB{152, 151, 26},
 
 		Instance: InstancePalette{
 			Red: c("#fb4934"), Orange: c("#fe8019"), Yellow: c("#fabd2f"), Green: c("#b8bb26"),
@@ -108,6 +120,12 @@ func GruvboxLight() Theme {
 		GradientFrom: RGB{215, 153, 33}, // neutral yellow
 		GradientTo:   RGB{175, 58, 3},   // orange
 
+		// neutral blue → blue; neutral green → green.
+		ShipFrom:    RGB{69, 133, 136},
+		ShipTo:      RGB{7, 102, 120},
+		ShippedFrom: RGB{152, 151, 26},
+		ShippedTo:   RGB{121, 116, 14},
+
 		Instance: InstancePalette{
 			Red: c("#9d0006"), Orange: c("#af3a03"), Yellow: c("#b57614"), Green: c("#79740e"),
 			Cyan: c("#427b58"), Blue: c("#076678"), Purple: c("#8f3f71"), Pink: c("#b16286"),
@@ -144,6 +162,12 @@ func CatppuccinMocha() Theme {
 
 		GradientFrom: RGB{137, 220, 235}, // sky
 		GradientTo:   RGB{203, 166, 247}, // mauve
+
+		// sapphire → blue; teal → green.
+		ShipFrom:    RGB{116, 199, 236},
+		ShipTo:      RGB{137, 180, 250},
+		ShippedFrom: RGB{148, 226, 213},
+		ShippedTo:   RGB{166, 227, 161},
 
 		Instance: InstancePalette{
 			Red: c("#f38ba8"), Orange: c("#fab387"), Yellow: c("#f9e2af"), Green: c("#a6e3a1"),
@@ -182,6 +206,12 @@ func CatppuccinLatte() Theme {
 		GradientFrom: RGB{4, 165, 229},  // sky
 		GradientTo:   RGB{136, 57, 239}, // mauve
 
+		// sapphire → blue; teal → green.
+		ShipFrom:    RGB{32, 159, 181},
+		ShipTo:      RGB{30, 102, 245},
+		ShippedFrom: RGB{23, 146, 153},
+		ShippedTo:   RGB{64, 160, 43},
+
 		Instance: InstancePalette{
 			Red: c("#d20f39"), Orange: c("#fe640b"), Yellow: c("#df8e1d"), Green: c("#40a02b"),
 			Cyan: c("#179299"), Blue: c("#1e66f5"), Purple: c("#8839ef"), Pink: c("#ea76cb"),
@@ -218,6 +248,12 @@ func TokyoNight() Theme {
 
 		GradientFrom: RGB{125, 207, 255}, // cyan
 		GradientTo:   RGB{187, 154, 247}, // magenta
+
+		// cyan → blue; teal → green.
+		ShipFrom:    RGB{125, 207, 255},
+		ShipTo:      RGB{122, 162, 247},
+		ShippedFrom: RGB{115, 218, 202},
+		ShippedTo:   RGB{158, 206, 106},
 
 		Instance: InstancePalette{
 			Red: c("#f7768e"), Orange: c("#ff9e64"), Yellow: c("#e0af68"), Green: c("#9ece6a"),
@@ -256,6 +292,12 @@ func TokyoNightDay() Theme {
 		GradientFrom: RGB{0, 113, 151},  // cyan
 		GradientTo:   RGB{152, 84, 241}, // magenta
 
+		// cyan → blue; teal → green.
+		ShipFrom:    RGB{0, 113, 151},
+		ShipTo:      RGB{46, 125, 233},
+		ShippedFrom: RGB{17, 140, 116},
+		ShippedTo:   RGB{88, 117, 57},
+
 		Instance: InstancePalette{
 			Red: c("#f52a65"), Orange: c("#b15c00"), Yellow: c("#8c6c3e"), Green: c("#587539"),
 			Cyan: c("#007197"), Blue: c("#2e7de9"), Purple: c("#9854f1"), Pink: c("#d20065"),
@@ -292,6 +334,12 @@ func SolarizedLight() Theme {
 
 		GradientFrom: RGB{42, 161, 152}, // cyan
 		GradientTo:   RGB{38, 139, 210}, // blue
+
+		// cyan → blue; green → deeper green.
+		ShipFrom:    RGB{42, 161, 152},
+		ShipTo:      RGB{38, 139, 210},
+		ShippedFrom: RGB{133, 153, 0},
+		ShippedTo:   RGB{70, 130, 40},
 
 		Instance: InstancePalette{
 			Red: c("#dc322f"), Orange: c("#cb4b16"), Yellow: c("#b58900"), Green: c("#859900"),

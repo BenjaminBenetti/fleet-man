@@ -69,9 +69,11 @@ func statsToProto(s *backend.ContainerStats) *fleetgrpc.ContainerStats {
 	return &fleetgrpc.ContainerStats{CpuMillicores: s.CPUMillicores, MemoryMb: s.MemoryMB}
 }
 
-// parseTmuxSessionsProto parses the output of
-// `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}"`
+// parseTmuxSessionsProto parses the output of backend.ListSessionsScript
+// (`tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}:#{@fleet_ship}"`)
 // into proto TmuxSessions (server-side mirror of the TUI's parseTmuxSessions).
+// The ship field is a URL with colons of its own, so it is the unsplit rest of
+// the line.
 func parseTmuxSessionsProto(output string) []*fleetgrpc.TmuxSession {
 	var sessions []*fleetgrpc.TmuxSession
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
@@ -79,7 +81,7 @@ func parseTmuxSessionsProto(output string) []*fleetgrpc.TmuxSession {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 3)
+		parts := strings.SplitN(line, ":", 4)
 		if len(parts) < 1 || parts[0] == "" {
 			continue
 		}
@@ -93,6 +95,9 @@ func parseTmuxSessionsProto(output string) []*fleetgrpc.TmuxSession {
 			// count means a client is attached.
 			a, _ := strconv.Atoi(parts[2])
 			s.Attached = a > 0
+		}
+		if len(parts) >= 4 {
+			s.ShipPrUrl = parts[3]
 		}
 		sessions = append(sessions, s)
 	}

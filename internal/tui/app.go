@@ -1339,6 +1339,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// current runtime cache so the list reflects what's already known.
 		m.refreshSessionsFromRuntime(msg.ref)
 
+	case shipStartedMsg:
+		m.handleShipStarted(msg)
+
 	case presetSessionsCreatedMsg:
 		if msg.err != nil {
 			m.message = fmt.Sprintf("Failed to create session: %v", msg.err)

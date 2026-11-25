@@ -262,16 +262,22 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			if r.tabCount > 1 {
 				tabSuffix = fmt.Sprintf(" (%d tabs)", r.tabCount)
 			}
-			var label string
+			var text string
 			if r.groupSize > 1 {
-				label = fmt.Sprintf("%s %s (%d panes)", icon, r.groupID, r.groupSize)
+				text = fmt.Sprintf("%s (%d panes)", r.groupID, r.groupSize)
 			} else if r.groupID != "" && isGroupedSession(SanitizeSessionName(r.instance.Name), r.sessionName) {
-				label = fmt.Sprintf("%s %s%s", icon, r.groupID, tabSuffix)
+				text = fmt.Sprintf("%s%s", r.groupID, tabSuffix)
 			} else {
-				label = fmt.Sprintf("%s %s%s", icon, r.sessionName, tabSuffix)
+				text = fmt.Sprintf("%s%s", r.sessionName, tabSuffix)
 			}
 			if isSelected {
 				style = selectedStyle
+			}
+			label := icon + " " + text
+			if r.shipURL != "" {
+				// A ship session pre-styles its own label (gradient + icon).
+				label = m.shipSessionLabel(r, icon, text, style, isSelected)
+				style = lipgloss.NewStyle()
 			}
 			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r, isSelected && fleetPage.rightSelected))
 			listContent.WriteString("\n")

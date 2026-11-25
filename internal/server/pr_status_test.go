@@ -53,6 +53,12 @@ case "$1" in
     case "$2" in
       list) cat "$GH_FAKE_PRLIST" 2>/dev/null ; exit 0 ;;
       view)
+        case "$*" in *"ship: true"*)
+          # A ship-session lookup by URL: real gh applies the --jq, which tags
+          # the object with "ship": true.
+          printf '{"ship":true,"number":7,"state":"%s","url":"%s","title":"x"}\n' "${GH_FAKE_SHIP_STATE:-OPEN}" "$3"
+          exit 0 ;;
+        esac
         state=MERGED
         case "$*" in *statusCheckRollup*) state=OPEN ;; esac
         printf '{"number":%s,"state":"%s","url":"https://example.test/%s","title":"x"}\n' "$3" "$state" "$3"
@@ -61,6 +67,25 @@ case "$1" in
 esac
 exit 0
 `
+
+// stubTmuxScript stands in for tmux so the probe's ship-session listing is
+// hermetic (never the developer's real tmux server): `tmux list-sessions`
+// prints $TMUX_FAKE_SHIPS, one @fleet_ship value per session.
+const stubTmuxScript = `#!/bin/sh
+[ "$1" = list-sessions ] && [ -n "$TMUX_FAKE_SHIPS" ] && cat "$TMUX_FAKE_SHIPS"
+exit 0
+`
+
+// writeProbeStubs installs the gh stub (ghScript) and the tmux stub into bin.
+func writeProbeStubs(t *testing.T, bin, ghScript string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(ghScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(stubTmuxScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // setSymbolicRef writes a symbolic ref in dir (e.g. refs/remotes/origin/HEAD ->
 // refs/remotes/origin/main, the marker `git clone` writes). git stores it as-is,
@@ -107,9 +132,7 @@ func TestPRProbeScript_AlwaysExitsZero(t *testing.T) {
 		t.Skip("git not available")
 	}
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(stubGHScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeProbeStubs(t, bin, stubGHScript)
 	emptyList := filepath.Join(t.TempDir(), "empty")
 	closedList := filepath.Join(t.TempDir(), "closed")
 	if err := os.WriteFile(emptyList, []byte(""), 0o644); err != nil {
@@ -194,9 +217,7 @@ func TestPRProbeScript_SkipsDefaultBranch(t *testing.T) {
 		t.Skip("git not available")
 	}
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(stubGHScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeProbeStubs(t, bin, stubGHScript)
 	// Every repo the stub reports has a single MERGED PR — so anything NOT skipped
 	// surfaces a purple closed tag, and the skip is observable by its absence.
 	closedList := filepath.Join(t.TempDir(), "closed")
@@ -290,9 +311,7 @@ esac
 exit 0
 `
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(ghNoRepoView), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeProbeStubs(t, bin, ghNoRepoView)
 	closedList := filepath.Join(t.TempDir(), "closed")
 	if err := os.WriteFile(closedList, []byte("MERGED 210\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -675,5 +694,72 @@ func TestParsePRProbeOutput_OpenWinsOverClosed(t *testing.T) {
 	}
 	if got.GetPrSignal() != fleetgrpc.PrSignal_PR_SIGNAL_GREEN {
 		t.Errorf("PrSignal = %v, want GREEN (the open PR)", got.GetPrSignal())
+	}
+}
+
+// TestPRProbeScript_ReportsShipSessions: every ship session's PR is looked up by
+// the URL in its @fleet_ship option — even on the default branch, which the
+// branch scan skips — once per distinct URL, and comes back as a ship ref that
+// leaves the auto tag's counts alone.
+func TestPRProbeScript_ReportsShipSessions(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	bin := t.TempDir()
+	writeProbeStubs(t, bin, stubGHScript)
+	dir := t.TempDir()
+	ships := filepath.Join(dir, "ships")
+	// Two sessions ship the same PR, and one ordinary session has no option.
+	const url = "https://github.com/o/r/pull/7"
+	if err := os.WriteFile(ships, []byte(url+"\n\n"+url+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+	gitInitOnBranch(t, ws, "main")
+	cmd := exec.Command("sh", "-c", prProbeScript)
+	cmd.Dir = ws
+	cmd.Env = append(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GH_FAKE_PRLIST="+filepath.Join(dir, "none"),
+		"TMUX_FAKE_SHIPS="+ships,
+		"GH_FAKE_SHIP_STATE=MERGED")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("probe script exited non-zero: %v\noutput: %q", err, out)
+	}
+	got := parsePRProbeOutput(string(out))
+	if got == nil {
+		t.Fatalf("ship session parsed to nil (out=%q)", out)
+	}
+	if got.GetOpenCount() != 0 || got.GetClosedCount() != 0 || len(got.GetPrs()) != 0 {
+		t.Errorf("a ship lookup must not feed the auto tag: %+v", got)
+	}
+	if n := len(got.GetShips()); n != 1 {
+		t.Fatalf("len(Ships) = %d, want 1 (one lookup per distinct URL); out=%q", n, out)
+	}
+	if s := got.GetShips()[0]; s.GetUrl() != url || s.GetState() != fleetgrpc.PrState_PR_STATE_MERGED {
+		t.Errorf("ship = %+v, want %s MERGED", s, url)
+	}
+}
+
+// TestParsePRProbeOutput_ShipsRideAlongBranchPRs: ship objects are split off
+// from the branch's PRs, so an open branch PR keeps its tag and the shipped PR
+// keeps its state.
+func TestParsePRProbeOutput_ShipsRideAlongBranchPRs(t *testing.T) {
+	out := `{"number":3,"state":"OPEN","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","url":"https://example.test/3","title":"open"}
+{"ship":true,"number":9,"state":"MERGED","url":"https://example.test/9","title":"shipped"}`
+	got := parsePRProbeOutput(out)
+	if got == nil {
+		t.Fatal("parsePRProbeOutput returned nil")
+	}
+	if got.GetOpenCount() != 1 || got.GetClosedCount() != 0 {
+		t.Errorf("counts = open %d closed %d, want 1/0", got.GetOpenCount(), got.GetClosedCount())
+	}
+	if len(got.GetPrs()) != 1 || got.GetPrs()[0].GetState() != fleetgrpc.PrState_PR_STATE_OPEN {
+		t.Errorf("Prs = %+v, want the one OPEN PR", got.GetPrs())
+	}
+	if len(got.GetShips()) != 1 || got.GetShips()[0].GetNumber() != 9 ||
+		got.GetShips()[0].GetState() != fleetgrpc.PrState_PR_STATE_MERGED {
+		t.Errorf("Ships = %+v, want PR 9 MERGED", got.GetShips())
 	}
 }

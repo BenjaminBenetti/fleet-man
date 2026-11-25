@@ -67,6 +67,12 @@ type Theme struct {
 	// title) gradient.
 	GradientFrom RGB
 	GradientTo   RGB
+	// ShipFrom / ShipTo are the blue gradient a ship session's name wears while
+	// its PR is shipping; ShippedFrom / ShippedTo the green one once it merged.
+	ShipFrom    RGB
+	ShipTo      RGB
+	ShippedFrom RGB
+	ShippedTo   RGB
 
 	// Instance is the palette behind the user-selectable instance colors.
 	Instance InstancePalette

@@ -74,6 +74,7 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 							groupID:     g.GroupID,
 							groupSize:   len(g.Sessions),
 							tabCount:    tabCount,
+							shipURL:     g.Sessions[0].ShipURL,
 						})
 					}
 					fleetPage.appendSavedGroupRows(name, instance, liveGroups)

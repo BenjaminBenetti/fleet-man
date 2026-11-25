@@ -1,10 +1,14 @@
 package backend
 
 // ListSessionsScript lists the live tmux sessions in the
-// "name:windows:attached" format the runtime session poller parses. tmux
-// exits non-zero when no server is running; 2>/dev/null swallows that so the
-// caller simply observes empty output ("no sessions") rather than an error.
-const ListSessionsScript = `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null`
+// "name:windows:attached:ship" format the runtime session poller parses, where
+// ship is the session's @fleet_ship option (the PR URL a ship session is
+// shipping; empty for any other session). The URL holds colons of its own, so
+// it comes last and a parser splits off only the first three fields (tmux
+// names never contain a colon). tmux exits non-zero when no server is running;
+// 2>/dev/null swallows that so the caller simply observes empty output ("no
+// sessions") rather than an error.
+const ListSessionsScript = `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}:#{@fleet_ship}" 2>/dev/null`
 
 // AllSessions holds the per-container snapshot collected in a single
 // shell invocation: tmux pane captures, plus auxiliary state files

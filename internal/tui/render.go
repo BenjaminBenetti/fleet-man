@@ -7,6 +7,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/theme"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -179,11 +180,18 @@ func remoteIndicator(m *model) string {
 	return style.Render("·))")
 }
 
+// renderGradient draws text in the theme's banner gradient (Fleet: light cyan
+// to deep blue).
 func renderGradient(text string) string {
-	// The theme's banner gradient (Fleet: light cyan to deep blue).
+	return renderGradientBetween(text, activeTheme.GradientFrom, activeTheme.GradientTo)
+}
+
+// renderGradientBetween draws text bold, its colour sweeping left to right from
+// one endpoint to the other (per line, spaces left unstyled).
+func renderGradientBetween(text string, start, end theme.RGB) string {
 	type rgb struct{ r, g, b float64 }
-	from := rgb{activeTheme.GradientFrom.R, activeTheme.GradientFrom.G, activeTheme.GradientFrom.B}
-	to := rgb{activeTheme.GradientTo.R, activeTheme.GradientTo.G, activeTheme.GradientTo.B}
+	from := rgb{start.R, start.G, start.B}
+	to := rgb{end.R, end.G, end.B}
 
 	lines := strings.Split(text, "\n")
 	// Find max line length for consistent gradient
