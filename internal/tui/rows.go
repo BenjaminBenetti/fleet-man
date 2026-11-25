@@ -38,6 +38,7 @@ type row struct {
 	groupID     string // set for grouped session rows
 	groupSize   int    // number of sessions in the group (for display)
 	tabCount    int    // tmux windows in a single-session row (for display)
+	shipURL     string // the PR a ship session row is shipping ("" otherwise)
 	// autoIdx indexes the fleet's Settings.Triggers (rowTrigger) or
 	// Settings.Agents (rowAgent) — the automation item this row renders/edits.
 	autoIdx int

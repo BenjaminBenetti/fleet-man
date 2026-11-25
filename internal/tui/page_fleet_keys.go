@@ -168,6 +168,10 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 
 		case "s":
 			r := fleetPage.currentRow()
+			// With the PR status selected, s ships the PR.
+			if fleetPage.rightSelected && r != nil && r.kind != rowFleetHeader {
+				return fleetPage.shipSelectedPR(m)
+			}
 			if r != nil && r.kind == rowTrigger {
 				return fleetPage.toggleTriggerDisabled(m, r.fleetName, r.autoIdx)
 			}
@@ -747,7 +751,11 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 			}
 			return withArmadaHint([]string{action, "←/h: deselect", "j/k: navigate", "q: quit"})
 		}
-		return withArmadaHint([]string{"enter: open PR", "←/h: deselect", "j/k: navigate", "q: quit"})
+		keys := []string{"enter: open PR"}
+		if m.canShipRow(*r) {
+			keys = append(keys, "s: ship")
+		}
+		return withArmadaHint(append(keys, "←/h: deselect", "j/k: navigate", "q: quit"))
 	}
 
 	switch r.kind {

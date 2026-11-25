@@ -110,6 +110,16 @@ find . -maxdepth 5 -name node_modules -prune -o -name .git -prune -print 2>/dev/
     fi
   )
 done
+# Ship sessions (the TUI's "s" on a PR) record the PR they ship in their
+# @fleet_ship tmux option. Report each one's live state BY URL — independent of
+# the checked-out branch, so a ship session still learns its PR merged after the
+# branch moves on (or back to the default branch, which the loop above skips).
+# The "ship" key marks these objects apart from the branch's PRs above.
+tmux list-sessions -F '#{@fleet_ship}' 2>/dev/null | sort -u | while IFS= read -r url; do
+  [ -n "$url" ] || continue
+  gh pr view "$url" --json number,state,url,title \
+    --jq '{ship: true, number: .number, state: .state, url: .url, title: .title}' 2>/dev/null
+done
 # Always exit 0 once the scan completes: an empty result (a repo with no PRs) is a
 # valid probe outcome that should CLEAR the tag, not a transient failure. Without
 # this, a no-PR repo visited last by find leaves the loop's exit status at 1, and
@@ -132,6 +142,33 @@ type ghPR struct {
 	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
 	URL               string    `json:"url"`
 	Title             string    `json:"title"`
+	// Ship marks a PR the probe looked up for a ship session (by the URL in the
+	// session's @fleet_ship option) rather than one found on the branch.
+	Ship bool `json:"ship"`
+}
+
+// prRef is the navigable ref for pr, carrying its lifecycle state.
+func prRef(pr ghPR) *fleetgrpc.PrRef {
+	return &fleetgrpc.PrRef{
+		Number: int32(pr.Number),
+		Url:    pr.URL,
+		Title:  pr.Title,
+		State:  prState(pr.State),
+	}
+}
+
+// prState maps gh's state string (OPEN | CLOSED | MERGED) to the proto enum.
+func prState(s string) fleetgrpc.PrState {
+	switch strings.ToUpper(s) {
+	case "OPEN":
+		return fleetgrpc.PrState_PR_STATE_OPEN
+	case "CLOSED":
+		return fleetgrpc.PrState_PR_STATE_CLOSED
+	case "MERGED":
+		return fleetgrpc.PrState_PR_STATE_MERGED
+	default:
+		return fleetgrpc.PrState_PR_STATE_UNSPECIFIED
+	}
 }
 
 // ghCheck mirrors one element of statusCheckRollup. A CheckRun carries
@@ -196,11 +233,7 @@ func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 
 	refs := make([]*fleetgrpc.PrRef, 0, len(prs))
 	for _, pr := range prs {
-		refs = append(refs, &fleetgrpc.PrRef{
-			Number: int32(pr.Number),
-			Url:    pr.URL,
-			Title:  pr.Title,
-		})
+		refs = append(refs, prRef(pr))
 		for _, c := range pr.StatusCheckRollup {
 			total++
 			switch classifyCheck(c) {
@@ -288,11 +321,18 @@ func parsePRProbeOutput(out string) *fleetgrpc.PrStatus {
 		return nil
 	}
 	var open, closed []ghPR
+	var ships []*fleetgrpc.PrRef
 	dec := json.NewDecoder(strings.NewReader(out))
 	for {
 		var p ghPR
 		if err := dec.Decode(&p); err != nil {
 			break // io.EOF on clean exhaustion, or unexpected noise.
+		}
+		if p.Ship {
+			// A ship session's PR: tracked apart from the branch's own PRs so it
+			// never skews the auto tag's counts or colours.
+			ships = append(ships, prRef(p))
+			continue
 		}
 		switch strings.ToUpper(p.State) {
 		case "OPEN":
@@ -303,10 +343,19 @@ func parsePRProbeOutput(out string) *fleetgrpc.PrStatus {
 	}
 	// Open PRs win: their live status is the actionable one. Fall back to the
 	// closed/merged tag only when nothing is open.
-	if s := aggregatePRStatus(open); s != nil {
-		return s
+	s := aggregatePRStatus(open)
+	if s == nil {
+		s = closedPRStatus(closed)
 	}
-	return closedPRStatus(closed)
+	if len(ships) > 0 {
+		// Ship states ride along even when the branch has no PR of its own (both
+		// counts 0, so the auto tag stays hidden).
+		if s == nil {
+			s = &fleetgrpc.PrStatus{}
+		}
+		s.Ships = ships
+	}
+	return s
 }
 
 // closedPRStatus builds the persistent purple "PR" tag shown when a branch has no
@@ -326,11 +375,7 @@ func closedPRStatus(closed []ghPR) *fleetgrpc.PrStatus {
 	}
 	refs := make([]*fleetgrpc.PrRef, 0, len(closed))
 	for _, pr := range closed {
-		refs = append(refs, &fleetgrpc.PrRef{
-			Number: int32(pr.Number),
-			Url:    pr.URL,
-			Title:  pr.Title,
-		})
+		refs = append(refs, prRef(pr))
 	}
 	return &fleetgrpc.PrStatus{
 		ClosedCount: int32(len(closed)),

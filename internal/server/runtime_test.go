@@ -71,6 +71,25 @@ func TestParseTmuxSessionsProto(t *testing.T) {
 	}
 }
 
+// TestParseTmuxSessionsProtoShipURL: the trailing @fleet_ship field is a URL
+// whose own colons must survive the split, and an unset option is empty.
+func TestParseTmuxSessionsProtoShipURL(t *testing.T) {
+	out := "app~ship:1:0:https://github.com/o/r/pull/7\napp~dev:2:1:\n"
+	sessions := parseTmuxSessionsProto(out)
+	if len(sessions) != 2 {
+		t.Fatalf("want 2 sessions, got %d", len(sessions))
+	}
+	if got := sessions[0].GetShipPrUrl(); got != "https://github.com/o/r/pull/7" {
+		t.Fatalf("ship url = %q", got)
+	}
+	if sessions[0].GetWindows() != 1 || sessions[0].GetAttached() {
+		t.Fatalf("ship session parsed wrong: %+v", sessions[0])
+	}
+	if sessions[1].GetShipPrUrl() != "" || !sessions[1].GetAttached() || sessions[1].GetWindows() != 2 {
+		t.Fatalf("plain session parsed wrong: %+v", sessions[1])
+	}
+}
+
 // TestBackendForCachesAndPrunes verifies the runtime pollers reuse one backend
 // per container across ticks (so the devcontainer user-lookup cache survives)
 // and that pruneBackends evicts containers no longer running.

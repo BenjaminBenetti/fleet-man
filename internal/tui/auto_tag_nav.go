@@ -70,10 +70,15 @@ func openPRRefCmd(m *model, ref *fleetgrpc.PrRef) tea.Cmd {
 // ===========================================
 
 // choosePRState backs the "which PR?" dialog shown when an instance has more
-// than one PR (open, or closed/merged).
+// than one PR (open, or closed/merged). With ship set it picks the PR to ship
+// (in fleetName/instance) instead of the one to open.
 type choosePRState struct {
 	refs   []*fleetgrpc.PrRef
 	cursor int
+
+	ship      bool
+	fleetName string
+	instance  string
 }
 
 // updateChoosePR handles the multi-PR chooser dialog.
@@ -99,6 +104,9 @@ func (fleetPage *fleetPage) updateChoosePR(m *model, msg tea.Msg) tea.Cmd {
 		if c := fleetPage.choosePR.cursor; c >= 0 && c < n {
 			ref := fleetPage.choosePR.refs[c]
 			fleetPage.mode = viewNormal
+			if fleetPage.choosePR.ship {
+				return fleetPage.startShip(m, fleetPage.choosePR.fleetName, fleetPage.choosePR.instance, ref)
+			}
 			return openPRRefCmd(m, ref)
 		}
 		fleetPage.mode = viewNormal
@@ -110,7 +118,11 @@ func (fleetPage *fleetPage) updateChoosePR(m *model, msg tea.Msg) tea.Cmd {
 // with the selected row highlighted.
 func (fleetPage *fleetPage) renderChoosePRDialog(m *model) string {
 	var b strings.Builder
-	b.WriteString(dialogTitle.Render("Open which PR?"))
+	title, action := "Open which PR?", "open"
+	if fleetPage.choosePR.ship {
+		title, action = "Ship which PR?", "ship"
+	}
+	b.WriteString(dialogTitle.Render(title))
 	b.WriteString("\n\n")
 
 	for i, ref := range fleetPage.choosePR.refs {
@@ -134,6 +146,6 @@ func (fleetPage *fleetPage) renderChoosePRDialog(m *model) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(dialogHint.Render("↑/↓ select · enter open · esc cancel"))
+	b.WriteString(dialogHint.Render("↑/↓ select · enter " + action + " · esc cancel"))
 	return dialogBox.Render(b.String())
 }

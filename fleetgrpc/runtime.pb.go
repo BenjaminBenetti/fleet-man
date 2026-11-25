@@ -325,6 +325,59 @@ func (PrReviewState) EnumDescriptor() ([]byte, []int) {
 	return file_runtime_proto_rawDescGZIP(), []int{4}
 }
 
+// PrState is a PR's GitHub lifecycle state.
+type PrState int32
+
+const (
+	PrState_PR_STATE_UNSPECIFIED PrState = 0
+	PrState_PR_STATE_OPEN        PrState = 1
+	PrState_PR_STATE_CLOSED      PrState = 2
+	PrState_PR_STATE_MERGED      PrState = 3
+)
+
+// Enum value maps for PrState.
+var (
+	PrState_name = map[int32]string{
+		0: "PR_STATE_UNSPECIFIED",
+		1: "PR_STATE_OPEN",
+		2: "PR_STATE_CLOSED",
+		3: "PR_STATE_MERGED",
+	}
+	PrState_value = map[string]int32{
+		"PR_STATE_UNSPECIFIED": 0,
+		"PR_STATE_OPEN":        1,
+		"PR_STATE_CLOSED":      2,
+		"PR_STATE_MERGED":      3,
+	}
+)
+
+func (x PrState) Enum() *PrState {
+	p := new(PrState)
+	*p = x
+	return p
+}
+
+func (x PrState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PrState) Descriptor() protoreflect.EnumDescriptor {
+	return file_runtime_proto_enumTypes[5].Descriptor()
+}
+
+func (PrState) Type() protoreflect.EnumType {
+	return &file_runtime_proto_enumTypes[5]
+}
+
+func (x PrState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PrState.Descriptor instead.
+func (PrState) EnumDescriptor() ([]byte, []int) {
+	return file_runtime_proto_rawDescGZIP(), []int{5}
+}
+
 // ContainerStats mirrors internal/backend.ContainerStats (the dim mcpu/MB in the
 // instance row).
 type ContainerStats struct {
@@ -380,13 +433,16 @@ func (x *ContainerStats) GetMemoryMb() float64 {
 }
 
 // TmuxSession mirrors a discovered tmux session (tui/sessions.go tmuxSession:
-// `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}"`).
+// `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}:#{@fleet_ship}"`).
 // Live per-instance discovery, only populated for running/expanded instances.
 type TmuxSession struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Windows       int32                  `protobuf:"varint,2,opt,name=windows,proto3" json:"windows,omitempty"`
-	Attached      bool                   `protobuf:"varint,3,opt,name=attached,proto3" json:"attached,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Name     string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Windows  int32                  `protobuf:"varint,2,opt,name=windows,proto3" json:"windows,omitempty"`
+	Attached bool                   `protobuf:"varint,3,opt,name=attached,proto3" json:"attached,omitempty"`
+	// The PR a ship session is shipping, read from the session's @fleet_ship tmux
+	// option (set when the TUI ships a PR). Empty for an ordinary session.
+	ShipPrUrl     string `protobuf:"bytes,4,opt,name=ship_pr_url,json=shipPrUrl,proto3" json:"ship_pr_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -440,6 +496,13 @@ func (x *TmuxSession) GetAttached() bool {
 		return x.Attached
 	}
 	return false
+}
+
+func (x *TmuxSession) GetShipPrUrl() string {
+	if x != nil {
+		return x.ShipPrUrl
+	}
+	return ""
 }
 
 // ForwardedPort describes an active port-forward the server set up for the
@@ -505,13 +568,14 @@ func (x *ForwardedPort) GetLabel() string {
 	return ""
 }
 
-// PrRef identifies one open PR so the TUI can navigate to it (open in a
-// browser) and label it in the multi-PR chooser dialog.
+// PrRef identifies one PR so the TUI can navigate to it (open in a browser),
+// label it in the multi-PR chooser dialog, and tell a shipped PR has merged.
 type PrRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Number        int32                  `protobuf:"varint,1,opt,name=number,proto3" json:"number,omitempty"`
 	Url           string                 `protobuf:"bytes,2,opt,name=url,proto3" json:"url,omitempty"`
 	Title         string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	State         PrState                `protobuf:"varint,4,opt,name=state,proto3,enum=fleetgrpc.PrState" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -567,6 +631,13 @@ func (x *PrRef) GetTitle() string {
 	return ""
 }
 
+func (x *PrRef) GetState() PrState {
+	if x != nil {
+		return x.State
+	}
+	return PrState_PR_STATE_UNSPECIFIED
+}
+
 // PrStatus is the aggregated GitHub pull-request state for an instance's
 // workspace repo PLUS any nested subrepos, computed by running `gh` inside the
 // container. It drives the "auto tag" the TUI renders in the tag slot when an
@@ -603,7 +674,12 @@ type PrStatus struct {
 	// with a closed-but-no-open PR), unlike open_count which sums every open PR.
 	// Open PRs always take priority; when both exist the open status is shown and
 	// this stays 0.
-	ClosedCount   int32 `protobuf:"varint,8,opt,name=closed_count,json=closedCount,proto3" json:"closed_count,omitempty"`
+	ClosedCount int32 `protobuf:"varint,8,opt,name=closed_count,json=closedCount,proto3" json:"closed_count,omitempty"`
+	// The PRs the instance's ship sessions are shipping (TmuxSession.ship_pr_url),
+	// each with its live state, so the TUI can turn a ship session green once its
+	// PR merges. Probed by URL, independent of the checked-out branch, and present
+	// even when open_count and closed_count are both 0.
+	Ships         []*PrRef `protobuf:"bytes,9,rep,name=ships,proto3" json:"ships,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -692,6 +768,13 @@ func (x *PrStatus) GetClosedCount() int32 {
 		return x.ClosedCount
 	}
 	return 0
+}
+
+func (x *PrStatus) GetShips() []*PrRef {
+	if x != nil {
+		return x.Ships
+	}
+	return nil
 }
 
 // InstanceRuntime is the live view of ONE instance: everything the TUI renders
@@ -870,22 +953,24 @@ const file_runtime_proto_rawDesc = "" +
 	"kube.proto\"T\n" +
 	"\x0eContainerStats\x12%\n" +
 	"\x0ecpu_millicores\x18\x01 \x01(\x01R\rcpuMillicores\x12\x1b\n" +
-	"\tmemory_mb\x18\x02 \x01(\x01R\bmemoryMb\"W\n" +
+	"\tmemory_mb\x18\x02 \x01(\x01R\bmemoryMb\"w\n" +
 	"\vTmuxSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\awindows\x18\x02 \x01(\x05R\awindows\x12\x1a\n" +
-	"\battached\x18\x03 \x01(\bR\battached\"t\n" +
+	"\battached\x18\x03 \x01(\bR\battached\x12\x1e\n" +
+	"\vship_pr_url\x18\x04 \x01(\tR\tshipPrUrl\"t\n" +
 	"\rForwardedPort\x12\x1d\n" +
 	"\n" +
 	"local_port\x18\x01 \x01(\x05R\tlocalPort\x12\x1f\n" +
 	"\vremote_port\x18\x02 \x01(\x05R\n" +
 	"remotePort\x12\x19\n" +
 	"\x05label\x18\x03 \x01(\tH\x00R\x05label\x88\x01\x01B\b\n" +
-	"\x06_label\"G\n" +
+	"\x06_label\"q\n" +
 	"\x05PrRef\x12\x16\n" +
 	"\x06number\x18\x01 \x01(\x05R\x06number\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12\x14\n" +
-	"\x05title\x18\x03 \x01(\tR\x05title\"\xd6\x02\n" +
+	"\x05title\x18\x03 \x01(\tR\x05title\x12(\n" +
+	"\x05state\x18\x04 \x01(\x0e2\x12.fleetgrpc.PrStateR\x05state\"\xfe\x02\n" +
 	"\bPrStatus\x12\x1d\n" +
 	"\n" +
 	"open_count\x18\x01 \x01(\x05R\topenCount\x120\n" +
@@ -895,7 +980,8 @@ const file_runtime_proto_rawDesc = "" +
 	"\fchecks_total\x18\x05 \x01(\x05R\vchecksTotal\x128\n" +
 	"\rchecks_signal\x18\x06 \x01(\x0e2\x13.fleetgrpc.PrSignalR\fchecksSignal\x12\"\n" +
 	"\x03prs\x18\a \x03(\v2\x10.fleetgrpc.PrRefR\x03prs\x12!\n" +
-	"\fclosed_count\x18\b \x01(\x05R\vclosedCount\"\xc3\x05\n" +
+	"\fclosed_count\x18\b \x01(\x05R\vclosedCount\x12&\n" +
+	"\x05ships\x18\t \x03(\v2\x10.fleetgrpc.PrRefR\x05ships\"\xc3\x05\n" +
 	"\x0fInstanceRuntime\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12?\n" +
@@ -946,7 +1032,12 @@ const file_runtime_proto_rawDesc = "" +
 	"\x1bPR_REVIEW_STATE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18PR_REVIEW_STATE_APPROVED\x10\x01\x12%\n" +
 	"!PR_REVIEW_STATE_CHANGES_REQUESTED\x10\x02\x12\x1b\n" +
-	"\x17PR_REVIEW_STATE_PENDING\x10\x03B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"\x17PR_REVIEW_STATE_PENDING\x10\x03*`\n" +
+	"\aPrState\x12\x18\n" +
+	"\x14PR_STATE_UNSPECIFIED\x10\x00\x12\x11\n" +
+	"\rPR_STATE_OPEN\x10\x01\x12\x13\n" +
+	"\x0fPR_STATE_CLOSED\x10\x02\x12\x13\n" +
+	"\x0fPR_STATE_MERGED\x10\x03B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_runtime_proto_rawDescOnce sync.Once
@@ -960,7 +1051,7 @@ func file_runtime_proto_rawDescGZIP() []byte {
 	return file_runtime_proto_rawDescData
 }
 
-var file_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
 var file_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_runtime_proto_goTypes = []any{
 	(LiveContainerStatus)(0),      // 0: fleetgrpc.LiveContainerStatus
@@ -968,36 +1059,39 @@ var file_runtime_proto_goTypes = []any{
 	(AgentActivity)(0),            // 2: fleetgrpc.AgentActivity
 	(PrSignal)(0),                 // 3: fleetgrpc.PrSignal
 	(PrReviewState)(0),            // 4: fleetgrpc.PrReviewState
-	(*ContainerStats)(nil),        // 5: fleetgrpc.ContainerStats
-	(*TmuxSession)(nil),           // 6: fleetgrpc.TmuxSession
-	(*ForwardedPort)(nil),         // 7: fleetgrpc.ForwardedPort
-	(*PrRef)(nil),                 // 8: fleetgrpc.PrRef
-	(*PrStatus)(nil),              // 9: fleetgrpc.PrStatus
-	(*InstanceRuntime)(nil),       // 10: fleetgrpc.InstanceRuntime
-	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
-	(*KubeInstanceRuntime)(nil),   // 12: fleetgrpc.KubeInstanceRuntime
-	(*ShareSyncStatus)(nil),       // 13: fleetgrpc.ShareSyncStatus
+	(PrState)(0),                  // 5: fleetgrpc.PrState
+	(*ContainerStats)(nil),        // 6: fleetgrpc.ContainerStats
+	(*TmuxSession)(nil),           // 7: fleetgrpc.TmuxSession
+	(*ForwardedPort)(nil),         // 8: fleetgrpc.ForwardedPort
+	(*PrRef)(nil),                 // 9: fleetgrpc.PrRef
+	(*PrStatus)(nil),              // 10: fleetgrpc.PrStatus
+	(*InstanceRuntime)(nil),       // 11: fleetgrpc.InstanceRuntime
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
+	(*KubeInstanceRuntime)(nil),   // 13: fleetgrpc.KubeInstanceRuntime
+	(*ShareSyncStatus)(nil),       // 14: fleetgrpc.ShareSyncStatus
 }
 var file_runtime_proto_depIdxs = []int32{
-	3,  // 0: fleetgrpc.PrStatus.pr_signal:type_name -> fleetgrpc.PrSignal
-	4,  // 1: fleetgrpc.PrStatus.review:type_name -> fleetgrpc.PrReviewState
-	3,  // 2: fleetgrpc.PrStatus.checks_signal:type_name -> fleetgrpc.PrSignal
-	8,  // 3: fleetgrpc.PrStatus.prs:type_name -> fleetgrpc.PrRef
-	0,  // 4: fleetgrpc.InstanceRuntime.live_status:type_name -> fleetgrpc.LiveContainerStatus
-	1,  // 5: fleetgrpc.InstanceRuntime.agent_tool:type_name -> fleetgrpc.AgentTool
-	2,  // 6: fleetgrpc.InstanceRuntime.agent_activity:type_name -> fleetgrpc.AgentActivity
-	5,  // 7: fleetgrpc.InstanceRuntime.stats:type_name -> fleetgrpc.ContainerStats
-	6,  // 8: fleetgrpc.InstanceRuntime.sessions:type_name -> fleetgrpc.TmuxSession
-	7,  // 9: fleetgrpc.InstanceRuntime.forwarded_ports:type_name -> fleetgrpc.ForwardedPort
-	11, // 10: fleetgrpc.InstanceRuntime.updated_at:type_name -> google.protobuf.Timestamp
-	9,  // 11: fleetgrpc.InstanceRuntime.pr_status:type_name -> fleetgrpc.PrStatus
-	12, // 12: fleetgrpc.InstanceRuntime.kube:type_name -> fleetgrpc.KubeInstanceRuntime
-	13, // 13: fleetgrpc.InstanceRuntime.share_sync:type_name -> fleetgrpc.ShareSyncStatus
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	5,  // 0: fleetgrpc.PrRef.state:type_name -> fleetgrpc.PrState
+	3,  // 1: fleetgrpc.PrStatus.pr_signal:type_name -> fleetgrpc.PrSignal
+	4,  // 2: fleetgrpc.PrStatus.review:type_name -> fleetgrpc.PrReviewState
+	3,  // 3: fleetgrpc.PrStatus.checks_signal:type_name -> fleetgrpc.PrSignal
+	9,  // 4: fleetgrpc.PrStatus.prs:type_name -> fleetgrpc.PrRef
+	9,  // 5: fleetgrpc.PrStatus.ships:type_name -> fleetgrpc.PrRef
+	0,  // 6: fleetgrpc.InstanceRuntime.live_status:type_name -> fleetgrpc.LiveContainerStatus
+	1,  // 7: fleetgrpc.InstanceRuntime.agent_tool:type_name -> fleetgrpc.AgentTool
+	2,  // 8: fleetgrpc.InstanceRuntime.agent_activity:type_name -> fleetgrpc.AgentActivity
+	6,  // 9: fleetgrpc.InstanceRuntime.stats:type_name -> fleetgrpc.ContainerStats
+	7,  // 10: fleetgrpc.InstanceRuntime.sessions:type_name -> fleetgrpc.TmuxSession
+	8,  // 11: fleetgrpc.InstanceRuntime.forwarded_ports:type_name -> fleetgrpc.ForwardedPort
+	12, // 12: fleetgrpc.InstanceRuntime.updated_at:type_name -> google.protobuf.Timestamp
+	10, // 13: fleetgrpc.InstanceRuntime.pr_status:type_name -> fleetgrpc.PrStatus
+	13, // 14: fleetgrpc.InstanceRuntime.kube:type_name -> fleetgrpc.KubeInstanceRuntime
+	14, // 15: fleetgrpc.InstanceRuntime.share_sync:type_name -> fleetgrpc.ShareSyncStatus
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_runtime_proto_init() }
@@ -1013,7 +1107,7 @@ func file_runtime_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runtime_proto_rawDesc), len(file_runtime_proto_rawDesc)),
-			NumEnums:      5,
+			NumEnums:      6,
 			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,

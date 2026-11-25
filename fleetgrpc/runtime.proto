@@ -72,12 +72,15 @@ message ContainerStats {
 }
 
 // TmuxSession mirrors a discovered tmux session (tui/sessions.go tmuxSession:
-// `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}"`).
+// `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}:#{@fleet_ship}"`).
 // Live per-instance discovery, only populated for running/expanded instances.
 message TmuxSession {
   string name = 1;
   int32 windows = 2;
   bool attached = 3;
+  // The PR a ship session is shipping, read from the session's @fleet_ship tmux
+  // option (set when the TUI ships a PR). Empty for an ordinary session.
+  string ship_pr_url = 4;
 }
 
 // ForwardedPort describes an active port-forward the server set up for the
@@ -114,12 +117,21 @@ enum PrReviewState {
   PR_REVIEW_STATE_PENDING = 3;
 }
 
-// PrRef identifies one open PR so the TUI can navigate to it (open in a
-// browser) and label it in the multi-PR chooser dialog.
+// PrState is a PR's GitHub lifecycle state.
+enum PrState {
+  PR_STATE_UNSPECIFIED = 0;
+  PR_STATE_OPEN = 1;
+  PR_STATE_CLOSED = 2;
+  PR_STATE_MERGED = 3;
+}
+
+// PrRef identifies one PR so the TUI can navigate to it (open in a browser),
+// label it in the multi-PR chooser dialog, and tell a shipped PR has merged.
 message PrRef {
   int32 number = 1;
   string url = 2;
   string title = 3;
+  PrState state = 4;
 }
 
 // PrStatus is the aggregated GitHub pull-request state for an instance's
@@ -158,6 +170,11 @@ message PrStatus {
   // Open PRs always take priority; when both exist the open status is shown and
   // this stays 0.
   int32 closed_count = 8;
+  // The PRs the instance's ship sessions are shipping (TmuxSession.ship_pr_url),
+  // each with its live state, so the TUI can turn a ship session green once its
+  // PR merges. Probed by URL, independent of the checked-out branch, and present
+  // even when open_count and closed_count are both 0.
+  repeated PrRef ships = 9;
 }
 
 // InstanceRuntime is the live view of ONE instance: everything the TUI renders

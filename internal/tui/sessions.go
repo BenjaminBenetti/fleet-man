@@ -20,6 +20,9 @@ type tmuxSession struct {
 	Name     string
 	Windows  int
 	Attached bool
+	// ShipURL is the PR a ship session is shipping (its @fleet_ship option);
+	// empty for an ordinary session.
+	ShipURL string
 }
 
 // sessionDiscovery holds the discovered sessions for a single instance, cached
@@ -72,6 +75,7 @@ func protoSessionsToLegacy(in []*fleetgrpc.TmuxSession) []tmuxSession {
 			Name:     s.GetName(),
 			Windows:  int(s.GetWindows()),
 			Attached: s.GetAttached(),
+			ShipURL:  s.GetShipPrUrl(),
 		})
 	}
 	return out
