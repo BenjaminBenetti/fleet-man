@@ -499,24 +499,20 @@ func TestPrivoxySetupIgnoresAStalePid(t *testing.T) {
 		t.Fatalf("a live pid that is no privoxy: %q", got)
 	}
 
-	// A live privoxy (a sleep under its name) is running.
-	sleep, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("no sleep")
-	}
+	// A live privoxy (a script under its name, so its command line names it) is
+	// running. Not a renamed copy of sleep: on a multi-call coreutils (Ubuntu
+	// 26.04's Rust coreutils) that copy refuses to run under another name. The
+	// script runs in its own process group so the cleanup takes its sleep too.
 	fake := filepath.Join(t.TempDir(), "privoxy")
-	data, err := os.ReadFile(sleep)
-	if err != nil {
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(fake, data, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	privoxy := exec.Command(fake, "30")
+	privoxy := exec.Command(fake)
+	privoxy.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := privoxy.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = privoxy.Process.Kill(); _, _ = privoxy.Process.Wait() }()
+	defer func() { _ = syscall.Kill(-privoxy.Process.Pid, syscall.SIGKILL); _, _ = privoxy.Process.Wait() }()
 	if err := os.WriteFile(pidfile, []byte(strconv.Itoa(privoxy.Process.Pid)), 0o644); err != nil {
 		t.Fatal(err)
 	}

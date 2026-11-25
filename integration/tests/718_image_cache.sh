@@ -55,7 +55,11 @@ wait_mirror() {
     [ -n "${mirror_now}" ] && return 0
     sleep 3
   done
-  fail "the instance's dockerd never got a registry mirror (${1}); daemon.json: $(in_instance sh -c 'cat /etc/docker/daemon.json 2>&1')"
+  fail "the instance's dockerd never got a registry mirror (${1}); daemon.json: $(in_instance sh -c 'cat /etc/docker/daemon.json 2>&1')
+--- docker info ---
+$(in_instance docker info 2>&1 | head -n 5)
+--- the feature's dockerd log ---
+$(in_instance sh -c 'tail -n 25 /tmp/dockerd.log 2>&1')"
 }
 # catalog — the repositories the mirror holds, asked from inside the instance.
 catalog() {

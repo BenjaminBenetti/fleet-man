@@ -16,7 +16,9 @@ in_instance() { "${FLEET_BIN}" exec "${inst}" -- "$@"; }
 wait_inner_dockerd() {
   local deadline=$(( $(date +%s) + $(_scale_timeout 90) ))
   until in_instance docker info >/dev/null 2>&1; do
-    [ "$(date +%s)" -lt "${deadline}" ] || fail "the instance's dockerd never answered (${1}): $(in_instance docker info 2>&1 | tail -n 3)"
+    [ "$(date +%s)" -lt "${deadline}" ] || fail "the instance's dockerd never answered (${1}): $(in_instance docker info 2>&1 | head -n 5)
+--- the feature's dockerd log ---
+$(in_instance sh -c 'tail -n 25 /tmp/dockerd.log 2>&1')"
     sleep 2
   done
 }

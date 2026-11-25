@@ -49,10 +49,10 @@
       }
     },
     "data": {
-      "capture.json": "877 bytes",
+      "capture.json": "1006 bytes",
       "exec.json": "149 bytes",
-      "inspect.json": "1995 bytes",
-      "merged.json": "1868 bytes",
+      "inspect.json": "2109 bytes",
+      "merged.json": "2014 bytes",
       "pid1.json": "235 bytes"
     }
   },
@@ -94,7 +94,7 @@
         "fleet.dev/container-created": "2026-10-10T12:00:00.123456789Z",
         "fleet.dev/image-id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "fleet.dev/rebuild-gen": "1",
-        "fleet.dev/spec-hash": "sha256:522af9c6fe55246873b9c2b20f985d4397cddfe2d573f224c43ec26526f9b5c9"
+        "fleet.dev/spec-hash": "sha256:5aa5a406ff08caad605233cbded396ff0c01955a90c43048e331e2d8b9974406"
       }
     },
     "spec": {
@@ -270,6 +270,11 @@
                   "name": "disk",
                   "mountPath": "/var/lib/docker",
                   "subPath": "vol/dind-var-lib-docker-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide"
+                },
+                {
+                  "name": "disk",
+                  "mountPath": "/var/lib/containerd",
+                  "subPath": "vol/dind-var-lib-containerd-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide"
                 }
               ],
               "terminationMessagePolicy": "File",
