@@ -15,6 +15,8 @@
       "type=bind,source=/home/dev/src/fixture-dind,target=/workspaces/fixture-dind",
       "--mount",
       "type=volume,src=dind-var-lib-docker-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide,dst=/var/lib/docker",
+      "--mount",
+      "type=volume,src=dind-var-lib-containerd-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide,dst=/var/lib/containerd",
       "-l",
       "devcontainer.local_folder=/home/dev/src/fixture-dind",
       "-l",
@@ -34,12 +36,12 @@
     }
   },
   "image": {
-    "Id": "sha256:0c761906e160ad654c63ab454470b7b8b1d96ebcad11cafa74aef4ef95bb60ac",
+    "Id": "sha256:86635265810cdd11f68dde0ae0f3fdd897e3a07d3e9d7e7d6b173289ebb15529",
     "RepoTags": [
       "vsc-fixture-dind-0000000000000000000000000000000000000000000000000000000000000000-features:latest"
     ],
     "RepoDigests": [
-      "vsc-fixture-dind-0000000000000000000000000000000000000000000000000000000000000000-features@sha256:0c761906e160ad654c63ab454470b7b8b1d96ebcad11cafa74aef4ef95bb60ac"
+      "vsc-fixture-dind-0000000000000000000000000000000000000000000000000000000000000000-features@sha256:86635265810cdd11f68dde0ae0f3fdd897e3a07d3e9d7e7d6b173289ebb15529"
     ],
     "Architecture": "amd64",
     "Os": "linux",
@@ -58,7 +60,7 @@
         "dev.containers.source": "https://github.com/devcontainers/images",
         "dev.containers.timestamp": "Thu, 16 Oct 2025 10:40:40 GMT",
         "dev.containers.variant": "bookworm",
-        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"}, {\"id\":\"ghcr.io/devcontainers/features/docker-in-docker:2\",\"privileged\":true,\"entrypoint\":\"/usr/local/share/docker-init.sh\",\"mounts\":[{\"source\":\"dind-var-lib-docker-${devcontainerId}\",\"target\":\"/var/lib/docker\",\"type\":\"volume\"}],\"customizations\":{\"vscode\":{\"extensions\":[\"ms-azuretools.vscode-containers\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes the Docker CLI (`docker`) pre-installed and available on the `PATH` for running and managing containers using a dedicated Docker daemon running inside the dev container.\"}]}}}} ]",
+        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"}, {\"id\":\"ghcr.io/devcontainers/features/docker-in-docker:4\",\"privileged\":true,\"entrypoint\":\"/usr/local/share/docker-init.sh\",\"mounts\":[{\"source\":\"dind-var-lib-docker-${devcontainerId}\",\"target\":\"/var/lib/docker\",\"type\":\"volume\"},{\"source\":\"dind-var-lib-containerd-${devcontainerId}\",\"target\":\"/var/lib/containerd\",\"type\":\"volume\"}],\"customizations\":{\"vscode\":{\"extensions\":[\"ms-azuretools.vscode-containers\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes the Docker CLI (`docker`) pre-installed and available on the `PATH` for running and managing containers using a dedicated Docker daemon running inside the dev container.\"}]}}}} ]",
         "version": "2.0.2"
       }
     }
@@ -67,7 +69,7 @@
     "name": "fleet-man docker-in-docker fixture",
     "image": "mcr.microsoft.com/devcontainers/base:debian-12",
     "features": {
-      "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "ghcr.io/devcontainers/features/docker-in-docker:4": {
         "dockerDashComposeVersion": "none"
       }
     },
@@ -86,6 +88,11 @@
       {
         "source": "dind-var-lib-docker-${devcontainerId}",
         "target": "/var/lib/docker",
+        "type": "volume"
+      },
+      {
+        "source": "dind-var-lib-containerd-${devcontainerId}",
+        "target": "/var/lib/containerd",
         "type": "volume"
       }
     ],

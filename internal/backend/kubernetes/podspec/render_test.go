@@ -943,13 +943,22 @@ func TestSeedSpecFollowsTheRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := SeedSpec(res, o)
-	want := []string{control.ContainerMountDir, podseed.InstallDir, podseed.RunDir, podseed.SpecDir, "/var/lib/docker", rc.WorkspaceFolder}
+	want := []string{control.ContainerMountDir, podseed.InstallDir, podseed.RunDir, podseed.SpecDir, "/var/lib/containerd", "/var/lib/docker", rc.WorkspaceFolder}
 	sort.Strings(want)
 	if strings.Join(s.MountDirs, " ") != strings.Join(want, " ") {
 		t.Errorf("mount dirs %v, want %v", s.MountDirs, want)
 	}
-	if s.Hostname != names.Pod(r.Name) || len(s.Volumes) != 1 || !strings.HasPrefix(s.Volumes[0].Name, "dind-var-lib-docker-") || s.Volumes[0].Target != "/var/lib/docker" || !s.Volumes[0].CopyUp {
-		t.Errorf("seed spec %+v", s)
+	// The docker-in-docker feature's two volumes, both copied up.
+	if s.Hostname != names.Pod(r.Name) || len(s.Volumes) != 2 {
+		t.Fatalf("seed spec %+v", s)
+	}
+	for i, v := range []struct{ prefix, target string }{
+		{"dind-var-lib-docker-", "/var/lib/docker"},
+		{"dind-var-lib-containerd-", "/var/lib/containerd"},
+	} {
+		if got := s.Volumes[i]; !strings.HasPrefix(got.Name, v.prefix) || got.Target != v.target || !got.CopyUp {
+			t.Errorf("seed volume %d: %+v, want %s* at %s, copied up", i, got, v.prefix, v.target)
+		}
 	}
 	job := podseed.JobSpec{V: podseed.JobSpecVersion, Op: podseed.OpSeed, Gen: 1, PVC: JobDiskPath, Seed: s}
 	if err := job.Validate(); err != nil {

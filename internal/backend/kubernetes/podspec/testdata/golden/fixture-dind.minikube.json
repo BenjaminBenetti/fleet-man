@@ -2,7 +2,7 @@
   "pod": {
     "image": {
       "ref": "vsc-fixture-dind-0000000000000000000000000000000000000000000000000000000000000000-features",
-      "id": "sha256:0c761906e160ad654c63ab454470b7b8b1d96ebcad11cafa74aef4ef95bb60ac",
+      "id": "sha256:86635265810cdd11f68dde0ae0f3fdd897e3a07d3e9d7e7d6b173289ebb15529",
       "os": "linux",
       "arch": "amd64"
     },
@@ -43,6 +43,13 @@
         "target": "/var/lib/docker",
         "source": "dind-var-lib-docker-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide",
         "subPath": "vol/dind-var-lib-docker-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide",
+        "copyUp": true
+      },
+      {
+        "kind": "volume",
+        "target": "/var/lib/containerd",
+        "source": "dind-var-lib-containerd-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide",
+        "subPath": "vol/dind-var-lib-containerd-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide",
         "copyUp": true
       }
     ],
@@ -89,6 +96,8 @@
         "type=bind,source=/home/dev/src/fixture-dind,target=/workspaces/fixture-dind",
         "--mount",
         "type=volume,src=dind-var-lib-docker-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide,dst=/var/lib/docker",
+        "--mount",
+        "type=volume,src=dind-var-lib-containerd-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide,dst=/var/lib/containerd",
         "-l",
         "devcontainer.local_folder=/home/dev/src/fixture-dind",
         "-l",
@@ -131,7 +140,7 @@
         "DOCKER_BUILDKIT=1"
       ],
       "image": "vsc-fixture-dind-0000000000000000000000000000000000000000000000000000000000000000-features",
-      "imageId": "sha256:0c761906e160ad654c63ab454470b7b8b1d96ebcad11cafa74aef4ef95bb60ac",
+      "imageId": "sha256:86635265810cdd11f68dde0ae0f3fdd897e3a07d3e9d7e7d6b173289ebb15529",
       "labels": {
         "dev.containers.id": "base-debian",
         "dev.containers.release": "v0.4.19",
@@ -140,7 +149,7 @@
         "dev.containers.variant": "bookworm",
         "devcontainer.config_file": "/home/dev/src/fixture-dind/.devcontainer/devcontainer.json",
         "devcontainer.local_folder": "/home/dev/src/fixture-dind",
-        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"}, {\"id\":\"ghcr.io/devcontainers/features/docker-in-docker:2\",\"privileged\":true,\"entrypoint\":\"/usr/local/share/docker-init.sh\",\"mounts\":[{\"source\":\"dind-var-lib-docker-${devcontainerId}\",\"target\":\"/var/lib/docker\",\"type\":\"volume\"}],\"customizations\":{\"vscode\":{\"extensions\":[\"ms-azuretools.vscode-containers\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes the Docker CLI (`docker`) pre-installed and available on the `PATH` for running and managing containers using a dedicated Docker daemon running inside the dev container.\"}]}}}} ]",
+        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"}, {\"id\":\"ghcr.io/devcontainers/features/docker-in-docker:4\",\"privileged\":true,\"entrypoint\":\"/usr/local/share/docker-init.sh\",\"mounts\":[{\"source\":\"dind-var-lib-docker-${devcontainerId}\",\"target\":\"/var/lib/docker\",\"type\":\"volume\"},{\"source\":\"dind-var-lib-containerd-${devcontainerId}\",\"target\":\"/var/lib/containerd\",\"type\":\"volume\"}],\"customizations\":{\"vscode\":{\"extensions\":[\"ms-azuretools.vscode-containers\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes the Docker CLI (`docker`) pre-installed and available on the `PATH` for running and managing containers using a dedicated Docker daemon running inside the dev container.\"}]}}}} ]",
         "version": "2.0.2"
       },
       "startedAt": "0001-01-01T00:00:00Z",
